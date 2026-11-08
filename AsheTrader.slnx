@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AsheTrader.Core/AsheTrader.Core.csproj" />
+    <Project Path="src/AsheTrader/AsheTrader.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AsheTrader.Core.Tests/AsheTrader.Core.Tests.csproj" />
+  </Folder>
+</Solution>
