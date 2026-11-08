@@ -34,7 +34,7 @@ public sealed class MainWindow : Window
     {
         ImGui.TextUnformatted("ASHE'S TRADER");
         ImGui.SameLine();
-        ImGui.TextDisabled("v0.2 · two-PC test build");
+        ImGui.TextDisabled("v0.2.1 · two-PC test build");
         ImGui.Separator();
         ImGui.TextWrapped(plugin.Trader.Status);
         ImGui.TextWrapped(plugin.Fuel.Status);

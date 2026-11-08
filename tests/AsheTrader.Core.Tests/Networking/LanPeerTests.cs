@@ -176,6 +176,42 @@ public sealed class LanPeerTests
     }
 
     [Fact]
+    public async Task AcceptedSessionGuardsRejectMessagesAfterReconnectWithoutConsumingTheNewSession()
+    {
+        using var host = new LanPeer();
+        using var worker = new LanPeer();
+        var secret = LanPeer.GeneratePairingKey();
+        var workerId = Guid.NewGuid();
+        host.StartHost(IPAddress.Loopback, 0, secret, Guid.NewGuid());
+        await worker.ConnectAsync(IPAddress.Loopback, host.BoundPort, secret, workerId);
+        await Until(() => host.IsConnected);
+        var accepted = host.SessionIdentity!.Value;
+        Assert.Equal(workerId, accepted.RemotePeerId);
+        worker.Stop();
+        await Until(() => !host.IsConnected);
+        await worker.ConnectAsync(IPAddress.Loopback, host.BoundPort, secret, workerId);
+        await Until(() => host.IsConnected);
+        var replacement = host.SessionIdentity!.Value;
+        Assert.NotEqual(accepted.ConnectionId, replacement.ConnectionId);
+        Assert.Equal(accepted.RemotePeerId, replacement.RemotePeerId);
+
+        Assert.Throws<InvalidOperationException>(() => host.Send(Message("private-roster", "must not leak"), accepted.ConnectionId));
+        var fresh = Message("accepted", "new session");
+        host.Send(fresh, replacement.ConnectionId);
+        Assert.Equal(fresh, await Receive(worker));
+
+        var response = Message("response", "keep queued until accepted");
+        worker.Send(response, worker.SessionIdentity!.Value.ConnectionId);
+        PeerMessage? received = null;
+        await Until(() =>
+        {
+            Assert.False(host.TryReceive(out _, accepted.ConnectionId));
+            return host.TryReceive(out received!, replacement.ConnectionId);
+        });
+        Assert.Equal(response, received);
+    }
+
+    [Fact]
     public void TamperedFrameFailsAuthenticationWithoutConsumingItsSequence()
     {
         var key = RandomNumberGenerator.GetBytes(32);

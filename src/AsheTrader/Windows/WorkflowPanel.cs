@@ -72,17 +72,25 @@ public sealed class WorkflowPanel(Plugin plugin)
     private void DrawPairing()
     {
         ImGui.Spacing();
-        ImGui.TextWrapped("Choose one PC as coordinator. Generate its pairing key, copy it to the other PC, then connect the worker to the coordinator's LAN IPv4 address. Pairing starts only when you press Host or Connect.");
+        ImGui.TextWrapped("On the coordinator, generate a pairing key and press Host. On the other PC, enter that key, find nearby coordinators, and select it. Both PCs remember the key for later sessions; IP addresses are found automatically.");
+        var addresses = Service.LocalAddresses;
+        var selectedAddress = addresses.FirstOrDefault(x => x.Address.ToString() == Settings.BindAddress);
+        var defaultAddress = addresses.FirstOrDefault(x => x.Preferred) ?? addresses.FirstOrDefault();
         var changed = false;
         ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning);
         var name = Settings.PeerName;
         if (ImGui.InputText("This PC's label", ref name, 80)) { Settings.PeerName = name; changed = true; }
-        var bind = Settings.BindAddress;
-        if (ImGui.InputText("Coordinator LAN address", ref bind, 64)) { Settings.BindAddress = bind.Trim(); changed = true; }
-        var connect = Settings.ConnectAddress;
-        if (ImGui.InputText("Connect to coordinator", ref connect, 64)) { Settings.ConnectAddress = connect.Trim(); changed = true; }
-        var port = Settings.Port;
-        if (ImGui.InputInt("Port", ref port)) { Settings.Port = Math.Clamp(port, 1, ushort.MaxValue); changed = true; }
+        var addressPreview = selectedAddress != null ? $"{selectedAddress.Label} — {selectedAddress.Address}"
+            : defaultAddress != null ? $"Automatic — {defaultAddress.Label} ({defaultAddress.Address})" : "No home-network adapter found";
+        if (ImGui.BeginCombo("Coordinator network adapter", addressPreview))
+        {
+            if (ImGui.Selectable("Automatic", selectedAddress == null)) { Settings.BindAddress = ""; changed = true; }
+            foreach (var address in addresses)
+                if (ImGui.Selectable($"{address.Label} — {address.Address}##{address.Address}", address.Address.ToString() == Settings.BindAddress))
+                { Settings.BindAddress = address.Address.ToString(); changed = true; }
+            ImGui.EndCombo();
+        }
+        if (addresses.Count == 0) ImGui.TextWrapped("Connect to your home network, or enter an address under Advanced / manual connection.");
         ImGui.BeginDisabled(HasUnfinishedJob);
         var key = Settings.PairingKey;
         if (ImGui.InputText("Pairing key", ref key, 128, revealKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password))
@@ -98,12 +106,8 @@ public sealed class WorkflowPanel(Plugin plugin)
         if (changed) plugin.Save();
 
         ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning || Settings.PairingKey.Length == 0);
-        ImGui.BeginDisabled(string.IsNullOrWhiteSpace(Settings.BindAddress));
+        ImGui.BeginDisabled(defaultAddress == null && string.IsNullOrWhiteSpace(Settings.BindAddress));
         if (ImGui.Button("Host as coordinator", new Vector2(185, 30))) plugin.QueueAction(Service.Host);
-        ImGui.EndDisabled();
-        ImGui.SameLine();
-        ImGui.BeginDisabled(string.IsNullOrWhiteSpace(Settings.ConnectAddress) || HasUnfinishedJob);
-        if (ImGui.Button("Connect as worker", new Vector2(185, 30))) plugin.QueueAction(Service.Connect);
         ImGui.EndDisabled();
         ImGui.EndDisabled();
         ImGui.SameLine();
@@ -111,6 +115,59 @@ public sealed class WorkflowPanel(Plugin plugin)
         if (ImGui.Button("Disconnect")) plugin.QueueAction(Service.Disconnect);
         ImGui.EndDisabled();
 
+        ImGui.Spacing();
+        ImGui.TextUnformatted("Nearby coordinators");
+        ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning || HasUnfinishedJob || Service.Discovering);
+        if (ImGui.Button("Find nearby coordinators")) plugin.QueueAction(Service.StartDiscovery);
+        ImGui.EndDisabled();
+        if (Service.Discovering)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Stop search")) plugin.QueueAction(Service.StopDiscovery);
+        }
+        ImGui.TextWrapped(Service.DiscoveryStatus);
+        var nearby = Service.NearbyPeers;
+        foreach (var candidate in nearby)
+        {
+            ImGui.PushID($"{candidate.PeerId}/{candidate.Address}:{candidate.Port}");
+            var remembered = Settings.ExpectedRemotePeerId == candidate.PeerId;
+            var otherIdentity = Settings.ExpectedRemotePeerId.HasValue && !remembered;
+            ImGui.TextUnformatted(candidate.Name);
+            ImGui.SameLine();
+            ImGui.TextDisabled(remembered ? "(remembered PC; authentication pending)" : otherIdentity ? "(not the remembered PC)" : "(not yet authenticated)");
+            ImGui.TextDisabled($"{candidate.Address}:{candidate.Port}");
+            ImGui.SameLine();
+            ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning || HasUnfinishedJob || Settings.PairingKey.Length == 0 || otherIdentity);
+            if (ImGui.Button("Connect"))
+            {
+                var selected = candidate;
+                plugin.QueueAction(() => Service.ConnectDiscovered(selected));
+            }
+            ImGui.EndDisabled();
+            ImGui.PopID();
+        }
+        if (nearby.Count > 0 && Settings.PairingKey.Length == 0)
+            ImGui.TextWrapped("Enter the coordinator's pairing key above to connect. Finding a PC does not grant it control.");
+        ImGui.TextWrapped("Keep both PCs on the same home network. The coordinator appears while hosting. If discovery is blocked by your network or firewall, use the manual connection below.");
+
+        if (ImGui.CollapsingHeader("Advanced / manual connection"))
+        {
+            var manualChanged = false;
+            ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning);
+            var bind = Settings.BindAddress;
+            if (ImGui.InputText("Coordinator LAN address", ref bind, 64)) { Settings.BindAddress = bind.Trim(); manualChanged = true; }
+            var connect = Settings.ConnectAddress;
+            if (ImGui.InputText("Connect to coordinator", ref connect, 64)) { Settings.ConnectAddress = connect.Trim(); manualChanged = true; }
+            var port = Settings.Port;
+            if (ImGui.InputInt("Port", ref port)) { Settings.Port = Math.Clamp(port, 1, ushort.MaxValue); manualChanged = true; }
+            ImGui.EndDisabled();
+            if (manualChanged) plugin.Save();
+            ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning || HasUnfinishedJob || Settings.PairingKey.Length == 0 || string.IsNullOrWhiteSpace(Settings.ConnectAddress));
+            if (ImGui.Button("Connect manually as worker")) plugin.QueueAction(Service.Connect);
+            ImGui.EndDisabled();
+        }
+
+        ImGui.Separator();
         var allow = Settings.AllowRemoteControl;
         if (ImGui.Checkbox("Allow the paired coordinator to run jobs on this PC", ref allow))
         {

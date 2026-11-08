@@ -32,6 +32,11 @@ public sealed class LanPeer : IDisposable
     /// </summary>
     public Guid? ConnectionId { get { lock (gate) return current?.Session is { Connected: true } s ? s.ConnectionId : null; } }
     public Guid? RemotePeerId { get { lock (gate) return current?.Session is { Connected: true } s ? s.Secrets.RemotePeerId : null; } }
+    /// <summary>Read socket generation and authenticated peer together before accepting a connection.</summary>
+    public (Guid ConnectionId, Guid RemotePeerId)? SessionIdentity
+    {
+        get { lock (gate) return current?.Session is { Connected: true } s ? (s.ConnectionId, s.Secrets.RemotePeerId) : null; }
+    }
     public string Status { get { lock (gate) return status; } }
     public int BoundPort { get { lock (gate) return current?.BoundPort ?? 0; } }
 
@@ -97,21 +102,25 @@ public sealed class LanPeer : IDisposable
         }
     }
 
-    public void Send(PeerMessage message)
+    public void Send(PeerMessage message, Guid? expectedConnectionId = null)
     {
         var bytes = Serialize(message, false);
         lock (gate)
         {
             if (current?.Session is not { Connected: true } session) throw new InvalidOperationException("The paired PC is disconnected.");
+            if (expectedConnectionId.HasValue && session.ConnectionId != expectedConnectionId)
+                throw new InvalidOperationException("The connection changed before this message could be sent. Verify the new peer first.");
             if (!session.Outgoing.Writer.TryWrite(bytes)) throw new InvalidOperationException("The LAN send queue is full. Pause the workflow until messages are processed.");
         }
     }
 
-    public bool TryReceive(out PeerMessage message)
+    public bool TryReceive(out PeerMessage message, Guid? expectedConnectionId = null)
     {
         lock (gate)
         {
-            if (current?.Session is { Connected: true } session && session.Incoming.Reader.TryRead(out var received))
+            if (current?.Session is { Connected: true } session
+                && (!expectedConnectionId.HasValue || session.ConnectionId == expectedConnectionId)
+                && session.Incoming.Reader.TryRead(out var received))
             { message = received; return true; }
         }
         message = null!;

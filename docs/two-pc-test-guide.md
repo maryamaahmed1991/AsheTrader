@@ -1,12 +1,16 @@
 # Two-PC validation
 
-Test build: 0.2.0.0. The native game adapters have not yet been exercised in-game. Stop at the first unexpected action or error and send the activity text and relevant `/xllog` entries from both PCs. Do not start a large unattended job until the stages below pass.
+Test build: 0.2.1.0. The native game adapters have not yet been exercised in-game. Stop at the first unexpected action or error and send the activity text and relevant `/xllog` entries from both PCs. Do not start a large unattended job until the stages below pass.
 
 ## 1. Load and pair
 
 Install the same ZIP on both PCs. Enable AutoRetainer, Lifestream, and vnavmesh, with each account's characters configured locally. Allagan Tools is recommended for cached inventory hints.
 
-On the coordinator PC, open `/ashetrader` → Transfer jobs → Pair PCs. Choose its private LAN IPv4 address, generate a pairing key, and start hosting. On the worker PC, enter the coordinator's IP, the same port and pairing key, enable paired workflow control, and connect. If Windows prompts, allow the game/plugin listener on the private home network. No router port forwarding is required.
+On the coordinator PC, open `/ashetrader` → Transfer jobs → Pair PCs. Generate a pairing key and press **Host as coordinator**; the network adapter is selected automatically. On the worker PC, enter the same key once, press **Find nearby coordinators**, then **Connect** beside the coordinator's label. Enable paired workflow control on the worker. Both PCs retain the key for subsequent sessions.
+
+Verify the correct coordinator appears without entering an IP address. Stop hosting and check that it disappears after about eight seconds. Start hosting again and verify it reappears. Discovery alone must not log out, move, or trade on either PC. If the PC has multiple networks, select the home-network adapter from the dropdown.
+
+Discovery needs local UDP traffic on port 45875; actual communication uses the configured TCP port (45874 by default). If Windows prompts, allow the game/plugin listener on the private home network. Guest-network isolation or separate subnets can block broadcasts. The original address and port fields remain under **Advanced / manual connection** as a fallback. No router port forwarding is required.
 
 Refresh the rosters. Verify each character appears on the intended PC, each PC has a distinct peer identity, and the connection reports the expected partner. No character should log out, move, or trade from pairing alone.
 

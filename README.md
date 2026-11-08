@@ -7,6 +7,7 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 ## Features
 
 - Pair one coordinator PC and one worker PC using an authenticated, encrypted LAN connection.
+- Find nearby coordinators by PC label without copying IP addresses. Hosting chooses a local network adapter automatically; manual connection remains available.
 - Import each PC's AutoRetainer roster and read optional Allagan Tools inventory hints.
 - Save one-item transfer jobs with source characters, ordered recipients, quantities, HQ selection, relay characters, and a meeting point.
 - Discover selected characters' carried inventories and every retainer before planning. A scan-only action performs no trades.
@@ -36,13 +37,21 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.2.0.0.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.2.1.0.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
 5. Follow [the two-PC test guide](docs/two-pc-test-guide.md).
 
 The plugin does not open a network listener or resume gameplay merely by loading. Pairing and jobs are explicitly started in the UI. `/ashetrader stop` pauses the current operation and notifies the peer.
+
+## Pair without entering an IP address
+
+On the coordinator, generate a pairing key and press **Host as coordinator**. The plugin selects an active home-network adapter; use the adapter dropdown if you have more than one network. On the worker, enter the same key once, press **Find nearby coordinators**, and click **Connect** beside the coordinator's label. Enable paired workflow control on the worker. Both PCs remember the key and authenticated peer identity, so later sessions need only Host, Find, and Connect.
+
+Discovery uses small UDP queries and replies on port 45875 within the local subnet. It shares the host's label, peer ID, and TCP port; no pairing key, inventory, or commands are sent over discovery. The existing authenticated, encrypted TCP connection still verifies the selected peer before exchanging rosters or running jobs. Results expire when a coordinator stops responding, and discovery never starts gameplay or resumes a paused job.
+
+If no coordinator appears, check that both PCs use the same home network and the coordinator is hosting. Guest Wi-Fi isolation, separate subnets, or a firewall can block discovery. **Advanced / manual connection** retains the original IP/port workflow. No internet discovery server or router port forwarding is used.
 
 ## Job setup
 
@@ -74,7 +83,7 @@ Once a GitHub repository exists:
 
 1. Push this source, preserving the license and notices.
 2. Upload the built `AsheTrader-<version>.zip` as a public release asset.
-3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.2.0.0`.
+3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.2.1.0`.
 4. Commit the generated root `repo.json` on `main`. Its raw GitHub URL is the permanent custom-repository feed; update that file for each release.
 
 Source is hosted in [maryamaahmed1991/AsheTrader](https://github.com/maryamaahmed1991/AsheTrader), with installable packages under [Releases](https://github.com/maryamaahmed1991/AsheTrader/releases). Pairing secrets and runtime journals must not be committed or included in release artifacts.

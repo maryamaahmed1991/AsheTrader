@@ -17,5 +17,6 @@ $entry['LastUpdate'] = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 if (-not $OutputPath) { $OutputPath = Join-Path $projectRoot 'repo.json' }
 $parentDir = Split-Path -Parent ([IO.Path]::GetFullPath($OutputPath))
 New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
-ConvertTo-Json -InputObject @($entry) -Depth 10 | Set-Content -LiteralPath $OutputPath -Encoding utf8NoBOM
+$repositoryJson = ConvertTo-Json -InputObject @($entry) -Depth 10
+[IO.File]::WriteAllText([IO.Path]::GetFullPath($OutputPath), $repositoryJson.Replace("`r`n", "`n") + "`n", [Text.UTF8Encoding]::new($false))
 Write-Output $OutputPath

@@ -1,6 +1,6 @@
 # Ashe's Trader: transfer-job requirements
 
-Status: agreed product requirements, implemented in the 0.2.0.0 development build for staged two-PC testing. Automated tests cover planning, accounting, LAN transport, and the transfer coordinator. No in-game trades, purchases, or retainer actions have been validated by this project yet.
+Status: agreed product requirements, implemented in the 0.2.1.0 development build for staged two-PC testing. Automated tests cover planning, accounting, LAN discovery/transport, and the transfer coordinator. No in-game trades, purchases, or retainer actions have been validated by this project yet.
 
 ## Confirmed requirements
 
@@ -70,7 +70,7 @@ If every permitted retainer is full, travel is unavailable, a retainer cannot be
 
 ## LAN coordination and recovery
 
-Proposed design: one paired plugin instance is coordinator; the other is a worker connected over the home network. No hosted relay is required for this topology. Pairing must authenticate the peer, and the listener starts only when the user enables pairing. Public plugin hosting does not expose a runtime coordination endpoint.
+One paired plugin instance is coordinator; the other is a worker connected over the home network. Nearby discovery resolves the coordinator's IP/port from bounded UDP queries and replies after the user starts hosting/searching. Discovery provides connection hints only; the selected identity and pairing key must authenticate before roster exchange or job control. No hosted relay is required for this topology, and loading the plugin starts no listener. Public plugin hosting does not expose a runtime coordination endpoint.
 
 Use stable peer IDs, character content IDs, job IDs, immutable rule revisions, and unique operation/batch IDs. Repeated messages are harmless. Only one coordinator may issue work for a job; loss of the coordinator pauses the worker rather than electing a competing controller.
 

@@ -23,6 +23,7 @@ public sealed partial class WorkflowService : IDisposable
     private bool host;
     private bool wasConnected;
     private Guid? connectionId;
+    private Guid? acceptedPeerId;
     private long heartbeatAt;
     private long peerSeenAt;
     private bool disposed;
@@ -39,6 +40,10 @@ public sealed partial class WorkflowService : IDisposable
     public string ConnectionStatus => peer.Status;
     public string Status => error.Length > 0 ? error : Run?.Status ?? executor.Status;
     private WorkflowSettings Settings => plugin.Config.Workflow;
+    private bool HasAcceptedConnection => peer.SessionIdentity is { } session && session.ConnectionId == connectionId
+        && session.RemotePeerId == acceptedPeerId
+        && (!selectedCoordinatorId.HasValue || selectedCoordinatorId == session.RemotePeerId)
+        && (!Settings.ExpectedRemotePeerId.HasValue || Settings.ExpectedRemotePeerId == session.RemotePeerId);
 
     public WorkflowService(Plugin plugin)
     {
@@ -62,30 +67,58 @@ public sealed partial class WorkflowService : IDisposable
     public void Host()
     {
         RequireIdle();
-        peer.StartHost(IPAddress.Parse(Settings.BindAddress), Settings.Port, Settings.PairingKey, Settings.PeerId);
+        if (PairingEnabled) throw new InvalidOperationException("Disconnect the current LAN session before starting another host.");
+        var address = SelectHostAddress();
+        scanner.Stop();
+        peer.StartHost(address, Settings.Port, Settings.PairingKey, Settings.PeerId);
         host = true;
         error = "";
+        selectedCoordinatorId = null;
+        advertisementError = "";
+        if (!IPAddress.IsLoopback(address))
+        {
+            try { advertiser.StartAdvertising(address, peer.BoundPort, Settings.PeerId, Settings.PeerName); }
+            catch (Exception ex)
+            {
+                advertisementError = $"Hosting is available, but nearby discovery could not start: {ex.Message} Use the manual connection fields if needed.";
+                Plugin.Log.Warning(ex, "LAN discovery could not start");
+            }
+        }
     }
 
-    public void Connect()
+    public void Connect() => BeginConnect(null);
+
+    private void BeginConnect(Guid? discoveredPeerId)
     {
         RequireIdle();
         if (Run is { Step: not CoordinatorStep.Finished })
             throw new InvalidOperationException("Resume or end this PC's coordinator job before connecting as a worker.");
+        if (PairingEnabled) throw new InvalidOperationException("Disconnect the current LAN session before connecting again.");
+        var address = IPAddress.Parse(Settings.ConnectAddress);
+        scanner.Stop();
+        advertiser.Stop();
+        selectedCoordinatorId = discoveredPeerId;
         host = false;
         error = "";
         // Transport updates its own thread-safe status. All subsequent messages are drained in Update.
-        _ = ConnectCore();
+        _ = ConnectCore(address, Settings.Port, Settings.PairingKey, Settings.PeerId);
     }
 
-    private async Task ConnectCore()
+    private async Task ConnectCore(IPAddress address, int port, string key, Guid peerId)
     {
-        try { await peer.ConnectAsync(IPAddress.Parse(Settings.ConnectAddress), Settings.Port, Settings.PairingKey, Settings.PeerId); }
+        try { await peer.ConnectAsync(address, port, key, peerId); }
         catch (Exception ex) { Plugin.Log.Warning(ex, "LAN connection failed"); }
     }
 
     public static string NewPairingKey() => LanPeer.GeneratePairingKey();
-    public void Disconnect() { Pause("LAN connection stopped."); peer.Stop(); RemoteRoster = null; wasConnected = false; }
+    public void Disconnect()
+    {
+        Pause("LAN connection stopped.");
+        scanner.Stop(); advertiser.Stop(); peer.Stop();
+        selectedCoordinatorId = null; advertisementError = "";
+        connectionId = null; acceptedPeerId = null;
+        RemoteRoster = null; wasConnected = false;
+    }
 
     private void RequireIdle()
     {
@@ -96,7 +129,7 @@ public sealed partial class WorkflowService : IDisposable
     public void RefreshRosters()
     {
         ImportLocalCharacters();
-        if (Connected) Send("roster", LocalRoster());
+        if (HasAcceptedConnection) Send("roster", LocalRoster());
     }
 
     private void ImportLocalCharacters()
@@ -128,15 +161,18 @@ public sealed partial class WorkflowService : IDisposable
         try
         {
             var now = Environment.TickCount64;
-            if (Connected && connectionId != peer.ConnectionId)
+            if (peer.SessionIdentity is { } session && connectionId != session.ConnectionId)
             {
                 if (wasConnected || Busy) Pause("Connection changed. Resume after reviewing the paired clients.", false);
                 RemoteRoster = null;
-                connectionId = peer.ConnectionId;
-                if (Settings.ExpectedRemotePeerId.HasValue && Settings.ExpectedRemotePeerId != peer.RemotePeerId)
-                { peer.Stop(); throw new InvalidOperationException("A different peer connected. Forget the previous pairing before pairing another PC."); }
-                Settings.ExpectedRemotePeerId ??= peer.RemotePeerId;
+                if (selectedCoordinatorId.HasValue && selectedCoordinatorId != session.RemotePeerId)
+                { peer.Stop(); advertiser.Stop(); throw new InvalidOperationException("The authenticated PC does not match the selected nearby coordinator. Search again and verify the pairing key."); }
+                if (Settings.ExpectedRemotePeerId.HasValue && Settings.ExpectedRemotePeerId != session.RemotePeerId)
+                { peer.Stop(); advertiser.Stop(); throw new InvalidOperationException("A different peer connected. Forget the previous pairing before pairing another PC."); }
+                Settings.ExpectedRemotePeerId ??= session.RemotePeerId;
                 plugin.Save();
+                connectionId = session.ConnectionId;
+                acceptedPeerId = session.RemotePeerId;
                 peerSeenAt = now;
                 RefreshRosters();
             }
@@ -149,7 +185,7 @@ public sealed partial class WorkflowService : IDisposable
                 heartbeatAt = now + 1000;
                 Send("heartbeat", new { });
             }
-            for (var i = 0; i < 64 && peer.TryReceive(out var message); i++)
+            for (var i = 0; i < 64 && connectionId.HasValue && peer.TryReceive(out var message, connectionId); i++)
             {
                 peerSeenAt = now;
                 Receive(message);
@@ -172,8 +208,11 @@ public sealed partial class WorkflowService : IDisposable
         }
     }
 
-    private void Send<T>(string kind, T payload, Guid? correlation = null) => peer.Send(
-        new PeerMessage(kind, Guid.NewGuid(), correlation, JsonConvert.SerializeObject(payload)));
+    private void Send<T>(string kind, T payload, Guid? correlation = null)
+    {
+        if (!HasAcceptedConnection) throw new InvalidOperationException("The connected PC's identity has not yet been accepted.");
+        peer.Send(new PeerMessage(kind, Guid.NewGuid(), correlation, JsonConvert.SerializeObject(payload)), connectionId);
+    }
 
     private void Receive(PeerMessage message)
     {
@@ -184,21 +223,21 @@ public sealed partial class WorkflowService : IDisposable
             case "cache-response": RemoteInventoryHints = Decode<InventoryHintResponse>(message.Payload); break;
             case "roster":
                 var roster = Decode<PeerRoster>(message.Payload);
-                if (roster.PeerId != peer.RemotePeerId || roster.PeerId == Settings.PeerId) throw new InvalidDataException("Peer identity mismatch.");
+                if (roster.PeerId != acceptedPeerId || roster.PeerId == Settings.PeerId) throw new InvalidDataException("Peer identity mismatch.");
                 RemoteRoster = roster;
                 break;
             case "command":
                 if (host) throw new InvalidOperationException("A worker cannot issue commands to the coordinator.");
-                HandleWorker(Decode<WorkerCommand>(message.Payload), peer.RemotePeerId!.Value);
+                HandleWorker(Decode<WorkerCommand>(message.Payload), acceptedPeerId!.Value);
                 break;
             case "response":
-                if (host) AcceptResponse(peer.RemotePeerId!.Value, Decode<WorkerResponse>(message.Payload));
+                if (host) AcceptResponse(acceptedPeerId!.Value, Decode<WorkerResponse>(message.Payload));
                 break;
             case "query":
-                if (!host) HandleQuery(Decode<Guid>(message.Payload), peer.RemotePeerId!.Value);
+                if (!host) HandleQuery(Decode<Guid>(message.Payload), acceptedPeerId!.Value);
                 break;
             case "resolve":
-                if (!host && Settings.AllowRemoteControl) ResolveWorker(Decode<ManualResolution>(message.Payload), peer.RemotePeerId!.Value);
+                if (!host && Settings.AllowRemoteControl) ResolveWorker(Decode<ManualResolution>(message.Payload), acceptedPeerId!.Value);
                 break;
             case "pause": Pause("Peer requested pause.", false); break;
             default: throw new InvalidDataException("Unsupported peer message.");
@@ -212,7 +251,7 @@ public sealed partial class WorkflowService : IDisposable
     private void Reply(Guid destination, WorkerResponse response)
     {
         if (destination == Settings.PeerId) AcceptResponse(destination, response);
-        else if (Connected && destination == peer.RemotePeerId) Send("response", response, response.CommandId);
+        else if (HasAcceptedConnection && destination == acceptedPeerId) Send("response", response, response.CommandId);
     }
 
     private void HandleWorker(WorkerCommand command, Guid caller)
@@ -371,7 +410,11 @@ public sealed partial class WorkflowService : IDisposable
         { journalHealthy = false; throw new IOException(failure); }
     }
     private void TrySaveRun() { try { SaveRun(); } catch (Exception ex) { Plugin.Log.Error(ex, "Could not persist paused job"); journalHealthy = false; } }
-    public void Dispose() { disposed = true; Pause("Plugin unloaded.", false); executor.Shutdown(); peer.Dispose(); }
+    public void Dispose()
+    {
+        disposed = true; Pause("Plugin unloaded.", false); executor.Shutdown();
+        scanner.Dispose(); advertiser.Dispose(); peer.Dispose();
+    }
 
     private void ResolveWorker(ManualResolution resolution, Guid caller)
     {
