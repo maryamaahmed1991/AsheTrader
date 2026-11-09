@@ -51,6 +51,9 @@ public sealed class GameWorkflowExecutor
     private long nextDiagnosticAt;
     private string lastDiagnosticState = string.Empty;
     private readonly BellInteractionGate bellInteraction = new();
+    private readonly CutsceneWait cutsceneWait = new();
+    private string statusBeforeCutscene = string.Empty;
+    private bool conditionalInnSkipMode;
 
     public bool IsBusy => Volatile.Read(ref shutdown) == 0 && stage != Stage.Idle;
     public string Status { get; private set; } = "No workflow operation running.";
@@ -80,6 +83,9 @@ public sealed class GameWorkflowExecutor
         relogIdleSince = null;
         inventoryReadFailure = string.Empty;
         bellInteraction.Reset();
+        cutsceneWait.Reset();
+        statusBeforeCutscene = string.Empty;
+        conditionalInnSkipMode = false;
         operationStarted = Environment.TickCount64;
         lastDiagnosticState = string.Empty;
         Trace($"operation begin; kind={command.Kind}; character={command.CharacterId}; name={NativeRetainers.DiagnosticText(command.CharacterName)}; world={NativeRetainers.DiagnosticText(command.World)}; item={command.ItemId}; hq={command.HighQuality}; quantity={command.Quantity}");
@@ -189,6 +195,29 @@ public sealed class GameWorkflowExecutor
         {
             var now = Environment.TickCount64;
             if (now >= nextDiagnosticAt) CaptureDiagnosticSnapshot("periodic wait", false);
+            var wasWatching = cutsceneWait.IsWaiting;
+            var pausedFor = cutsceneWait.Observe(now, NativeRetainers.HasActiveCutscene);
+            if (!pausedFor.HasValue)
+            {
+                if (!wasWatching)
+                {
+                    // Preserve retry accounting, but require fresh stable readiness after the scene.
+                    bellInteraction.Observe(now, playerReady: false, interactionBlocked: true, bellOccupied: false);
+                    statusBeforeCutscene = Status;
+                    Status = "Waiting for the cutscene to finish naturally…";
+                    Trace("cutscene wait begin; no gameplay actions or skip inputs will be sent");
+                }
+                return;
+            }
+            if (wasWatching)
+            {
+                operationStarted += pausedFor.Value;
+                stageStarted += pausedFor.Value;
+                actionAfter += pausedFor.Value;
+                if (relogIdleSince.HasValue) relogIdleSince += pausedFor.Value;
+                Status = statusBeforeCutscene;
+                Trace($"cutscene ended; no skip input sent; pausedMs={pausedFor.Value}; resuming observed game state");
+            }
             if (now - operationStarted > 1_200_000) throw new TimeoutException("The operation exceeded twenty minutes.");
             var allowance = stage is Stage.WaitLogin or Stage.WaitWorld or Stage.WaitTerritory or Stage.WaitInn ? 300_000 : 90_000;
             if (now - stageStarted > allowance) throw new TimeoutException(TimeoutDescription());
@@ -208,6 +237,8 @@ public sealed class GameWorkflowExecutor
             {
                 case Stage.Begin: Begin(); break;
                 case Stage.WaitLogin:
+                    if (conditionalInnSkipMode && Plugin.PluginInterface.GetIpcSubscriber<bool>("AutoRetainer.GetMultiModeEnabled").InvokeFunc())
+                        throw new InvalidOperationException("AutoRetainer multi mode was enabled during login and could skip the inn cutscene. Keep multi mode off or set Skip Inn Login Cutscene to Never before resuming.");
                     var arBusy = ArBusy();
                     var lifestreamBusy = LifestreamBusy();
                     if (PlayerReady && Plugin.PlayerState.ContentId == operation.CharacterId && !arBusy && !lifestreamBusy)
@@ -353,6 +384,7 @@ public sealed class GameWorkflowExecutor
             if (NativeRetainers.HasNumeric || NativeRetainers.HasRetainerList || Plugin.Condition[ConditionFlag.OccupiedSummoningBell])
                 throw new InvalidOperationException("Close the retainer and item-quantity windows before changing characters.");
             if (LifestreamBusy()) throw new InvalidOperationException("Wait for the current Lifestream operation to finish before changing characters.");
+            EnsureInnCutscenesPreserved();
             if (!ar.TryRelog($"{character.Name}@{character.World}", out error)) throw new InvalidOperationException(error);
             ownsRelog = true;
             ownsLifestream = true;
@@ -646,11 +678,30 @@ public sealed class GameWorkflowExecutor
         ownsNavigation = false;
     }
     private static bool LifestreamBusy() => Plugin.PluginInterface.GetIpcSubscriber<bool>("Lifestream.IsBusy").InvokeFunc();
+    private void EnsureInnCutscenesPreserved()
+    {
+        // AR's independent inn-login hook ignores the bell suppression flag. Its supported IPC
+        // exposes a read-only config getter, not a scoped override. Never change its persisted config.
+        int? mode = null;
+        bool? multiMode = null;
+        try
+        {
+            mode = Plugin.PluginInterface.GetIpcSubscriber<int>("AutoRetainer.GetConfig.CutsceneSkipMode").InvokeFunc();
+            multiMode = Plugin.PluginInterface.GetIpcSubscriber<bool>("AutoRetainer.GetMultiModeEnabled").InvokeFunc();
+        }
+        catch (Exception exception) { Plugin.Log.Debug(exception, "Could not verify AutoRetainer inn-cutscene policy"); }
+        var reason = InnCutscenePolicy.LoginBlockReason(mode, multiMode);
+        if (reason != null) throw new InvalidOperationException(reason);
+        conditionalInnSkipMode = mode == 1;
+        Trace($"inn cutscene preservation checked; AutoRetainerMode={mode}; multi={multiMode}");
+    }
     private bool ArBusy() { var state = ar.GetStatus(); return !state.Ready || state.Busy != false; }
     private static float DistanceTo(Vector3 position) => Plugin.ObjectTable.LocalPlayer is { } player ? Vector3.Distance(player.Position, position) : float.PositiveInfinity;
     private static uint CurrentWorld => Plugin.ObjectTable.LocalPlayer?.CurrentWorld.RowId ?? 0;
     private static uint HomeWorld => Plugin.ObjectTable.LocalPlayer?.HomeWorld.RowId ?? 0;
-    private static bool PlayerReady => Plugin.ClientState.IsLoggedIn && Plugin.ObjectTable.LocalPlayer != null && !Plugin.Condition[ConditionFlag.BetweenAreas] && !Plugin.Condition[ConditionFlag.BetweenAreas51];
+    private static bool PlayerReady => Plugin.ClientState.IsLoggedIn && Plugin.ObjectTable.LocalPlayer != null
+        && !Plugin.Condition[ConditionFlag.BetweenAreas] && !Plugin.Condition[ConditionFlag.BetweenAreas51]
+        && !NativeRetainers.HasActiveCutscene;
     private RetainerIdentity CurrentRetainer => roster[retainerIndex];
     private string inventoryReadFailure = string.Empty;
 

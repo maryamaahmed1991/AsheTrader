@@ -47,6 +47,37 @@ public sealed class AutomaticRelaySelectorTests
     }
 
     [Fact]
+    public void EqualLoadCountPrefersHomeWorldWithoutNeedingTheLargestAlt()
+    {
+        var nearby = Profile(1, 10); nearby.World = "Meeting World";
+        var distant = Profile(2, 140); distant.World = "Distant World";
+        var ranked = AutomaticRelaySelector.Rank(PeerB, [(PeerB, distant), (PeerB, nearby)],
+            preferredWorld: "Meeting World", requiredQuantity: 500, stackSize: 99);
+        Assert.Equal(new ulong[] { 1, 2 }, ranked.Select(x => x.ContentId));
+        Assert.Equal(1UL, AutomaticRelaySelector.EstimatedLoads(10, 500, 99));
+    }
+
+    [Fact]
+    public void FewerRelayLoadsOutranksWorldLocality()
+    {
+        var nearby = Profile(1, 1); nearby.World = "Meeting World";
+        var distant = Profile(2, 10); distant.World = "Distant World";
+        var ranked = AutomaticRelaySelector.Rank(PeerB, [(PeerB, nearby), (PeerB, distant)],
+            preferredWorld: "Meeting World", requiredQuantity: 500, stackSize: 99);
+        Assert.Equal(new ulong[] { 2, 1 }, ranked.Select(x => x.ContentId));
+        Assert.Equal(6UL, AutomaticRelaySelector.EstimatedLoads(1, 500, 99));
+    }
+
+    [Fact]
+    public void EstimatedLoadsHandlesZeroCapacityAndLargeAmountsWithoutOverflow()
+    {
+        Assert.Equal(ulong.MaxValue, AutomaticRelaySelector.EstimatedLoads(0, 1, 999));
+        Assert.Equal(0UL, AutomaticRelaySelector.EstimatedLoads(0, 0, 999));
+        Assert.Equal(2UL, AutomaticRelaySelector.EstimatedLoads(uint.MaxValue, ulong.MaxValue, uint.MaxValue));
+        Assert.Throws<ArgumentOutOfRangeException>(() => AutomaticRelaySelector.EstimatedLoads(1, 1, 0));
+    }
+
+    [Fact]
     public void RequiresRelayOnlyForFundedSameAccountAllocations()
     {
         var definition = Job([1], (2, 5));

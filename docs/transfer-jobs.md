@@ -1,6 +1,6 @@
 # Ashe's Trader: transfer-job requirements
 
-Status: agreed product requirements, implemented in the 0.3.5.0 development build for staged two-PC testing. Automated tests cover planning, accounting, LAN discovery/transport, and the transfer coordinator. User diagnostics confirm a complete ten-retainer scan; updated bell recovery, item movement, trades and purchases still require live validation.
+Status: agreed product requirements, implemented in the 0.3.6.0 development build for staged two-PC testing. Automated tests cover planning, relay collection/delivery, accounting, LAN discovery/transport, and the transfer coordinator. User diagnostics confirm a complete ten-retainer scan; new route scheduling, cutscene preservation, native movement/trades and purchases still require live validation.
 
 ## Confirmed requirements
 
@@ -68,9 +68,13 @@ When the receiver needs space:
 
 If source withdrawal itself needs inventory space, schedule bounded pickup/trade trips rather than assuming all retainer stock fits into one carried inventory.
 
-When a funded allocation needs a relay, rank opposite-account AutoRetainer characters by cached free bag slots and use a deterministic tie-break. Log into the highest-ranked eligible character and inspect its current item capacity; try the next candidate if it cannot receive any. A zero free-slot hint can still permit merging into an existing stack. Relay-only inspections do not claim that unrelated retainers were scanned. Only currently imported AutoRetainer characters with known slot counts are automatic candidates.
+Fund allocations in recipient-priority order, preferring direct routes, matching home worlds, reused providers and larger available quantities. When a funded allocation needs a relay, rank opposite-account AutoRetainer characters by estimated load count, preferred home world, free slots and stable identity. Inspect only the selected relay; if unexpectedly full before receiving cargo, pause rather than logging through other candidates. A zero free-slot hint can still permit merging into an existing stack. Relay-only inspections do not claim that unrelated retainers were scanned. Characters with no funded provider, recipient or relay role do not log in.
 
-Once the per-item journal is created, keep its selected relay fixed for recovery and cargo accounting. Do not replace it while cargo or an issued operation remains. Unexpected later capacity loss pauses the item rather than rewriting historical routes. A later item performs its own selection.
+Collect all compatible funded contributions for the current priority recipient until the relay fills or its incoming work is complete. Then drain that load before collecting more. Physical cargo may mix in a stack, while ledger accounting remains per allocation. Never deposit relay cargo merely to make space. Persist the collection/delivery phase and capacity hints; recover pending trades before choosing further work. Unexpected fullness with carried cargo triggers delivery; fullness without cargo pauses.
+
+Choose the meeting world from public worlds in the captured location's data center by the number of distinct funded participants leaving their recorded home worlds. Include relays, exclude unfunded characters, and keep the captured world on ties. This is a fixed-hub estimate rather than a global trip optimum. Keep the chosen world, relay and allocations fixed once the per-item plan is issued; legacy issued plans keep their original world. A later item performs its own selection.
+
+Never send skip or progression input during inn cutscenes. Wait for natural completion and suspend gameplay deadlines while watching. Check AutoRetainer's separate inn-skip policy before relog and pause with its setting path if it would skip or cannot be read. Do not silently alter external plugin configuration.
 
 If every permitted retainer is full, travel is unavailable, a retainer cannot be accessed, or the peer disconnects, pause the job with a specific reason and unresolved quantities. Do not convert incomplete work into success.
 
@@ -92,7 +96,7 @@ The game operation and local journal cannot be committed atomically. After inter
 - Exclude recipient-protected stock and relay cargo from source collection.
 - Perform multiple source withdrawal trips when carried inventory is too small.
 - Process multiple item/quality lines with independent quantities, shortages and restart checkpoints.
-- Choose automatic relays only for funded same-account routes; rank by AutoRetainer slots and fall back after a failed live capacity check.
+- Choose automatic relays only for funded same-account routes; estimate loads and locality from AutoRetainer slots, inspect only the selected relay, and gather a full load before delivery.
 - Pause, home-world deposit, return, and resume multiple times during one delivery.
 - Preserve delivered totals after retainer deposits.
 - Respect exact quantities and HQ selection without over-withdrawing or over-delivering.

@@ -36,7 +36,7 @@ public sealed class AutomaticRelayCoordinatorTests
     }
 
     [Fact]
-    public void FullCachedTopCandidateFallsBackToNextAltAfterLiveInspection()
+    public void FullSelectedRelayPausesWithoutLoggingIntoOtherAlts()
     {
         var full = Sim(3, PeerB, 10, 10);
         var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 10), Sim(2, PeerA), full, Sim(4, PeerB));
@@ -44,12 +44,19 @@ public sealed class AutomaticRelayCoordinatorTests
         service.StartJob(Saved(Job([1], (2, 10))));
         service.RunToTerminal();
 
-        Assert.False(service.Run!.Paused, service.LastError);
-        Assert.Equal(4UL, service.Run.AutomaticRelays[PeerB]);
-        Assert.Contains(3UL, service.Run.RejectedRelayCharacters);
+        Assert.True(service.Run!.Paused);
+        Assert.Contains("selected automatic relay", service.LastError);
+        Assert.Empty(service.Run.AutomaticRelays);
         Assert.Contains(service.Trace, command => command.CharacterId == 3 && command.Operation == GameOperationKind.Inspect);
+        Assert.DoesNotContain(service.Trace, command => command.CharacterId == 4);
+        Assert.Empty(service.Trades);
         Assert.Equal(10U, full.Bags);
-        Assert.All(service.Trades, trade => Assert.NotEqual(3UL, trade.SenderId));
+
+        service.SetCachedFreeSlots(3, 0);
+        service.Resume();
+        service.RunToTerminal();
+        Assert.False(service.Run.Paused, service.LastError);
+        Assert.Equal(4UL, service.Run.AutomaticRelays[PeerB]);
     }
 
     [Fact]
@@ -61,7 +68,7 @@ public sealed class AutomaticRelayCoordinatorTests
         service.StartJob(Saved(Job([1], (2, 10))));
         service.RunToTerminal();
         Assert.True(service.Run!.Paused);
-        Assert.Contains("No automatic relay", service.LastError);
+        Assert.Contains("selected automatic relay", service.LastError);
         Assert.Empty(service.Trades);
 
         relay.Bags = 5;
@@ -85,6 +92,22 @@ public sealed class AutomaticRelayCoordinatorTests
         Assert.Empty(service.Run.AutomaticRelays);
         Assert.DoesNotContain(service.Trace, command => command.CharacterId == 3);
         Assert.Empty(service.Trades);
+    }
+
+    [Fact]
+    public void EmptyProviderAndUnfundedRecipientAreNeverLoggedIn()
+    {
+        var service = new WorkflowService(PeerA, PeerB,
+            Sim(1, PeerA), Sim(2, PeerA, 10), Sim(3, PeerB), Sim(4, PeerB));
+        service.StartJob(Saved(Job([1, 2], (3, 10), (4, 10))));
+        service.RunToTerminal();
+
+        Assert.Equal(CoordinatorStep.Finished, service.Run!.Step);
+        Assert.DoesNotContain(service.Trace, command => command.Operation == GameOperationKind.Login && command.CharacterId is 1 or 4);
+        Assert.Equal(new ulong[] { 2, 3 }, service.Trace.Where(command => command.Operation == GameOperationKind.Login)
+            .Select(command => command.CharacterId).Distinct().Order());
+        Assert.Equal(10UL, new TransferJobLedger(service.Run.Journal!).DeliveredTo(3));
+        Assert.Equal(0UL, new TransferJobLedger(service.Run.Journal!).DeliveredTo(4));
     }
 
     [Fact]
@@ -136,6 +159,11 @@ public sealed class AutomaticRelayCoordinatorTests
         firstCandidate.Bags = 10;
         service.SimulateCoordinatorRestart(); service.Resume();
         Assert.Empty(service.Run.AutomaticRelays);
+        service.RunToTerminal();
+        Assert.True(service.Run.Paused);
+        Assert.DoesNotContain(service.Trace, command => command.CharacterId == 4);
+        service.SetCachedFreeSlots(3, 0);
+        service.Resume();
         service.RunToTerminal();
         Assert.False(service.Run.Paused, service.LastError);
         Assert.Equal(4UL, service.Run.AutomaticRelays[PeerB]);

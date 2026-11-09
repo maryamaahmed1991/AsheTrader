@@ -12,17 +12,24 @@ public static class JobPlanner
     /// </summary>
     public static IReadOnlyList<Guid> RequiredRelaySourcePeers(TransferJobDefinition definition, IEnumerable<JobCharacterSnapshot> snapshots)
     {
-        ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(snapshots);
-        ValidateDefinition(definition);
         var all = snapshots.ToArray();
-        var candidates = JobModelCopies.Definition(definition);
-        candidates.RelayCharacters.Clear();
-        var allocationPreview = BuildPlan(candidates, all, false);
+        var allocationPreview = PreviewFunding(definition, all);
         var byCharacter = all.ToDictionary(snapshot => snapshot.CharacterId);
         return allocationPreview.Allocations
             .Where(allocation => byCharacter[allocation.SourceCharacterId].PeerId == byCharacter[allocation.RecipientCharacterId].PeerId)
             .Select(allocation => byCharacter[allocation.SourceCharacterId].PeerId).Distinct().Order().ToArray();
+    }
+
+    /// <summary>Calculates funded participants without logging in or choosing any relay.</summary>
+    public static TransferPlan PreviewFunding(TransferJobDefinition definition, IEnumerable<JobCharacterSnapshot> snapshots)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(snapshots);
+        ValidateDefinition(definition);
+        var candidates = JobModelCopies.Definition(definition);
+        candidates.RelayCharacters.Clear();
+        return BuildPlan(candidates, snapshots, false);
     }
 
     private static TransferPlan BuildPlan(TransferJobDefinition definition, IEnumerable<JobCharacterSnapshot> snapshots, bool createRoutes)
@@ -97,7 +104,17 @@ public static class JobPlanner
             var requested = demand[recipient.CharacterId];
             var left = requested ?? ulong.MaxValue;
             var allocated = 0UL;
-            foreach (var sourceId in definition.Sources)
+            // Provider selection is not a priority list. Keep recipient priority, while avoiding
+            // relay legs and world changes where possible, and reusing/filling larger providers.
+            var fundedProviders = plan.Allocations.Select(allocation => allocation.SourceCharacterId).ToHashSet();
+            var rankedSources = definition.Sources
+                .Where(id => id != recipient.CharacterId && available[id] > 0)
+                .OrderBy(id => byCharacter[id].PeerId == recipientSnapshot.PeerId ? 1 : 0)
+                .ThenBy(id => SameWorld(byCharacter[id].World, recipientSnapshot.World) ? 0 : 1)
+                .ThenBy(id => fundedProviders.Contains(id) ? 0 : 1)
+                .ThenByDescending(id => available[id])
+                .ThenBy(id => id);
+            foreach (var sourceId in rankedSources)
             {
                 if (left == 0) break;
                 if (sourceId == recipient.CharacterId || available[sourceId] == 0) continue;
@@ -120,6 +137,9 @@ public static class JobPlanner
         }
         return plan;
     }
+
+    private static bool SameWorld(string left, string right) => !string.IsNullOrWhiteSpace(left)
+        && string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
 
     private static List<TransferLeg> CreateRoute(JobCharacterSnapshot source, JobCharacterSnapshot recipient,
         Dictionary<Guid, ulong> relays, IReadOnlyDictionary<ulong, JobCharacterSnapshot> characters)

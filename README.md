@@ -11,7 +11,9 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 - Find nearby coordinators by PC label without copying IP addresses. Hosting chooses a local network adapter automatically; manual connection remains available.
 - Import each PC's AutoRetainer roster and plan from Allagan Tools' cached character and retainer inventories.
 - Save multiple item lines in one job, each with providers, ordered recipients, quantities and quality, sharing one meeting point.
-- Automatically choose relays for same-account transfers using AutoRetainer's cached free-slot counts, then verify live capacity before use.
+- Choose providers and relays using funded quantities, direct routes, home worlds and estimated relay loads. Only assigned providers, recipients and needed relays log in.
+- Fill relays across multiple providers before delivering, then drain the collected load before gathering again.
+- Preserve inn cutscenes and wait for their natural completion before continuing.
 - Read status at a glance: green for ready/success, blue for active information, amber for waiting or attention, and red for blockers/errors. Text labels remain alongside colors.
 - Plan from Allagan Tools' cached inventories without discovery logins or repeat retainer scans, including restock jobs. Unavailable cache data pauses with the affected character.
 - Allocate additional quantities, collect all with a final remainder recipient, or restock to a combined bag/retainer total.
@@ -40,7 +42,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.5.0.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.6.0.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
@@ -66,15 +68,19 @@ Add each requested item under the same saved job. Each item line has its own pro
 
 Recipients are ordered within each item. A finite amount means additional delivery in Move all/Deliver amount modes and final stock in Restock to total mode. Only the final recipient may take an unlimited remainder, and Restock to total requires explicit finite targets. A shortage on one item is recorded while the remaining items continue. An interrupted operation pauses the job before moving to another item. If an earlier line's received items fill the current provider or recipient's bags, the job can store those received items in retainers to make room; that movement stays charged to the earlier item and never changes its delivered total.
 
-Relays are automatic. After scanning providers and recipients, the planner determines whether any funded allocation needs a character on the opposite account. It ranks that PC's AutoRetainer characters by reported free inventory slots, checks the best candidate's live capacity for the item, and tries the next candidate if full. Known zero-slot candidates may still have mergeable stacks; unknown counts are not treated as verified zero. Relay-only characters need a bag inspection, not a scan of unrelated retainers.
+Provider selection prefers direct cross-account routes, matching home worlds, reuse of already assigned providers, then larger available quantities. Recipient priority is preserved. Zero-stock providers, unused providers and recipients with no funded allocation do not log in. Relays are chosen only for funded same-account routes: estimated loads from cached free slots come first, then home-world locality and capacity. Only the selected relay is inspected. Unexpected fullness pauses with its name instead of logging through other alts. Known zero-slot candidates may still have mergeable stacks; unknown counts are not treated as verified zero.
 
-AutoRetainer slot counts are cached hints; their retrieval time is not an inventory observation time. Refresh both character lists after updating AutoRetainer. If no candidate can carry the item, the job pauses with instructions to free space and retry. Once a plan has issued work, its relay stays fixed so saved trade history and cargo remain attributable to the correct character. Unexpected later capacity loss pauses that item; the next item chooses its relay afresh.
+The relay collects from multiple providers for the current priority recipient until full or until those providers have contributed their assigned quantities. It then drains that collected load before collecting more. Relay cargo is never sent to its retainers to make space. Each source allocation retains its own trade accounting, even when cargo shares a physical stack; final delivery may therefore use several trade batches without switching characters. Item lines still run sequentially. Once a plan is issued, its relay and world stay fixed for recovery. A full relay with cargo delivers it; a full relay without cargo pauses for space.
+
+After cache lookup, the planner estimates how many funded characters would leave their home worlds for each candidate meeting world in the captured location's data center. It selects the lowest count, retaining the captured world on ties. Outdoor coordinates stay the same; this does not introduce a new data-center route. Activity shows the selected world and before/after estimates. These are home-world estimates, not a global minimum over unknown current positions or every future storage trip. Existing issued plans retain their original world and allocations.
 
 Capture the rendezvous while standing at an accessible outdoor point. Verify the aetheryte belongs to that territory. Capture a custom storage bell only on that character's home world; leaving it unset uses an inn. Retainer allowlists govern destination deposits; an empty allowlist means all available retainers.
 
 Provider bags and retainer stored inventory are included automatically. When a provider runs out of carried stock, it returns home to collect another load, limited by its current bag capacity and the remaining assignment. It trades that load across as many batches as needed before another storage trip. Other storage types, equipped items, retainer sale listings, gil and crystals are outside this build's job scope. Items must be tradeable and match the selected quality.
 
 ## Progress and recovery
+
+Version 0.3.6 adds relay collection/delivery phases, funded-character selection, source/relay cost ranking and automatic meeting-world choice. Saved relay cargo and pending trades are reconciled before scheduling new work. Inn cutscenes pause gameplay and deadlines until they finish naturally. Before relog, Ashe's Trader checks AutoRetainer's independent inn-skip setting. If it would skip, set **AutoRetainer → Advanced → Expert Settings → Skip Inn Login Cutscene → Never**, then resume. External plugin settings are not changed automatically.
 
 Version 0.3.5 removes automatic discovery visits and full scans after login, including recipient restock scans. Complete empty groups returned by Allagan Tools are accepted as cached zero estimates; absent or malformed groups still pause. Actual stock and receiving capacity are checked when moving items. Bell opening now waits for interaction readiness and uses bounded retries if the first attempt receives no acknowledgement. Copied diagnostics keep the newest trace within a paste-friendly size.
 
@@ -104,7 +110,7 @@ Once a GitHub repository exists:
 
 1. Push this source, preserving the license and notices.
 2. Upload the built `AsheTrader-<version>.zip` as a public release asset.
-3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.5.0`.
+3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.6.0`.
 4. Commit the generated root `repo.json` on `main`. Its raw GitHub URL is the permanent custom-repository feed; update that file for each release.
 
 Source is hosted in [maryamaahmed1991/AsheTrader](https://github.com/maryamaahmed1991/AsheTrader), with installable packages under [Releases](https://github.com/maryamaahmed1991/AsheTrader/releases). Pairing secrets and runtime journals must not be committed or included in release artifacts.

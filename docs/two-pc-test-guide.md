@@ -1,6 +1,16 @@
 # Two-PC testing: start here
 
-Test build: **0.3.5.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 4.
+Test build: **0.3.6.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 4.
+
+## Test relay collection and cutscenes
+
+For a small new test, select three providers on one account with 100 items each and a recipient on that same account requesting 300 additional items. Leave at least 300 items' worth of capacity on the selected relay on the other account. The three providers should contribute to the relay before the destination logs in; then the relay delivers the accumulated 300. Several trade batches may be used for ledger accounting, but the destination should remain logged in while the load drains. Confirm the relay's original stock remains unchanged at the end.
+
+Add a zero-stock provider and an extra provider that the final allocations do not need. Neither should log in. A recipient with no funded quantity should also stay offline. Activity shows the selected relay, collecting/delivering phase, cargo, selected meeting world and estimated world travelers. New plans may choose another world in the captured location's data center while keeping the same outdoor coordinates. Existing issued plans keep their previous world and allocations; resume those to finish pending cargo before testing a new plan.
+
+If a relay fills before all providers finish, it should deliver its cargo, then resume collection. It must not deposit relay cargo onto retainers. Preserve recipient priority: the higher-priority recipient finishes before collecting for the next. Item lines still run one at a time.
+
+For an inn login, watch the cutscene complete naturally. Set **AutoRetainer → Advanced → Expert Settings → Skip Inn Login Cutscene → Never** on each PC. Ashe's Trader will pause before relog if AutoRetainer is configured to skip; it does not edit that setting itself. During a cutscene the workflow should show a waiting status, send no progression input, and resume afterward without using up its gameplay timeout.
 
 ## Reporting a stuck retainer menu
 
@@ -76,12 +86,12 @@ Pickup progress is separate from delivery progress: withdrawing seven must not i
 
 1. In the same saved job, add a second, different tradable item. Select that line and set its providers, recipients and a small additional amount, such as 2. Review must show both items and their separate amounts. All lines share the meeting point.
 2. Start the job and confirm the first item finishes before the second begins. Each item gets a new cache lookup, without live discovery visits. Activity must retain the first item's delivered total while showing the second's progress. An inventory-only run should check both items without moving either. Then test a recipient whose bags fill from the first item: received first-item stock should be stored to make room for the second, while the first item's delivery total stays unchanged.
-3. Next, use a provider and recipient on the same PC/account. Refresh AutoRetainer characters on both PCs. Do not select a relay manually: the other PC's registered alt with the highest cached free-slot count should be tried automatically. Check the chosen name and live capacity in Activity.
+3. Next, use a provider and recipient on the same PC/account. Refresh AutoRetainer characters on both PCs. The other PC's relay is selected by estimated required loads, home-world locality, then free slots. Check the chosen name and live capacity in Activity.
 4. Confirm the route is provider → automatically chosen alt → final recipient. Relay cargo must not appear as final delivery. Cached providers and recipients skip discovery retainer scans; a relay-only alt needs a live bag-capacity check.
-5. After normal selection passes, test stale hints deliberately: give the highest-ranked alt no capacity for the item while AutoRetainer still reports space, with another eligible alt available. Expect a live check followed by automatic fallback to the next candidate before trading. If every candidate is full, expect a pause; free space, refresh character lists and resume.
+5. After normal selection passes, test stale hints deliberately: give the selected relay no capacity while AutoRetainer still reports space. Expect a pause naming that relay, without logging through other alts. Free space or refresh character lists, then resume. If a relay becomes full after receiving cargo, it should deliver that load instead.
 6. Check the colored status labels remain readable: green ready/success, blue active information, amber waiting/attention, red blocked/error. Text must explain every status even without its color.
 
-AutoRetainer's free-slot figures are cached. The plugin checks current capacity before accepting a candidate. After a per-item plan has issued work, its relay stays fixed so recovery cannot assign old cargo to a different character. Unexpected later capacity loss pauses that item; subsequent items select again.
+AutoRetainer's free-slot figures are cached. The plugin checks current capacity on the selected relay. After a per-item plan has issued work, its relay stays fixed so recovery cannot assign old cargo to a different character. Later fullness triggers delivery if cargo is available, otherwise a pause; subsequent items select again.
 
 ### Larger runs and recovery
 

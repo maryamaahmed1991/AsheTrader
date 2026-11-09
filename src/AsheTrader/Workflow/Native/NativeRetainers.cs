@@ -38,16 +38,19 @@ internal static unsafe class NativeRetainers
     public static bool HasRetainerMenu => Ready("SelectString") != null;
     public static bool HasRetainerInventory => AgentRetainer.Instance() != null && AgentRetainer.Instance()->IsAgentActive();
     public static bool HasVisibleRetainerInventory => HasRetainerInventory && (Ready("InventoryRetainer") != null || Ready("InventoryRetainerLarge") != null);
+    public static bool HasActiveCutscene => Plugin.Condition[ConditionFlag.WatchingCutscene]
+        || Plugin.Condition[ConditionFlag.WatchingCutscene78] || Plugin.Condition[ConditionFlag.OccupiedInCutSceneEvent];
     public static bool BellInteractionBlocked => HasNumeric || HasUnrelatedModal || HasRetainerList || HasRetainerMenu
         || HasRetainerInventory || Ready("Talk") != null
         || Plugin.Condition[ConditionFlag.Occupied] || Plugin.Condition[ConditionFlag.OccupiedInEvent]
         || Plugin.Condition[ConditionFlag.OccupiedInQuestEvent] || Plugin.Condition[ConditionFlag.OccupiedInCutSceneEvent]
         || Plugin.Condition[ConditionFlag.Casting] || Plugin.Condition[ConditionFlag.Jumping]
-        || Plugin.Condition[ConditionFlag.LoggingOut] || Plugin.Condition[ConditionFlag.WatchingCutscene]
+        || Plugin.Condition[ConditionFlag.LoggingOut] || HasActiveCutscene
         || ActionManager.Instance() == null || ActionManager.Instance()->AnimationLock > 0;
 
     public static bool HasExpectedRetainerTalk(RetainerIdentity expected)
     {
+        if (HasActiveCutscene) return false;
         var talk = (AddonTalk*)Ready("Talk");
         if (talk == null || !Plugin.Condition[ConditionFlag.OccupiedSummoningBell]) return false;
         // AddonTalk's first text node is the speaker (also used by TextToTalk/TalkUtils).

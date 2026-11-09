@@ -524,7 +524,7 @@ public sealed class WorkflowPanel(Plugin plugin)
     private void DrawAutomaticRelayInfo()
     {
         UiTone.Wrapped(UiTone.Info, "Automatic relays: no selection needed.");
-        ImGui.TextWrapped("When items need to move between characters on the same account, Ashe's Trader chooses an alt on the other PC using AutoRetainer's available inventory slots, highest first. It checks live capacity before using that character.");
+        ImGui.TextWrapped("Same-account transfers use an alt on the other PC. Ashe's Trader estimates how many relay loads are needed from AutoRetainer's free slots, favors a useful home world, then checks the selected relay's capacity. Providers fill the relay before it delivers to the recipient.");
         if (ImGui.CollapsingHeader("View AutoRetainer relay candidates"))
         {
             foreach (var group in Service.AllCharacters().GroupBy(x => x.PeerId))
@@ -585,6 +585,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         DrawAutomaticRelayInfo();
         ImGui.TextUnformatted("Shared meeting point");
         DrawLocation(job.Meeting);
+        ImGui.TextWrapped("After reading cached stock, the planner chooses a world in this meeting point's data center that reduces the number of assigned characters leaving their home worlds. The outdoor position stays the same. Only providers with allocated items, their recipients and a required relay log in.");
         ImGui.Separator();
         ImGui.TextUnformatted("Ready to run?");
         var scanBlockers = GetScanBlockers(job);
@@ -821,6 +822,8 @@ public sealed class WorkflowPanel(Plugin plugin)
         UiTone.Wrapped(UiTone.Info, $"Item {run.ActiveItemIndex + 1} of {run.TotalItemCount}: {ItemLabel(run.ActiveDefinition)} · {ModeName(run.ActiveDefinition.QuantityMode)}");
         foreach (var relay in run.AutomaticRelays)
             UiTone.Wrapped(UiTone.Info, $"Automatic relay on {PeerName(relay.Key)}: {CharacterName(relay.Value)} · live capacity checked");
+        if (run.EffectiveMeeting != null)
+            UiTone.Wrapped(UiTone.Info, $"Meeting world: {run.MeetingWorldName} · estimated characters changing worlds: {run.EstimatedWorldTravelers} (captured world: {run.ConfiguredWorldTravelers}). Based on home worlds; chosen for this item's plan.");
         if (run.Journal == null)
         {
             var scanned = run.DiscoveryOrder.Count(id => run.Snapshots.TryGetValue(id, out var snapshot) && snapshot.IsPlanningReady);
@@ -848,7 +851,10 @@ public sealed class WorkflowPanel(Plugin plugin)
                 foreach (var relay in run.Journal.Plan.Definition.RelayCharacters.Values)
                 {
                     var cargo = ledger.RelayCargo(relay);
-                    if (cargo > 0) UiTone.Wrapped(UiTone.Warning, $"Relay cargo awaiting final delivery: {CharacterName(relay)} holds {cargo:N0} items.");
+                    var phase = run.RelayFlushCharacterId == relay ? "Delivering the collected load" : "Collecting from providers";
+                    if (cargo > 0) UiTone.Wrapped(UiTone.Info, $"{phase}: {CharacterName(relay)} holds {cargo:N0} job items.");
+                    if (run.RelayCapacity.TryGetValue(relay, out var remainingCapacity))
+                        ImGui.TextWrapped($"Relay capacity remaining for this item: approximately {remainingCapacity:N0}. Deliver when full or when all providers for this recipient have contributed.");
                 }
             }
             catch (Exception exception) { UiTone.Wrapped(UiTone.Error, $"Journal requires attention: {exception.Message}"); }
@@ -959,7 +965,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         ImGui.Spacing();
         if (!ImGui.CollapsingHeader("Recent activity", ImGuiTreeNodeFlags.DefaultOpen)) return;
         if (ImGui.Button("Copy activity for troubleshooting"))
-            ImGui.SetClipboardText($"Ashe's Trader v0.3.5\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
+            ImGui.SetClipboardText($"Ashe's Trader v0.3.6\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
         if (plugin.Activity.Count == 0) ImGui.TextWrapped("Actions and outcomes will appear here when a job runs.");
         foreach (var entry in plugin.Activity.Reverse()) UiTone.Status(entry);
         DrawHints();

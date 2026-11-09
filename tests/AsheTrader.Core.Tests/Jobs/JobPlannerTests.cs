@@ -53,7 +53,7 @@ public sealed class JobPlannerTests
 
         Assert.Equal(100UL, plan.ProtectedStock[2]);
         Assert.Equal(20UL, plan.SourceBudgets[2]);
-        Assert.Equal(new ulong[] { 10, 20 }, plan.Allocations.Select(allocation => allocation.Quantity));
+        Assert.Equal(new ulong[] { 20, 10 }, plan.Allocations.Select(allocation => allocation.Quantity));
         Assert.All(plan.Allocations, allocation => Assert.Equal(3UL, allocation.RecipientCharacterId));
         Assert.False(plan.HasShortage);
     }
@@ -233,5 +233,56 @@ public sealed class JobPlannerTests
     {
         var plan = JobPlanner.Plan(Job([1, 2], (2, 10)), [Character(1, PeerA, 10), Character(2, PeerB, 999)]);
         Assert.All(plan.Allocations, allocation => Assert.NotEqual(allocation.SourceCharacterId, allocation.RecipientCharacterId));
+    }
+
+    [Fact]
+    public void DirectFundedStockAvoidsRelayAndLeavesUnneededProvidersUnallocated()
+    {
+        var definition = Job([1, 2, 3], (4, 100));
+        var snapshots = new[] { Character(1, PeerA, 500), Character(2, PeerB, 100), Character(3, PeerB), Character(4, PeerA) };
+        var plan = JobPlanner.Plan(definition, snapshots);
+
+        var allocation = Assert.Single(plan.Allocations);
+        Assert.Equal(2UL, allocation.SourceCharacterId);
+        Assert.Single(allocation.Legs);
+        Assert.Empty(JobPlanner.RequiredRelaySourcePeers(definition, snapshots));
+        Assert.Equal(500UL, plan.SourceBudgets[1]); // Unused budget is not a transfer allocation.
+    }
+
+    [Fact]
+    public void SameWorldSourceAvoidsAWorldTransferBeforeConsideringLargerStock()
+    {
+        var distant = Character(1, PeerA, 1000); distant.World = "Distant";
+        var nearby = Character(2, PeerA, 100); nearby.World = "Home";
+        var recipient = Character(3, PeerB); recipient.World = "Home";
+        var plan = JobPlanner.Plan(Job([1, 2], (3, 100)), [distant, nearby, recipient]);
+
+        Assert.Equal(2UL, Assert.Single(plan.Allocations).SourceCharacterId);
+    }
+
+    [Fact]
+    public void LargerAvailableProviderReducesNumberOfCharactersForFiniteDemand()
+    {
+        var plan = JobPlanner.Plan(Job([1, 2, 3], (4, 90)),
+            [Character(1, PeerA, 30), Character(2, PeerA, 40), Character(3, PeerA, 100), Character(4, PeerB)]);
+
+        Assert.Equal(3UL, Assert.Single(plan.Allocations).SourceCharacterId);
+        Assert.Equal(90UL, plan.AllocatedQuantity);
+    }
+
+    [Fact]
+    public void FundingPreviewAndExecutablePlanChooseSameProvidersWithoutMutatingInputs()
+    {
+        var definition = Job([2, 1], (3, 40), (4, 100));
+        var snapshots = new[] { Character(1, PeerA, 100), Character(2, PeerA, 70), Character(3, PeerB), Character(4, PeerB) };
+        var preview = JobPlanner.PreviewFunding(definition, snapshots);
+        var actual = JobPlanner.Plan(definition, snapshots);
+
+        Assert.Equal(actual.Allocations.Select(x => (x.SourceCharacterId, x.RecipientCharacterId, x.Quantity)),
+            preview.Allocations.Select(x => (x.SourceCharacterId, x.RecipientCharacterId, x.Quantity)));
+        Assert.All(preview.Allocations, allocation => Assert.Empty(allocation.Legs));
+        Assert.Equal(new ulong[] { 1, 1, 2 }, actual.Allocations.Select(x => x.SourceCharacterId));
+        Assert.Equal(new ulong[] { 2, 1 }, definition.Sources);
+        Assert.Equal(40UL, actual.Allocations.Where(x => x.RecipientCharacterId == 3).Aggregate(0UL, (sum, x) => sum + x.Quantity));
     }
 }

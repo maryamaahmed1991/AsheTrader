@@ -48,6 +48,7 @@ public sealed partial class WorkflowService
         if (Run is { } run)
         {
             header.Add("Coordinator", $"job={run.Job.Definition.Id}; step={run.Step}; paused={run.Paused}; itemIndex={run.ActiveItemIndex}; discoveryIndex={run.DiscoveryIndex}/{run.DiscoveryOrder.Count}; pending={run.Pending.Count}");
+            header.Add("Routing", $"meetingWorld={run.EffectiveMeeting?.WorldId ?? run.Job.Meeting.WorldId}; estimatedWorldTravelers={run.EstimatedWorldTravelers}; relayDelivering={run.RelayFlushCharacterId?.ToString() ?? "none"}");
             foreach (var pending in run.Pending.Take(4))
                 header.Add("Pending", $"command={pending.Command.Id}; kind={pending.Command.Kind}/{pending.Command.Operation.Kind}; character={pending.Command.Operation.CharacterId}; item={pending.Command.Operation.ItemId}; HQ={pending.Command.Operation.HighQuality}; quantity={pending.Command.Operation.Quantity}; response={pending.Response?.Success.ToString() ?? "waiting"}; error={pending.Response?.Error ?? ""}");
         }

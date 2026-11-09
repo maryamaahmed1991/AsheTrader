@@ -1,4 +1,5 @@
 using AsheTrader.Core;
+using AsheTrader.Core.Jobs;
 using AsheTrader.Workflow.Native;
 using Newtonsoft.Json;
 
@@ -26,6 +27,9 @@ public sealed partial class WorkflowService
     private readonly object? activeWorker = null;
     private string error = string.Empty;
     private WorkflowSettings Settings => settings;
+    private void ChooseMeetingWorld(TransferPlan plan) { }
+    private string PreferredMeetingWorld(TransferPlan plan) => "";
+    private uint PlanningItemStackSize() => 999;
 
     public CoordinatorRun? Run { get; private set; }
     public PeerRoster? RemoteRoster { get; private set; }

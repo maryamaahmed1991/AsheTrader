@@ -426,20 +426,14 @@ public sealed partial class WorkflowService
             }
             if (!PrepareAutomaticRelays()) return;
             run.Journal = TransferJobLedger.Create(JobPlanner.Plan(DefinitionWithAutomaticRelays(), run.Snapshots.Values)).Journal;
+            ChooseMeetingWorld(run.Journal.Plan);
             SetStep(CoordinatorStep.SelectLeg);
             return;
         }
         var ledger = new TransferJobLedger(run.Journal ?? throw new InvalidDataException("Job plan is missing."));
         if (run.Step == CoordinatorStep.SelectLeg)
         {
-            foreach (var allocation in run.Journal.Plan.Allocations)
-            {
-                var index = allocation.Legs.Count == 2 && ledger.RemainingForLeg(allocation.Id, 1) > 0 ? 1 : 0;
-                if (ledger.RemainingForLeg(allocation.Id, index) == 0) continue;
-                run.AllocationId = allocation.Id; run.LegIndex = index;
-                run.DesiredQuantity = (uint)Math.Min(uint.MaxValue, ledger.RemainingForLeg(allocation.Id, index));
-                SetStep(CoordinatorStep.LoginSender); return;
-            }
+            if (SelectNextTransferLeg(ledger)) { SetStep(CoordinatorStep.LoginSender); return; }
             CompleteItem(); return;
         }
         var assignment = run.Journal.Plan.Allocations.Single(x => x.Id == run.AllocationId);
@@ -455,6 +449,7 @@ public sealed partial class WorkflowService
                     run.PreviousItemDepositCharacterId = 0;
                     run.SenderBagQuantity = result.BagQuantity;
                     run.SenderBagCapacity = result.BagCapacity;
+                    ObserveRelayCapacity(leg.SenderId, result.BagCapacity);
                     run.SenderStackSize = result.StackSize;
                     if (result.StackSize == 0) throw new InvalidDataException("Invalid item stack size.");
                 });
@@ -484,6 +479,7 @@ public sealed partial class WorkflowService
                         throw new InvalidOperationException("No provider items could be collected. The planned stock may be stale or unavailable. Check its retainer stock and bag space before resuming; confirmed deliveries are preserved.");
                     if (result.StackSize == 0) throw new InvalidDataException("Invalid item stack size.");
                     run.SenderBagQuantity = result.BagQuantity; run.SenderBagCapacity = result.BagCapacity;
+                    ObserveRelayCapacity(leg.SenderId, result.BagCapacity);
                     run.SenderStackSize = result.StackSize;
                 }, pickupQuantity);
                 break;
@@ -493,8 +489,16 @@ public sealed partial class WorkflowService
                     run.PreviousItemDepositIndex = null;
                     run.PreviousItemDepositCharacterId = 0;
                     run.ReceiverCapacity = result.BagCapacity;
+                    ObserveRelayCapacity(leg.ReceiverId, result.BagCapacity);
                     if (result.BagCapacity == 0)
                     {
+                        if (assignment.Legs.Count == 2 && run.LegIndex == 0)
+                        {
+                            if (ledger.RelayCargo(leg.ReceiverId) == 0)
+                                throw new InvalidOperationException("The relay is full but has no carried job cargo to deliver. Free space on that relay, then resume.");
+                            run.RelayFlushCharacterId = leg.ReceiverId;
+                            return;
+                        }
                         var eligible = DepositAllowance(run.Journal, run.Deposited, leg.ReceiverId);
                         if (result.BagQuantity == 0 || eligible == 0)
                         {
@@ -511,7 +515,10 @@ public sealed partial class WorkflowService
                 if (run.Step == CoordinatorStep.TravelSender)
                 {
                     // Capacity is returned in the just-applied result; use a separate marker set by the result handler below.
-                    if (run.ReceiverCapacity == 0) SetStep(run.PreviousItemDepositIndex.HasValue ? CoordinatorStep.DepositPreviousItem : CoordinatorStep.Deposit);
+                    if (run.ReceiverCapacity == 0)
+                        SetStep(assignment.Legs.Count == 2 && run.LegIndex == 0 && run.RelayFlushCharacterId == leg.ReceiverId
+                            ? CoordinatorStep.SelectLeg
+                            : run.PreviousItemDepositIndex.HasValue ? CoordinatorStep.DepositPreviousItem : CoordinatorStep.Deposit);
                 }
                 break;
             case CoordinatorStep.Deposit:
@@ -519,6 +526,7 @@ public sealed partial class WorkflowService
                 {
                     if (result.BagCapacity == 0 || result.MovedQuantity == 0)
                         throw new InvalidOperationException("All permitted retainers are full or inaccessible. The job remains paused.");
+                    ObserveRelayCapacity(leg.ReceiverId, result.BagCapacity);
                     run.DesiredQuantity = (uint)Math.Min(uint.MaxValue, ledger.RemainingForLeg(run.AllocationId, run.LegIndex));
                 }, run.DesiredQuantity);
                 break;
@@ -533,8 +541,8 @@ public sealed partial class WorkflowService
                     run.PreviousItemDepositCharacterId = 0;
                 }, run.DesiredQuantity, inventoryItemIndex: previousIndex);
                 break;
-            case CoordinatorStep.TravelSender: Perform(leg.SenderId, GameOperationKind.TravelMeeting, CoordinatorStep.TravelReceiver, destination: run.Job.Meeting); break;
-            case CoordinatorStep.TravelReceiver: Perform(leg.ReceiverId, GameOperationKind.TravelMeeting, CoordinatorStep.PreviewBatch, destination: run.Job.Meeting); break;
+            case CoordinatorStep.TravelSender: Perform(leg.SenderId, GameOperationKind.TravelMeeting, CoordinatorStep.TravelReceiver, destination: run.EffectiveMeeting ?? run.Job.Meeting); break;
+            case CoordinatorStep.TravelReceiver: Perform(leg.ReceiverId, GameOperationKind.TravelMeeting, CoordinatorStep.PreviewBatch, destination: run.EffectiveMeeting ?? run.Job.Meeting); break;
             case CoordinatorStep.PreviewBatch:
                 if (run.Pending.Count == 0) Issue(leg.SenderPeerId, Command(leg.SenderId, GameOperationKind.Inspect, run.DesiredQuantity, workerKind: WorkerCommandKind.PreviewBatch));
                 else if (run.Pending[0].Response is { } preview)
@@ -600,6 +608,7 @@ public sealed partial class WorkflowService
             ledger.RecordObservation(run.TradeOperationId.Value, ObservationSide.Receiver, Observe(leg.ReceiverPeerId, leg.ReceiverId, receiver.Quantity));
             SaveRun();
             if (!ledger.TryCommit(run.TradeOperationId.Value, out var failure)) throw new InvalidOperationException(failure);
+            ObserveCommittedRelayCapacity(leg, sender.Quantity);
             SaveRun();
         }
         run.Pending.Clear(); run.TradeOperationId = null;

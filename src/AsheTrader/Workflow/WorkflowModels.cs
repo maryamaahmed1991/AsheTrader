@@ -126,6 +126,14 @@ public sealed class CoordinatorRun
     public uint SenderBagCapacity { get; set; }
     public uint SenderStackSize { get; set; }
     public uint ReceiverCapacity { get; set; }
+    // Relay capacity is an execution hint refreshed by live inspections and committed exact-item trades.
+    // The ledger, not this hint, remains authoritative for cargo ownership and delivered quantities.
+    public Dictionary<ulong, uint> RelayCapacity { get; set; } = [];
+    public ulong? RelayFlushCharacterId { get; set; }
+    public TravelLocation? EffectiveMeeting { get; set; }
+    public string MeetingWorldName { get; set; } = "";
+    public int EstimatedWorldTravelers { get; set; }
+    public int ConfiguredWorldTravelers { get; set; }
     // Verified pickups are progress information only; only a confirmed trade counts as delivery.
     public Dictionary<ulong, ulong> Withdrawn { get; set; } = [];
     public Dictionary<ulong, ulong> Deposited { get; set; } = [];

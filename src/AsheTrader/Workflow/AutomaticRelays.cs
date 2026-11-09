@@ -11,6 +11,9 @@ public sealed partial class WorkflowService
         var run = Run ?? throw new InvalidOperationException("No transfer job is active.");
         if (run.Journal != null) throw new InvalidOperationException("An issued transfer plan cannot change its relay routes.");
         var needed = JobPlanner.RequiredRelaySourcePeers(run.ActiveDefinition, run.Snapshots.Values);
+        if (needed.Count == 0) return true;
+        var funding = JobPlanner.PreviewFunding(run.ActiveDefinition, run.Snapshots.Values);
+        var preferredWorld = PreferredMeetingWorld(funding);
         var pairedPeers = new[] { Settings.PeerId, RemoteRoster?.PeerId ?? Guid.Empty };
         foreach (var sourcePeer in needed)
         {
@@ -28,7 +31,12 @@ public sealed partial class WorkflowService
             if (run.RelayCandidatePeerId != relayPeer || !run.RelayCandidateId.HasValue
                 || run.RejectedRelayCharacters.Contains(run.RelayCandidateId.Value))
             {
-                var candidates = AutomaticRelaySelector.Rank(relayPeer, AllCharacters(), run.RejectedRelayCharacters);
+                var requiredQuantity = funding.Allocations
+                    .Where(allocation => run.Snapshots[allocation.SourceCharacterId].PeerId == sourcePeer
+                        && run.Snapshots[allocation.RecipientCharacterId].PeerId == sourcePeer)
+                    .Aggregate(0UL, (sum, allocation) => checked(sum + allocation.Quantity));
+                var candidates = AutomaticRelaySelector.Rank(relayPeer, AllCharacters(), run.RejectedRelayCharacters,
+                    preferredWorld, requiredQuantity, PlanningItemStackSize());
                 var next = candidates.FirstOrDefault();
                 if (next == null)
                 {
@@ -45,14 +53,14 @@ public sealed partial class WorkflowService
             }
             var candidate = Character(run.RelayCandidateId.Value).Character;
             run.Step = CoordinatorStep.RelayLogin;
-            run.Status = $"Checking automatic relay {candidate.Name}@{candidate.World}: AutoRetainer reports {candidate.InventoryFreeSlots?.ToString() ?? "unknown"} free slots; verifying live capacity…";
+            run.Status = $"Preparing selected relay {candidate.Name}@{candidate.World}: ranked by estimated loads and world travel; checking its carried capacity…";
             SaveRun();
             return false;
         }
         return true;
     }
 
-    /// <summary>Runs a read-only bag check, trying the next cached-ranked candidate if it is full.</summary>
+    /// <summary>Checks only the selected funded relay; unexpected fullness pauses instead of touring other alts.</summary>
     private bool AdvanceAutomaticRelayPreparation()
     {
         var run = Run!;
@@ -68,8 +76,9 @@ public sealed partial class WorkflowService
                 if (result.StackSize == 0) throw new InvalidDataException("The relay inspection returned an invalid item stack size.");
                 if (result.BagCapacity == 0)
                 {
-                    if (!run.RejectedRelayCharacters.Contains(id)) run.RejectedRelayCharacters.Add(id);
                     run.AutomaticRelays.Remove(relayPeer);
+                    var identity = Character(id).Character;
+                    throw new InvalidOperationException($"The selected automatic relay {identity.Name}@{identity.World} has no room for this item. Free its bag space or refresh AutoRetainer's slot counts, then Resume. Other alts will not be logged in just to test their capacity.");
                 }
                 else
                 {
