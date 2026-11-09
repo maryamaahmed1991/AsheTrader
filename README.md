@@ -40,7 +40,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.0.0.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.1.0.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
@@ -76,6 +76,8 @@ Provider bags and retainer stored inventory are included automatically. When a p
 
 ## Progress and recovery
 
+Version 0.3.1 fixes character switching from inside the game. AutoRetainer's `CanAutoLogin` check and `Relog` IPC only allow the title screen; the adapter now uses its documented `/autoretainer relog Character Name@World` command, applying title readiness only while logged out. A dispatched command is not treated as a completed switch: the workflow waits for the requested character CID and idle AutoRetainer/Lifestream. If the switch stops without reaching the target, it pauses instead of repeatedly issuing commands.
+
 Only matching two-sided native results commit a trade automatically. Delivery totals do not decrease when recipients store items on their retainers. Relay holdings are pending delivery until the final leg commits.
 
 If a client disconnects, a character changes unexpectedly, storage fills, or a native interaction cannot be verified, the job pauses. Reconnect and press Resume. Saved completed results are reconciled; an ambiguous trade is not replayed. If the original outcome was never saved, log in the original characters, inspect both inventories, and use the explicit reconciliation controls only after checking the evidence.
@@ -94,7 +96,7 @@ Once a GitHub repository exists:
 
 1. Push this source, preserving the license and notices.
 2. Upload the built `AsheTrader-<version>.zip` as a public release asset.
-3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.0.0`.
+3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.1.0`.
 4. Commit the generated root `repo.json` on `main`. Its raw GitHub URL is the permanent custom-repository feed; update that file for each release.
 
 Source is hosted in [maryamaahmed1991/AsheTrader](https://github.com/maryamaahmed1991/AsheTrader), with installable packages under [Releases](https://github.com/maryamaahmed1991/AsheTrader/releases). Pairing secrets and runtime journals must not be committed or included in release artifacts.

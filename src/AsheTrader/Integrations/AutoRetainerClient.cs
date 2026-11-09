@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using Dalamud.Game.ClientState.Conditions;
 
 namespace AsheTrader.Integrations;
 
@@ -165,22 +166,20 @@ internal sealed class AutoRetainerClient(
 
         try
         {
-            if (!pluginInterface.GetIpcSubscriber<bool>("AutoRetainer.PluginState.CanAutoLogin").InvokeFunc())
-            {
-                error = "AutoRetainer cannot relog from the current game state.";
-                return false;
-            }
-
-            // Preserve AR's exact spelling: its provider performs a case-sensitive roster lookup.
-            var accepted = pluginInterface.GetIpcSubscriber<string, bool>("AutoRetainer.PluginState.Relog")
-                .InvokeFunc($"{character.Name}@{character.World}");
-            error = accepted ? string.Empty : "AutoRetainer did not accept the relog request.";
-            return accepted;
+            // CanAutoLogin and the Relog IPC are title-screen-only. The documented command
+            // supports in-game character switching as well; its handler matches the exact roster spelling.
+            // Dispatch means requested, not completed: the workflow waits for the actual target CID.
+            var loggedIn = Plugin.ClientState.IsLoggedIn;
+            var playerReady = Plugin.ObjectTable.LocalPlayer != null
+                && !Plugin.Condition[ConditionFlag.BetweenAreas] && !Plugin.Condition[ConditionFlag.BetweenAreas51];
+            return AutoRetainerRelogRequest.TryQueue($"{character.Name}@{character.World}", loggedIn, playerReady,
+                () => pluginInterface.GetIpcSubscriber<bool>("AutoRetainer.PluginState.CanAutoLogin").InvokeFunc(),
+                command => Plugin.CommandManager.ProcessCommand(command), out error);
         }
         catch (Exception exception)
         {
             log.Debug(exception, "AutoRetainer relog request failed.");
-            error = "AutoRetainer's relog IPC failed. Check its current state and the plugin log.";
+            error = "Could not request the AutoRetainer character switch. Check AutoRetainer and the plugin log.";
             return false;
         }
     }

@@ -19,6 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/AsheTrader.Core/AsheTrader.Core.csproj" />
     <Using Include="Xunit" />
+    <Compile Include="../../src/AsheTrader/Integrations/AutoRetainerRelogRequest.cs" Link="Production/AutoRetainerRelogRequest.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/TransferCoordinator.cs" Link="Production/TransferCoordinator.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/AutomaticRelays.cs" Link="Production/AutomaticRelays.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/WorkflowModels.cs" Link="Production/WorkflowModels.cs" />

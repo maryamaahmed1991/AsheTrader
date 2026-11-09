@@ -1,11 +1,11 @@
 # Development build validation
 
-Build: 0.3.0.0, 8 November 2026. Target: Dalamud API 15, .NET 10, Windows.
+Build: 0.3.1.0, 8 November 2026. Target: Dalamud API 15, .NET 10, Windows.
 
 ## Completed checks
 
 - `scripts/Build.ps1` completed successfully, including restore, tests, Release compilation, and packaging.
-- 183 automated tests passed, with zero failures and zero skipped tests.
+- 196 automated tests passed, with zero failures and zero skipped tests.
 - The plugin Release build produced zero warnings and zero errors against the local Dalamud development libraries.
 - Tests exercise priority allocation, source/recipient overlap, relay accounting, exact item/HQ quantities, fuel calculations, settings conflicts, authenticated encrypted LAN transport, replay rejection, and reconnect behavior.
 - Discovery tests cover bounded packets, protocol validation, source/nonce/identity filtering, result expiry, broadcast calculation, localhost UDP discovery, and cancellation. A separate smoke test on the local private network interface successfully used directed broadcast to discover a test host, then authenticated and exchanged an encrypted message. This used two endpoints on one PC; physical two-PC discovery and the game's firewall rules still need user validation.
@@ -16,6 +16,8 @@ Build: 0.3.0.0, 8 November 2026. Target: Dalamud API 15, .NET 10, Windows.
 - Automatic-relay tests cover cached free-slot ranking, deterministic ties, opposite-account ownership, unknown counts, zero-slot merge capacity, actual funded-route detection, live full-candidate fallback, all-full recovery, and interrupted candidate checks. Issued plans keep their original relay routes.
 - Multi-item coordinator tests cover separate item/HQ identities and quantities, scan-only runs, shortages followed by later items, item-boundary restart, interrupted pickup/trade recovery, and shared capacity. Earlier-item storage tests cover full receivers and providers, exact protected-stock limits, partial failures, saved/lost results, and uncertain movement across repeated restarts without double accounting.
 - A legacy-journal regression strips the new fields to reproduce the 0.2.2 single-item schema, then recovers a pending pickup by its original command ID without repeating the pickup or delivery.
+- Thirteen relog-routing regression cases execute the production helper. They cover logged-in switching without the title gate, logged-out title readiness, loading state, exact registered identities, missing command handlers, invalid identities, and no implicit retry after an exception. Completion still requires native observation of the requested character, not merely command dispatch.
+- Read-only inspection of the installed AutoRetainer 4.6.2.18 assembly confirmed its title-only `CanAutoLogin`/`Relog` IPC path and its supported in-game `relog` command route. No AutoRetainer command was executed during this inspection. Native relog completion, pause and cancellation still require live validation.
 - The guided UI received a separate code review covering first-run pairing, coordinator/worker roles, quantity wording, scan disclosure, readiness blockers, restored jobs, and recovery controls. Scrolling pages support the existing minimum window size. Actual in-game rendering and input still require user validation.
 - UI review also covered adding/removing/selecting item lines, all-item validation and review, automatic relay visibility, completed-item results, and semantic colors with text labels. Negative states such as incomplete/unverified take precedence over success words.
 - The generated plugin archive contains the plugin, its core assembly, dependency metadata, manifest, license, and third-party notices. It contains no runtime settings, pairing keys, or journals.

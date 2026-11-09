@@ -28,6 +28,8 @@ public sealed class GameWorkflowExecutor
     private bool storageAfterTravel;
     private bool ownsLifestream;
     private bool ownsNavigation;
+    private bool ownsRelog;
+    private long? relogIdleSince;
     private bool restoreArSuppression;
     private long stageStarted;
     private long operationStarted;
@@ -69,7 +71,8 @@ public sealed class GameWorkflowExecutor
         };
         roster = []; observed.Clear(); rosterLoaded = false; moved = 0; retainerIndex = 0; movementIssued = false;
         beforeBags = beforeRetainer = null;
-        ownsLifestream = ownsNavigation = restoreArSuppression = false;
+        ownsLifestream = ownsNavigation = ownsRelog = restoreArSuppression = false;
+        relogIdleSince = null;
         operationStarted = Environment.TickCount64;
         Transition(Stage.Begin, $"Starting {command.Kind}…");
         return true;
@@ -135,6 +138,7 @@ public sealed class GameWorkflowExecutor
         if (!Plugin.Framework.IsFrameworkUnloading && Plugin.Framework.IsInFrameworkUpdateThread)
         {
             StopNavigation();
+            StopOwnedRelog();
             if (ownsLifestream)
             {
                 try { Plugin.PluginInterface.GetIpcSubscriber<object>("Lifestream.Abort").InvokeAction(); }
@@ -145,6 +149,15 @@ public sealed class GameWorkflowExecutor
         RestoreSuppression();
         stage = Stage.Idle;
         operation = null;
+    }
+
+    private void StopOwnedRelog()
+    {
+        if (!ownsRelog) return;
+        ownsRelog = false;
+        // Cancel AR first: its queued callback can otherwise start another Lifestream switch.
+        try { Plugin.PluginInterface.GetIpcSubscriber<object>("AutoRetainer.PluginState.AbortAllTasks").InvokeAction(); }
+        catch (Exception ex) { try { Plugin.Log.Warning(ex, "Could not stop the requested AutoRetainer character switch"); } catch { } }
     }
 
     private void RestoreSuppression()
@@ -185,7 +198,27 @@ public sealed class GameWorkflowExecutor
             {
                 case Stage.Begin: Begin(); break;
                 case Stage.WaitLogin:
-                    if (PlayerReady && Plugin.PlayerState.ContentId == operation.CharacterId && !ArBusy()) Finish(true);
+                    var arBusy = ArBusy();
+                    var lifestreamBusy = LifestreamBusy();
+                    if (PlayerReady && Plugin.PlayerState.ContentId == operation.CharacterId && !arBusy && !lifestreamBusy)
+                    {
+                        // The command's return value only proves dispatch. Completion is this observed CID.
+                        ownsRelog = false;
+                        ownsLifestream = false;
+                        Finish(true);
+                    }
+                    else
+                    {
+                        var atRest = PlayerReady || (!Plugin.ClientState.IsLoggedIn
+                            && Plugin.PluginInterface.GetIpcSubscriber<bool>("AutoRetainer.PluginState.CanAutoLogin").InvokeFunc());
+                        if (!arBusy && !lifestreamBusy && atRest)
+                        {
+                            relogIdleSince ??= now;
+                            if (now - relogIdleSince.Value >= 5000)
+                                throw new InvalidOperationException("AutoRetainer stopped or declined the character switch before the requested character was ready. Close occupied menus, keep multi mode off, and check AutoRetainer/Lifestream logs before resuming.");
+                        }
+                        else relogIdleSince = null;
+                    }
                     break;
                 case Stage.StartWorld: StartWorld(); break;
                 case Stage.WaitWorld:
@@ -290,7 +323,13 @@ public sealed class GameWorkflowExecutor
             if (!ar.TryGetCharacters(out var characters, out var error)) throw new InvalidOperationException(error);
             var character = characters.SingleOrDefault(x => x.ContentId == operation.CharacterId)
                 ?? throw new InvalidOperationException("Requested character is not in this PC's AutoRetainer roster.");
+            if (NativeRetainers.HasNumeric || NativeRetainers.HasRetainerList || Plugin.Condition[ConditionFlag.OccupiedSummoningBell])
+                throw new InvalidOperationException("Close the retainer and item-quantity windows before changing characters.");
+            if (LifestreamBusy()) throw new InvalidOperationException("Wait for the current Lifestream operation to finish before changing characters.");
             if (!ar.TryRelog($"{character.Name}@{character.World}", out error)) throw new InvalidOperationException(error);
+            ownsRelog = true;
+            ownsLifestream = true;
+            relogIdleSince = null;
             Transition(Stage.WaitLogin, $"Logging in {character.Name}@{character.World}…", 1000);
             return;
         }
@@ -476,6 +515,8 @@ public sealed class GameWorkflowExecutor
         if (movementUncertain)
             error += " A retainer movement may already have completed. Inspect and reconcile both inventories before resuming; the pending amount must not be retried automatically.";
         StopNavigation();
+        if (!success) StopOwnedRelog();
+        else ownsRelog = false;
         if (ownsLifestream)
         {
             try { Plugin.PluginInterface.GetIpcSubscriber<object>("Lifestream.Abort").InvokeAction(); }

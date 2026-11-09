@@ -34,7 +34,7 @@ public sealed class MainWindow : Window
     {
         ImGui.TextUnformatted("ASHE'S TRADER");
         ImGui.SameLine();
-        ImGui.TextDisabled("v0.3.0 · two-PC test build");
+        ImGui.TextDisabled("v0.3.1 · two-PC test build");
         ImGui.SameLine();
         ImGui.BeginDisabled(!plugin.Trader.IsRunning && !plugin.Fuel.Active && !plugin.Workflow.Busy);
         if (ImGui.Button("STOP ALL", new Vector2(110, 26))) plugin.QueueAction(plugin.StopAll);
