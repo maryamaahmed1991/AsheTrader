@@ -53,6 +53,7 @@ public sealed partial class WorkflowService : IDisposable
     public WorkflowService(Plugin plugin)
     {
         this.plugin = plugin;
+        executor.Diagnostic = RecordDiagnostic;
         workerFile = new(Path.Combine(Plugin.PluginInterface.ConfigDirectory.FullName, "worker-journal.json"));
         runFile = new(Path.Combine(Plugin.PluginInterface.ConfigDirectory.FullName, "transfer-job.json"));
         try
@@ -328,6 +329,7 @@ public sealed partial class WorkflowService : IDisposable
         activeReplyPeer = caller;
         receiverReadySent = false;
         activeWorker = new WorkerRecord { Command = command, Fingerprint = fingerprint };
+        RecordDiagnostic($"Worker accepted command={command.Id}; job={command.JobId}; kind={command.Kind}/{command.Operation.Kind}; character={character.ContentId}; item={command.Operation.ItemId}; HQ={command.Operation.HighQuality}; quantity={command.Operation.Quantity}");
         workerRecords[command.Id] = activeWorker;
         SaveWorkers(); // Persist intent before any native action.
         try
@@ -394,6 +396,7 @@ public sealed partial class WorkflowService : IDisposable
     private void CompleteWorker(WorkerResponse response)
     {
         if (activeWorker == null) return;
+        RecordDiagnostic($"Worker result command={response.CommandId}; success={response.Success}; ambiguous={response.Ambiguous}; quantity={response.Quantity}; error={response.Error}");
         if (!activeWorker.TradeStarted && activeWorker.Command.Kind is WorkerCommandKind.ReceiveBatch or WorkerCommandKind.SendBatch)
             response.NeverStarted = true;
         activeWorker.Response = response;

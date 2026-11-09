@@ -110,6 +110,7 @@ public sealed class Plugin : IDalamudPlugin
     public void Open() => mainWindow.IsOpen = true;
     public void Record(string message)
     {
+        Workflow.RecordActivity(message);
         Activity.Enqueue($"{DateTime.Now:HH:mm:ss}  {message}");
         while (Activity.Count > 100) Activity.Dequeue();
         Log.Information(message);

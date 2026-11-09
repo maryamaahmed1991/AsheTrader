@@ -23,6 +23,8 @@ public sealed class WorkflowPanel(Plugin plugin)
     private string dependencies = "Dependency state has not been checked on this PC.";
     private string dependencySummary = "Required plugins have not been checked on this PC yet.";
     private string notice = string.Empty;
+    private string? diagnosticsToCopy;
+    private int diagnosticCopyPending;
     private List<(uint Id, string Name)>? itemCatalog;
     private readonly Dictionary<string, string> amountInputs = [];
     private WorkflowService Service => plugin.Workflow;
@@ -36,6 +38,11 @@ public sealed class WorkflowPanel(Plugin plugin)
 
     public void Draw()
     {
+        if (Interlocked.Exchange(ref diagnosticsToCopy, null) is { } report)
+        {
+            ImGui.SetClipboardText(report);
+            notice = "Diagnostics copied for this PC. Include the report when reporting the issue; also copy the other PC's report if it was running the stuck operation.";
+        }
         if (Service.Run is not { Paused: true, TradeOperationId: not null })
         { confirmedOutcome = false; reviewedTradeId = null; }
         ImGui.PushID("AsheWorkflowPanel");
@@ -69,7 +76,7 @@ public sealed class WorkflowPanel(Plugin plugin)
                 case 0: DrawPairing(); break;
                 case 1: DrawJobs(); break;
                 case 2: DrawReview(); break;
-                default: DrawProgress(); DrawActivityLog(); break;
+                default: DrawDiagnosticsControls(); DrawProgress(); DrawActivityLog(); break;
             }
         }
         ImGui.EndChild();
@@ -929,12 +936,30 @@ public sealed class WorkflowPanel(Plugin plugin)
                     : "relay capacity checked; retainers not scanned"));
     }
 
+    private void DrawDiagnosticsControls()
+    {
+        ImGui.Spacing();
+        ImGui.BeginDisabled(Volatile.Read(ref diagnosticCopyPending) != 0);
+        if (ImGui.Button("Copy diagnostics", new Vector2(230, 32)))
+        {
+            Interlocked.Exchange(ref diagnosticCopyPending, 1);
+            plugin.QueueAction(() =>
+            {
+                try { Volatile.Write(ref diagnosticsToCopy, Service.CaptureDiagnosticReport()); }
+                finally { Interlocked.Exchange(ref diagnosticCopyPending, 0); }
+            });
+        }
+        ImGui.EndDisabled();
+        ImGui.TextWrapped("Detailed logging is automatic. If a step gets stuck, copy diagnostics on that PC before pausing or closing the game menu. The report includes recent steps, menu labels and plugin versions; it excludes pairing keys and chat.");
+        ImGui.Separator();
+    }
+
     private void DrawActivityLog()
     {
         ImGui.Spacing();
         if (!ImGui.CollapsingHeader("Recent activity", ImGuiTreeNodeFlags.DefaultOpen)) return;
         if (ImGui.Button("Copy activity for troubleshooting"))
-            ImGui.SetClipboardText($"Ashe's Trader v0.3.2\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
+            ImGui.SetClipboardText($"Ashe's Trader v0.3.3\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
         if (plugin.Activity.Count == 0) ImGui.TextWrapped("Actions and outcomes will appear here when a job runs.");
         foreach (var entry in plugin.Activity.Reverse()) UiTone.Status(entry);
         DrawHints();

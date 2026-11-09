@@ -1,6 +1,14 @@
 # Two-PC testing: start here
 
-Test build: **0.3.2.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Protocol 4 requires both PCs to update together.
+Test build: **0.3.3.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Protocol 4 requires both PCs to update together.
+
+## Reporting a stuck retainer menu
+
+Detailed logging is automatic in 0.3.3. Reproduce the problem once. On the PC whose character is stuck, leave the game menu open and select **Transfers → 4. Activity → Copy diagnostics**. The copy button is at the top of Activity and works while a job is running. Paste the report into your bug report, then pause the workflow. If both PCs were involved, copy each PC separately and label them coordinator/worker. If the job has already timed out, copy before reloading the plugin; the last failure snapshot remains in the trace.
+
+The report includes build/dependency versions, operation IDs and elapsed stages, expected/active retainer identity, addon visibility/readiness, expected menu text and visible menu entries, selection attempts, and inventory-page load state. It excludes pairing keys, configuration dumps, chat and dialogue bodies, but includes character/retainer identifiers and menu labels. The latest 500 bounded entries are retained for this plugin session; detailed entries also appear in Dalamud's log under `[WorkflowTrace]`. Repeated unchanged waits are sampled every five seconds, while menu details are repeated only when their state changes or a report is requested.
+
+This release instruments the reported menu stall; it does not claim the underlying cause has been confirmed. The report distinguishes a retainer-identity gate, menu readiness, text mismatch and a dispatched selection that did not open inventory.
 
 This version uses Allagan Tools caches before attempting discovery logins. Enable Allagan Tools on both PCs. A paused pre-plan discovery resumes with a cache lookup; already-issued transfer plans keep their existing amounts and recovery checkpoints.
 

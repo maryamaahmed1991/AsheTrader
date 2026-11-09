@@ -48,10 +48,13 @@ public sealed class GameWorkflowExecutor
     private string inventoryFingerprint = string.Empty;
     private int moveStableFrames;
     private int shutdown;
+    private long nextDiagnosticAt;
+    private string lastDiagnosticState = string.Empty;
 
     public bool IsBusy => Volatile.Read(ref shutdown) == 0 && stage != Stage.Idle;
     public string Status { get; private set; } = "No workflow operation running.";
     public Guid? ActiveOperationId => operation?.Id;
+    public Action<string>? Diagnostic { private get; set; }
 
     public bool Execute(GameOperation command)
     {
@@ -74,7 +77,10 @@ public sealed class GameWorkflowExecutor
         beforeBags = beforeRetainer = null;
         ownsLifestream = ownsNavigation = ownsRelog = restoreArSuppression = false;
         relogIdleSince = null;
+        inventoryReadFailure = string.Empty;
         operationStarted = Environment.TickCount64;
+        lastDiagnosticState = string.Empty;
+        Trace($"operation begin; kind={command.Kind}; character={command.CharacterId}; name={NativeRetainers.DiagnosticText(command.CharacterName)}; world={NativeRetainers.DiagnosticText(command.World)}; item={command.ItemId}; hq={command.HighQuality}; quantity={command.Quantity}");
         Transition(Stage.Begin, $"Starting {command.Kind}…");
         return true;
     }
@@ -180,6 +186,7 @@ public sealed class GameWorkflowExecutor
         try
         {
             var now = Environment.TickCount64;
+            if (now >= nextDiagnosticAt) CaptureDiagnosticSnapshot("periodic wait", false);
             if (now - operationStarted > 1_200_000) throw new TimeoutException("The operation exceeded twenty minutes.");
             var allowance = stage is Stage.WaitLogin or Stage.WaitWorld or Stage.WaitTerritory or Stage.WaitInn ? 300_000 : 90_000;
             if (now - stageStarted > allowance) throw new TimeoutException(TimeoutDescription());
@@ -270,7 +277,7 @@ public sealed class GameWorkflowExecutor
                 case Stage.SelectRetainer:
                     if (retainerIndex >= roster.Count || (operation.Kind != GameOperationKind.ScanRetainers && moved >= operation.Quantity))
                     { Transition(Stage.CloseList, "Closing the summoning bell…"); break; }
-                    if (NativeRetainers.SelectRetainer(roster[retainerIndex]))
+                    if (NativeRetainers.SelectRetainer(roster[retainerIndex], Trace))
                         Transition(Stage.WaitRetainer, $"Waiting for {roster[retainerIndex].Name}…", 700);
                     break;
                 case Stage.WaitRetainer:
@@ -280,7 +287,7 @@ public sealed class GameWorkflowExecutor
                     break;
                 case Stage.OpenInventory:
                     if (AdvanceOwnedRetainerTalk()) break;
-                    if (NativeRetainers.HasVisibleRetainerInventory || NativeRetainers.SelectMenu(2378, CurrentRetainer.Id))
+                    if (NativeRetainers.HasVisibleRetainerInventory || NativeRetainers.SelectMenu(2378, CurrentRetainer.Id, Trace))
                     {
                         inventoryFingerprint = string.Empty; inventoryStableFrames = 0;
                         Transition(Stage.WaitInventory, "Waiting for all retainer inventory pages…", 1000);
@@ -289,26 +296,26 @@ public sealed class GameWorkflowExecutor
                 case Stage.WaitInventory: WaitInventory(); break;
                 case Stage.Inventory: ProcessInventory(); break;
                 case Stage.WaitNumeric:
-                    if (NativeRetainers.SubmitQuantity(CurrentRetainer.Id, moveQuantity, moveSourceQuantity))
+                    if (NativeRetainers.SubmitQuantity(CurrentRetainer.Id, moveQuantity, moveSourceQuantity, Trace))
                         Transition(Stage.WaitMove, "Verifying retainer item movement…", 500);
                     break;
                 case Stage.WaitMove: VerifyMovement(); break;
                 case Stage.CloseInventory:
-                    if (!NativeRetainers.TryCloseTransferProgress(CurrentRetainer.Id)) { actionAfter = now + 500; break; }
-                    NativeRetainers.HideInventory(CurrentRetainer.Id);
+                    if (!NativeRetainers.TryCloseTransferProgress(CurrentRetainer.Id, Trace)) { actionAfter = now + 500; break; }
+                    NativeRetainers.HideInventory(CurrentRetainer.Id, Trace);
                     Transition(Stage.QuitRetainer, "Dismissing the retainer…", 700);
                     break;
                 case Stage.QuitRetainer:
                     if (NativeRetainers.HasRetainerList) { retainerIndex++; Transition(Stage.SelectRetainer, "Selecting the next retainer…", 500); break; }
                     if (AdvanceOwnedRetainerTalk()) break;
-                    if (NativeRetainers.SelectMenu(2383, CurrentRetainer.Id)) Transition(Stage.WaitListAgain, "Waiting for the retainer list…", 700);
+                    if (NativeRetainers.SelectMenu(2383, CurrentRetainer.Id, Trace)) Transition(Stage.WaitListAgain, "Waiting for the retainer list…", 700);
                     break;
                 case Stage.WaitListAgain:
                     if (NativeRetainers.HasRetainerList) { retainerIndex++; Transition(Stage.SelectRetainer, "Selecting the next retainer…", 500); }
                     else AdvanceOwnedRetainerTalk();
                     break;
                 case Stage.CloseList:
-                    NativeRetainers.CloseList(); Transition(Stage.WaitClosed, "Waiting for the bell to close…", 700); break;
+                    NativeRetainers.CloseList(Trace); Transition(Stage.WaitClosed, "Waiting for the bell to close…", 700); break;
                 case Stage.WaitClosed:
                     if (!NativeRetainers.HasRetainerList && !Plugin.Condition[ConditionFlag.OccupiedSummoningBell]) Finish(true);
                     break;
@@ -316,6 +323,7 @@ public sealed class GameWorkflowExecutor
         }
         catch (Exception ex)
         {
+            Trace($"operation exception; type={ex.GetType().Name}; message={NativeRetainers.DiagnosticText(ex.Message)}");
             Plugin.Log.Warning(ex, "Workflow operation stopped");
             Finish(false, ex.Message);
         }
@@ -423,7 +431,7 @@ public sealed class GameWorkflowExecutor
             Transition(Stage.WaitBellWalk, "Walking to the summoning bell…", 500);
             return;
         }
-        NativeRetainers.InteractBell(bell);
+        NativeRetainers.InteractBell(bell, Trace);
         Transition(Stage.WaitList, "Waiting for the summoning-bell list…", 1000);
     }
 
@@ -435,7 +443,7 @@ public sealed class GameWorkflowExecutor
 
     private bool AdvanceOwnedRetainerTalk()
     {
-        if (!SelectedRetainerIsExpected() || !NativeRetainers.AdvanceRetainerTalk(CurrentRetainer)) return false;
+        if (!SelectedRetainerIsExpected() || !NativeRetainers.AdvanceRetainerTalk(CurrentRetainer, Trace)) return false;
         // A speaker can have multiple lines. Do not send another click every frame,
         // and retain the existing stage deadline if a dialogue does not advance.
         actionAfter = Environment.TickCount64 + 700;
@@ -446,7 +454,7 @@ public sealed class GameWorkflowExecutor
     {
         var expected = retainerIndex < roster.Count ? $" Retainer: {CurrentRetainer.Name}." : string.Empty;
         return $"Timed out while {Status} Stage: {stage}.{expected} {NativeRetainers.DescribeStorageUi()}. "
-            + "Open Activity and use Copy activity when reporting this pause. No item movement was retried automatically.";
+            + "Open Activity and use Copy diagnostics when reporting this pause. No item movement was retried automatically.";
     }
 
     private void WaitInventory()
@@ -454,7 +462,13 @@ public sealed class GameWorkflowExecutor
         if (!NativeRetainers.HasRetainerInventory) return;
         ItemInventory inventory;
         try { inventory = NativeRetainers.ReadRetainer(CurrentRetainer.Id, operation!.ItemId, operation.HighQuality); }
-        catch (InvalidOperationException) { return; }
+        catch (InvalidOperationException exception)
+        {
+            // Repeated reads are polled, but the periodic page/identity snapshot explains the wait.
+            inventoryReadFailure = NativeRetainers.DiagnosticText(exception.Message);
+            return;
+        }
+        inventoryReadFailure = string.Empty;
         var fingerprint = string.Join("|", inventory.AllItems.OrderBy(x => x.Key.ItemId).ThenBy(x => x.Key.HighQuality).Select(x => $"{x.Key}:{x.Value}"));
         inventoryStableFrames = fingerprint == inventoryFingerprint ? inventoryStableFrames + 1 : 0;
         inventoryFingerprint = fingerprint;
@@ -483,7 +497,7 @@ public sealed class GameWorkflowExecutor
         // Set before invoking native code: a callback can reach the game before managed
         // execution reports an error. A false positive requires inspection, not a retry.
         movementIssued = true;
-        var numeric = NativeRetainers.BeginMove(CurrentRetainer.Id, slot, moveQuantity, deposit);
+        var numeric = NativeRetainers.BeginMove(CurrentRetainer.Id, slot, moveQuantity, deposit, Trace);
         Transition(numeric ? Stage.WaitNumeric : Stage.WaitMove, numeric ? "Setting the exact item quantity…" : "Verifying retainer item movement…", 500);
     }
 
@@ -531,6 +545,7 @@ public sealed class GameWorkflowExecutor
     {
         var op = operation;
         if (op == null) return;
+        if (!success) CaptureDiagnosticSnapshot("operation stopping", true);
         if (Volatile.Read(ref shutdown) != 0) { success = false; error = "Workflow unloaded while an operation was pending; reconcile before resuming."; }
         var movementUncertain = !success && (op.Kind is GameOperationKind.Withdraw or GameOperationKind.Deposit)
             && (movementIssued || stage is Stage.WaitNumeric or Stage.WaitMove);
@@ -561,6 +576,7 @@ public sealed class GameWorkflowExecutor
             }
             catch (Exception ex) { result.Success = false; result.RetainerRosterVerified = false; result.Error = $"Could not verify final carried inventory: {ex.Message}"; }
         }
+        Trace($"operation end; success={result.Success}; stage={stage}; elapsedMs={Environment.TickCount64 - operationStarted}; moved={result.MovedQuantity}; uncertain={result.MovementUncertain}; bagQuantity={result.BagQuantity}; bagCapacity={result.BagCapacity}; observedRetainers={observed.Count}/{roster.Count}; error={NativeRetainers.DiagnosticText(result.Error)}");
         stage = Stage.Idle; operation = null;
         Status = result.Success ? $"{op.Kind} completed." : $"{op.Kind} paused: {result.Error}";
         results.Enqueue(result);
@@ -604,7 +620,59 @@ public sealed class GameWorkflowExecutor
     private static uint HomeWorld => Plugin.ObjectTable.LocalPlayer?.HomeWorld.RowId ?? 0;
     private static bool PlayerReady => Plugin.ClientState.IsLoggedIn && Plugin.ObjectTable.LocalPlayer != null && !Plugin.Condition[ConditionFlag.BetweenAreas] && !Plugin.Condition[ConditionFlag.BetweenAreas51];
     private RetainerIdentity CurrentRetainer => roster[retainerIndex];
-    private void Transition(Stage next, string description, int delayMs = 0) { stage = next; Status = description; stageStarted = Environment.TickCount64; actionAfter = stageStarted + delayMs; }
+    private string inventoryReadFailure = string.Empty;
+
+    private void Trace(string message)
+    {
+        try { Diagnostic?.Invoke($"native op={operation?.Id.ToString() ?? "none"} {message}"); }
+        catch { /* Reporting must not interrupt or repeat a native action. */ }
+    }
+
+    public void CaptureDiagnosticSnapshot(string reason) => CaptureDiagnosticSnapshot(reason, true);
+
+    private void CaptureDiagnosticSnapshot(string reason, bool force)
+    {
+        if (!Plugin.Framework.IsInFrameworkUpdateThread || Plugin.Framework.IsFrameworkUnloading)
+        {
+            Trace("snapshot unavailable outside an active framework update");
+            return;
+        }
+        var now = Environment.TickCount64;
+        nextDiagnosticAt = now + 5000;
+        try
+        {
+            Trace($"snapshot reason={NativeRetainers.DiagnosticText(reason)}; stage={stage}; stageElapsedMs={(operation == null ? 0 : now - stageStarted)}; operationElapsedMs={(operation == null ? 0 : now - operationStarted)}; loggedIn={Plugin.ClientState.IsLoggedIn}; currentCharacter={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; currentWorld={CurrentWorld}; homeWorld={HomeWorld}; playerReady={PlayerReady}; moved={moved}; movementIssued={movementIssued}; ownsAR={ownsRelog}; suppressesAR={restoreArSuppression}; ownsLS={ownsLifestream}; ownsNav={ownsNavigation}");
+            var expected = operation != null && retainerIndex >= 0 && retainerIndex < roster.Count ? CurrentRetainer : null;
+            uint? menuRow = stage is Stage.QuitRetainer or Stage.WaitListAgain ? 2383U
+                : stage is Stage.WaitRetainer or Stage.OpenInventory or Stage.WaitInventory ? 2378U : null;
+            var state = NativeRetainers.CaptureDiagnosticState(expected, menuRow,
+                stage is Stage.WaitInventory or Stage.Inventory or Stage.WaitMove or Stage.WaitNumeric);
+            var fingerprint = string.Join("\n", state);
+            if (force || fingerprint != lastDiagnosticState)
+            {
+                foreach (var line in state) Trace(line);
+                lastDiagnosticState = fingerprint;
+            }
+            else Trace("native UI state unchanged since previous snapshot");
+            if (stage is Stage.WaitLogin or Stage.WaitWorld or Stage.WaitTerritory or Stage.WaitInn)
+            {
+                var arState = ar.GetStatus();
+                Trace($"services ARready={arState.Ready}; ARbusy={arState.Busy?.ToString() ?? "unknown"}; ARmulti={arState.MultiModeEnabled?.ToString() ?? "unknown"}; LifestreamBusy={LifestreamBusy()}");
+            }
+            if (stage == Stage.WaitInventory)
+                Trace($"inventory stability polls={inventoryStableFrames}; lastReadError={inventoryReadFailure}");
+        }
+        catch (Exception exception) { Trace($"snapshot failed; type={exception.GetType().Name}; message={NativeRetainers.DiagnosticText(exception.Message)}"); }
+    }
+
+    private void Transition(Stage next, string description, int delayMs = 0)
+    {
+        var now = Environment.TickCount64;
+        Trace($"stage {stage} -> {next}; previousStageMs={(stage == Stage.Idle ? 0 : now - stageStarted)}; delayMs={delayMs}; status={NativeRetainers.DiagnosticText(description)}");
+        stage = next; Status = description; stageStarted = now; actionAfter = now + delayMs;
+        // Capture on the next Update after the transition, then at most every five seconds.
+        nextDiagnosticAt = now;
+    }
     private static TravelLocation? Copy(TravelLocation? value) => value == null ? null : new() { WorldId = value.WorldId, TerritoryId = value.TerritoryId, AetheryteId = value.AetheryteId, X = value.X, Y = value.Y, Z = value.Z };
     private static TravelLocation ValidateLocation(TravelLocation? location)
     {

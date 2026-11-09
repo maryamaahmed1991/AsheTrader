@@ -1,12 +1,13 @@
 # Development build validation
 
-Build: 0.3.2.0, 8 November 2026. Target: Dalamud API 15, .NET 10, Windows.
+Build: 0.3.3.0, 8 November 2026. Target: Dalamud API 15, .NET 10, Windows.
 
 ## Completed checks
 
 - `scripts/Build.ps1` completed successfully, including restore, tests, Release compilation, and packaging.
-- 229 automated tests passed, with zero failures and zero skipped tests.
+- 233 automated tests passed, with zero failures and zero skipped tests.
 - The plugin Release build produced zero warnings and zero errors against the local Dalamud development libraries.
+- Four diagnostic-buffer tests cover bounded retention/line length, immutable exports, control-character escaping and concurrent writes/exports. Native instrumentation is read-only except for recording existing action attempts; callback signatures and selection behavior are unchanged. Reports capture on the framework thread and copy on the UI thread. Logging/snapshot failures cannot fail or repeat native gameplay actions. No live reproduction of the reported menu stall was performed; the next report is required to determine which gate or callback is blocking.
 - Tests exercise priority allocation, source/recipient overlap, relay accounting, exact item/HQ quantities, fuel calculations, settings conflicts, authenticated encrypted LAN transport, replay rejection, and reconnect behavior.
 - Discovery tests cover bounded packets, protocol validation, source/nonce/identity filtering, result expiry, broadcast calculation, localhost UDP discovery, and cancellation. A separate smoke test on the local private network interface successfully used directed broadcast to discover a test host, then authenticated and exchanged an encrypted message. This used two endpoints on one PC; physical two-PC discovery and the game's firewall rules still need user validation.
 - A reconnect regression confirms an old accepted socket generation cannot send into or consume messages from its replacement. The service accepts the selected/remembered identity before exchanging rosters.
