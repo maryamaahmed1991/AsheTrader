@@ -1,6 +1,6 @@
 # Ashe's Trader: transfer-job requirements
 
-Status: agreed product requirements, implemented in the 0.2.1.0 development build for staged two-PC testing. Automated tests cover planning, accounting, LAN discovery/transport, and the transfer coordinator. No in-game trades, purchases, or retainer actions have been validated by this project yet.
+Status: agreed product requirements, implemented in the 0.2.2.0 development build for staged two-PC testing. Automated tests cover planning, accounting, LAN discovery/transport, and the transfer coordinator. No in-game trades, purchases, or retainer actions have been validated by this project yet.
 
 ## Confirmed requirements
 
@@ -50,7 +50,7 @@ The coordinator schedules one exclusive gameplay operation per client: character
 For each transfer leg:
 
 1. Select the source and recipient (or relay) and log them in through their local supported setup.
-2. Return a source to its home world and withdraw the planned items from its retainers when necessary.
+2. Trade a provider's carried stock first. When it is empty, return the provider to its home world and withdraw a load bounded by bag capacity and the remaining allocation. Repeat these pickup/trade trips as needed.
 3. Travel both characters to the meeting point and verify identity and readiness.
 4. Check capacity for the next batch, including mergeable stacks and empty slots.
 5. Agree on the exact batch, execute the trade, and reconcile both clients' observations.

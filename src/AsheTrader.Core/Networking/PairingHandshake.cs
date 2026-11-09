@@ -14,7 +14,8 @@ internal static class PairingHandshake
 {
     private const int HelloLength = 61;
     private static ReadOnlySpan<byte> Magic => "ASHETRD1"u8;
-    internal const int ProtocolVersion = 1;
+    // Version 2 requires support for the bidirectional roster-request workflow message.
+    internal const int ProtocolVersion = 2;
 
     internal static async Task<SessionSecrets> AuthenticateAsync(NetworkStream stream, byte[] pairingKey, Guid localPeerId, bool host, CancellationToken cancellationToken)
     {
@@ -82,7 +83,11 @@ internal static class PairingHandshake
 
     private static Guid ValidateHello(byte[] hello, bool expectHost, Guid localPeerId)
     {
-        if (!hello.AsSpan(0, 8).SequenceEqual(Magic) || BinaryPrimitives.ReadInt32BigEndian(hello.AsSpan(8)) != ProtocolVersion || hello[12] != (expectHost ? 1 : 0))
+        if (!hello.AsSpan(0, 8).SequenceEqual(Magic))
+            throw new InvalidDataException("Unsupported Ashe's Trader pairing protocol or role.");
+        if (BinaryPrimitives.ReadInt32BigEndian(hello.AsSpan(8)) != ProtocolVersion)
+            throw new InvalidDataException("Update Ashe's Trader to the same version on both PCs before pairing.");
+        if (hello[12] != (expectHost ? 1 : 0))
             throw new InvalidDataException("Unsupported Ashe's Trader pairing protocol or role.");
         var id = new Guid(hello.AsSpan(13, 16));
         if (id == Guid.Empty || id == localPeerId) throw new InvalidDataException("Peer identities must be distinct and nonempty.");

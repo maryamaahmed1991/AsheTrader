@@ -98,8 +98,11 @@ public sealed class CoordinatorRun
     public int LegIndex { get; set; }
     public uint DesiredQuantity { get; set; }
     public uint SenderBagQuantity { get; set; }
+    public uint SenderBagCapacity { get; set; }
     public uint SenderStackSize { get; set; }
     public uint ReceiverCapacity { get; set; }
+    // Verified pickups are progress information only; only a confirmed trade counts as delivery.
+    public Dictionary<ulong, ulong> Withdrawn { get; set; } = [];
     public Dictionary<ulong, ulong> Deposited { get; set; } = [];
     public Guid? TradeOperationId { get; set; }
     public List<PendingCommand> Pending { get; set; } = [];

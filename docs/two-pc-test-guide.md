@@ -1,64 +1,86 @@
-# Two-PC validation
+# Two-PC testing: start here
 
-Test build: 0.2.1.0. The native game adapters have not yet been exercised in-game. Stop at the first unexpected action or error and send the activity text and relevant `/xllog` entries from both PCs. Do not start a large unattended job until the stages below pass.
+Test build: **0.2.2.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals.
 
-## 1. Load and pair
+The automated tests simulate game operations; native travel, retainer menus and trades still need this live test. Stop at the first unexpected action or error using **Pause workflow** or `/ashetrader stop`.
 
-Install the same ZIP on both PCs. Enable AutoRetainer, Lifestream, and vnavmesh, with each account's characters configured locally. Allagan Tools is recommended for cached inventory hints.
+## First session: one provider, one recipient, ten tanks
 
-On the coordinator PC, open `/ashetrader` → Transfer jobs → Pair PCs. Generate a pairing key and press **Host as coordinator**; the network adapter is selected automatically. On the worker PC, enter the same key once, press **Find nearby coordinators**, then **Connect** beside the coordinator's label. Enable paired workflow control on the worker. Both PCs retain the key for subsequent sessions.
+### 1. Prepare both PCs
 
-Verify the correct coordinator appears without entering an IP address. Stop hosting and check that it disappears after about eight seconds. Start hosting again and verify it reappears. Discovery alone must not log out, move, or trade on either PC. If the PC has multiple networks, select the home-network adapter from the dropdown.
+- Enable AutoRetainer, Lifestream and vnavmesh. AutoRetainer must know the characters belonging to that PC's account. Allagan Tools is optional.
+- Turn AutoRetainer **multi mode off**, let its tasks finish, and leave Lifestream idle. Close any trade, retainer or confirmation windows. Keep AutoRetainer itself enabled for character switching.
+- Choose one provider on the controlling PC and one recipient on the other account. Put **3 Ceruleum Tanks in the provider's bags and 17 on one of its retainers**. Leave room for ten tanks in the recipient's bags. Note its starting tank quantity.
+- Both characters must be able to visit the chosen meeting world and access their own retainers on their home worlds. Default storage access uses Lifestream's inn shortcut.
 
-Discovery needs local UDP traffic on port 45875; actual communication uses the configured TCP port (45874 by default). If Windows prompts, allow the game/plugin listener on the private home network. Guest-network isolation or separate subnets can block broadcasts. The original address and port fields remain under **Advanced / manual connection** as a fallback. No router port forwarding is required.
+### 2. Connect the PCs
 
-Refresh the rosters. Verify each character appears on the intended PC, each PC has a distinct peer identity, and the connection reports the expected partner. No character should log out, move, or trade from pairing alone.
+Open `/ashetrader` → **Transfers** → **1. Connect PCs**.
 
-## 2. Scan one character per account
+On the controlling PC, choose **This PC controls transfers**, then **Host for my other PC**. A pairing key is generated if needed. Copy it to the other PC once.
 
-Create a Ceruleum Tank job with one source and one recipient. Read the Allagan cache hints, then run **Scan inventories only**.
+On the other PC, choose **This PC receives instructions**, enter the shared key, click **Find my coordinator**, then **Connect to this PC** beside the expected PC name. Enable **Allow the coordinator to run jobs on this PC**. Previously paired PCs can keep their saved key.
 
-Expected: the required characters are logged in, each returns to its home world if needed, travels to an inn/bell, visits every retainer, and closes the retainer UI. The progress view reports verified bag and retainer quantities. No items move. Compare the numbers to the game.
+Click **Refresh characters on both PCs**. Verify each character belongs to the intended PC. Use **Check required plugins on this PC** on each PC. The worker should show that it is ready for the coordinator; do not create a duplicate job there.
 
-If this stops, report the exact stage, local character, home/current world, whether an inn was reached, the visible addon/menu, and the log text. Strict callback validation may need adjustment based on the observed client UI; repeated clicking is not a fix.
+Pairing and discovery must not move, log out or trade on either PC. If no PC appears, verify both are on the same home network. Private-network firewall access must allow discovery UDP 45875 and the configured TCP port (45874 by default). A guest network or separate subnet can prevent discovery. Manual connection remains under Advanced; router port forwarding is unnecessary.
 
-## 3. Direct small transfer
+### 3. Set up the small transfer
 
-Stand at a simple outdoor rendezvous near a main aetheryte and capture it. Use one source with 3–10 tanks in its bags and a recipient with free space. Set a small additional-delivery quantity. Start the job.
+On the controlling PC, open **2. Set up** and create a job:
 
-Expected: discovery completes, both characters meet, the receiver arms for the exact source/item/quantity, one trade occurs, both observed changes agree, and the job reports the exact delivered total.
+- Item: **Ceruleum Tank**.
+- Provider: only the prepared character with 3 carried and 17 stored tanks.
+- Recipient: only the chosen character on the other PC.
+- Quantity: **10 additional items**, not a final stock target or unlimited remainder.
+- Meeting point: capture an accessible **outdoor position near a main aetheryte**. Set the matching main aetheryte for that territory. Record this before scanning, because scanning travels to storage.
 
-## 4. Source retainer pickup
+Leave the default inn storage route for this first test. No relay is needed when the provider and recipient are on different PCs.
 
-Repeat with the source's requested tanks stored only on a retainer. Expected: the source withdraws a bounded load, closes storage, returns to the rendezvous, and delivers the requested amount. Check the retainer decrease and final recipient increase.
+### 4. Scan first
 
-## 5. Multiple batches and overflow
+Open **3. Review & run**, resolve the listed setup issues, then choose **Scan inventories only**.
 
-Use enough tanks to require several trade batches. Give the recipient limited bag space and enough permitted retainer capacity. Expected: it stops before an unfit batch, returns home, deposits received job items, returns to the rendezvous, and resumes. Other item types remain untouched. Confirm the delivered counter stays constant during deposits and increases only after new trades.
+Expected: the plugin logs into the selected characters, returns them to their home worlds if needed, travels to storage, and visits every retainer. It moves no items. The activity/progress view should show **3 carried + 17 stored** for the provider and verified recipient counts. Compare those counts with the game before continuing.
 
-Do not begin with the receiver entirely full of unrelated stock: there must first be space to receive job items that can subsequently be deposited.
+If scanning stops, report the character, home/current world, visible menu, and exact activity/log message. Do not repeatedly resume an unexpected native UI state.
 
-## 6. Priority and relay
+### 5. Run and check the refill
 
-Add two recipients with small finite targets and verify the first is fulfilled before the second. Then test a source and destination on the same account with a designated relay on the other account. Expected: source → relay → final recipient, with the account changing characters between the legs. Relay cargo must not count as final delivery or become a new source allocation.
+Choose **Start transfer** from **3. Review & run**. A fresh inventory scan at the beginning is expected; the earlier scan is a validation step, not permission to reuse potentially stale counts.
 
-## 7. Pause and disconnect
+Expected sequence:
 
-Pause between completed trades, then resume. Next disconnect the LAN link between completed trades, reconnect, and resume. Confirm no completed delivery repeats.
+1. The characters meet and trade the **3 carried tanks**.
+2. The provider returns home to storage and withdraws **7 tanks** from its retainer.
+3. The provider returns to the meeting point and trades the remaining **7**.
+4. The job finishes with **10 delivered**. The recipient has its original quantity plus 10; the provider has 0 in bags and **10 still on its retainer**.
 
-Only after those pass, test interruption while a trade is pending. The expected result is a pause for reconciliation if either durable outcome is missing. Confirmed results should recover without another trade; uncertain results require inspection of both original characters. Never use a reconciliation button merely to make an error disappear.
+Pickup progress is separate from delivery progress: withdrawing seven must not itself increase the delivered total. The provider should not withdraw all 17. This test proves one pickup between trades and the requested amount limit.
 
-For interruption during a retainer deposit, a durable result should recover without repeating the deposit. An uncertain last movement must stay paused. Report it and inspect storage; use a new, freshly scanned job for remaining delivery quantities after ending the paused job. Do not repeatedly resume an uncertain storage operation.
+## After the first session passes
 
-## 8. Fuel purchase confirmation
+Run these as separate, supervised tests. Each one checks a different behavior:
 
-At a recorded/imported house's workshop, open the Ceruleum Tank shop. Configure a small restock total and start purchases. Verify the expected quantity and FC credit decrease. House travel, workshop entry, and vendor opening are separate from this shop purchasing action in this build.
+1. **Repeated provider refills:** use a provider with more retainer stock than its available carrying capacity, plus a recipient with sufficient space. Expect multiple bounded home/bell → pickup → meeting → trade trips. Several trades from one carried load should not cause unnecessary storage trips.
+2. **Recipient overflow:** give the recipient limited bag space but enough permitted retainer capacity. It must first have space to receive job items. Expect home-world deposits of received items, return to the meeting point, then further trades. Depositing must not reduce the delivered count. Other item types remain untouched.
+3. **Multiple providers and priority:** add a second provider and two recipients with small finite quantities. Verify the first recipient is fulfilled before the second and each provider's retained stock agrees with the amounts moved.
+4. **Same-account route:** designate a relay on the other account. Expect provider → relay → final recipient. Relay holdings must not count as final delivery or become new source stock.
+5. **Pause and reconnect:** pause between completed trades, then resume. Repeat with a LAN disconnect between trades. Completed deliveries must not repeat.
+
+Only after those pass, test interruption while a trade or storage movement is pending. Missing or conflicting evidence should pause for reconciliation. Saved completed results should recover without repeating the movement. Never confirm a reconciliation choice merely to dismiss an error.
+
+For an uncertain retainer pickup or deposit, inspect the original character's bags and retainers. Preserve the journals and report the stop. Do not repeatedly resume an uncertain storage movement. When the plugin permits ending the paused job, create a new, freshly scanned job for the remaining quantities.
 
 ## What to send back
 
-- Stage number and expected versus observed behavior.
-- Activity messages and relevant `/xllog` lines from both PCs.
-- Dalamud and dependency versions if they differ from this development environment.
-- For a native UI stop, the visible window and the exact logged addon/parent IDs when provided.
+- Both PCs' plugin versions and which PC controls the job.
+- The step above, expected result, and actual result.
+- Activity text and relevant `/xllog` lines from both PCs; for a menu failure, include the visible window and any logged addon/parent IDs.
+- Provider bag/retainer counts and recipient counts before and after the failed step.
 
-Retain both journal files. If sharing settings, remove the pairing key. Do not delete journals to bypass an ambiguous transfer result.
+Keep `transfer-job.json` and `worker-journal.json` from both PCs. If sharing `settings.json`, remove the pairing key. Do not delete journals to bypass an ambiguous outcome.
+
+## Fuel purchasing is a separate test
+
+At a configured house's workshop, open the Ceruleum Tank shop and test a small restock amount. Check the inventory increase and FC-credit decrease. This build still requires the correct shop to be open; house travel, workshop entry and vendor opening are separate from the purchasing action.

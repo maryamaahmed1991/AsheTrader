@@ -55,19 +55,20 @@ public sealed partial class WorkflowService
         }
         else
         {
-            var deposit = Run.Pending.SingleOrDefault(x => x.Command.Kind == WorkerCommandKind.Game
-                && x.Command.Operation.Kind == GameOperationKind.Deposit);
-            if (deposit != null && deposit.Response?.NeverStarted != true
-                && (deposit.Response?.Observation == null || deposit.Response.Ambiguous))
+            var storage = Run.Pending.SingleOrDefault(x => x.Command.Kind == WorkerCommandKind.Game
+                && x.Command.Operation.Kind is GameOperationKind.Deposit or GameOperationKind.Withdraw);
+            if (storage != null && storage.Response?.NeverStarted != true
+                && (storage.Response?.Observation == null || storage.Response.Ambiguous))
             {
-                // The worker may have stored items before the coordinator saved the result.
-                // Recover that exact command; losing its result could spend the same deposit allowance twice.
-                deposit.Response = null;
-                Run.Step = CoordinatorStep.Deposit;
+                // A pickup/deposit may have finished before its result reached this PC.
+                // Recover the original command ID rather than moving another load blindly.
+                storage.Response = null;
+                Run.Step = storage.Command.Operation.Kind == GameOperationKind.Deposit
+                    ? CoordinatorStep.Deposit : CoordinatorStep.Withdraw;
             }
             else
             {
-                if (deposit != null) AccountDeposit(deposit, deposit.Command.Operation.CharacterId);
+                if (storage != null) AccountStorageMovement(storage, storage.Command.Operation.CharacterId);
                 Run.Pending.Clear();
                 Run.Step = Run.Journal == null ? CoordinatorStep.DiscoverLogin : CoordinatorStep.SelectLeg;
             }
@@ -178,9 +179,15 @@ public sealed partial class WorkflowService
         }
         var pending = Run.Pending.Single();
         if (pending.Response == null) return false;
-        if (kind == GameOperationKind.Deposit) AccountDeposit(pending, characterId);
-        if (kind == GameOperationKind.Deposit && pending.Response.Ambiguous)
-            throw new InvalidOperationException("A retainer deposit has an uncertain outcome. Inspect storage before ending this job and creating a freshly scanned job for the remaining quantity; the deposit will not be retried.");
+        if (kind is GameOperationKind.Deposit or GameOperationKind.Withdraw)
+        {
+            AccountStorageMovement(pending, characterId);
+            if (pending.Response.Ambiguous)
+            {
+                var action = kind == GameOperationKind.Deposit ? "deposit" : "pickup";
+                throw new InvalidOperationException($"A retainer {action} has an uncertain outcome. Inspect bags and retainers before ending this job and creating a freshly scanned job for the remaining quantity; the {action} will not be retried.");
+            }
+        }
         if (!pending.Response.Success) throw new InvalidOperationException(pending.Response.Error);
         var result = pending.Response.Observation ?? throw new InvalidDataException("Worker omitted its inventory observation.");
         if (result.CharacterId != characterId) throw new InvalidDataException("Worker observed a different character.");
@@ -190,13 +197,15 @@ public sealed partial class WorkflowService
         return true;
     }
 
-    private void AccountDeposit(PendingCommand pending, ulong characterId)
+    private void AccountStorageMovement(PendingCommand pending, ulong characterId)
     {
-        if (!pending.InventoryAdjustmentApplied && pending.Response?.Observation is { } depositResult)
+        if (!pending.InventoryAdjustmentApplied && pending.Response?.Observation is { } result)
         {
-            if (depositResult.CharacterId != characterId || depositResult.MovedQuantity > pending.Command.Operation.Quantity)
-                throw new InvalidDataException("Invalid deposit observation.");
-            Run!.Deposited[characterId] = checked(Run.Deposited.GetValueOrDefault(characterId) + depositResult.MovedQuantity);
+            var pickup = pending.Command.Operation.Kind == GameOperationKind.Withdraw;
+            if (result.CharacterId != characterId || result.MovedQuantity > pending.Command.Operation.Quantity)
+                throw new InvalidDataException(pickup ? "Invalid provider pickup observation." : "Invalid deposit observation.");
+            var quantities = pickup ? Run!.Withdrawn : Run!.Deposited;
+            quantities[characterId] = checked(quantities.GetValueOrDefault(characterId) + result.MovedQuantity);
             pending.InventoryAdjustmentApplied = true;
             SaveRun();
         }
@@ -210,7 +219,7 @@ public sealed partial class WorkflowService
             CoordinatorStep.DiscoverLogin => $"Discovery {Run.DiscoveryIndex + 1}/{Run.DiscoveryOrder.Count}: switching character…",
             CoordinatorStep.DiscoverScan => "Inspecting carried inventory and every retainer…",
             CoordinatorStep.Plan => "Allocating source stock in recipient priority order…",
-            CoordinatorStep.Withdraw => "Collecting the next load from source retainers…",
+            CoordinatorStep.Withdraw => $"Collecting up to {Math.Min(Run.DesiredQuantity, Run.SenderBagCapacity):N0} items from provider retainers; trading resumes after this load…",
             CoordinatorStep.Deposit => "Receiver is returning home and depositing job items into retainers…",
             CoordinatorStep.TravelSender or CoordinatorStep.TravelReceiver => "Bringing both characters to the meeting point…",
             CoordinatorStep.AwaitTrade => "Waiting for both clients to verify the agreed trade…",
@@ -296,18 +305,35 @@ public sealed partial class WorkflowService
                 Perform(leg.SenderId, GameOperationKind.Inspect, CoordinatorStep.InspectReceiver, result =>
                 {
                     run.SenderBagQuantity = result.BagQuantity;
+                    run.SenderBagCapacity = result.BagCapacity;
                     run.SenderStackSize = result.StackSize;
                     if (result.StackSize == 0) throw new InvalidDataException("Invalid item stack size.");
                 });
-                if (run.Step == CoordinatorStep.InspectReceiver && run.SenderBagQuantity == 0) SetStep(CoordinatorStep.Withdraw);
+                if (run.Step == CoordinatorStep.InspectReceiver && run.SenderBagQuantity == 0)
+                {
+                    // Relay cargo must already be carried. Its unrelated retainer stock is not a source.
+                    if (run.LegIndex != 0)
+                        throw new InvalidOperationException("The relay is missing its carried job items. Restore that cargo to its bags before resuming; unrelated retainer stock will not be collected.");
+                    if (run.SenderBagCapacity == 0)
+                        throw new InvalidOperationException("The provider has no room to collect its next load. Free bag space, then resume; confirmed deliveries are saved.");
+                    SetStep(CoordinatorStep.Withdraw);
+                }
                 break;
             case CoordinatorStep.Withdraw:
+                // Load a bagful, then trade it across as many batches as necessary before returning home.
+                // Do not withdraw more than the selected recipient still needs from this provider.
+                var pickupQuantity = (uint)Math.Min(ledger.RemainingForLeg(run.AllocationId, run.LegIndex),
+                    Math.Min(run.DesiredQuantity, run.SenderBagCapacity));
+                if (run.Pending.Count == 0 && (run.LegIndex != 0 || pickupQuantity == 0))
+                    throw new InvalidOperationException("No verified provider pickup allowance remains. Resume to inspect bags and the remaining assignment again.");
                 Perform(leg.SenderId, GameOperationKind.Withdraw, CoordinatorStep.InspectReceiver, result =>
                 {
                     if (result.BagQuantity == 0 || result.MovedQuantity == 0)
-                        throw new InvalidOperationException("No source items could be withdrawn. Source stock changed or the character has no room.");
-                    run.SenderBagQuantity = result.BagQuantity; run.SenderStackSize = result.StackSize;
-                }, run.DesiredQuantity);
+                        throw new InvalidOperationException("No provider items could be collected. Check its retainer stock and bag space, then resume.");
+                    if (result.StackSize == 0) throw new InvalidDataException("Invalid item stack size.");
+                    run.SenderBagQuantity = result.BagQuantity; run.SenderBagCapacity = result.BagCapacity;
+                    run.SenderStackSize = result.StackSize;
+                }, pickupQuantity);
                 break;
             case CoordinatorStep.InspectReceiver:
                 Perform(leg.ReceiverId, GameOperationKind.Inspect, CoordinatorStep.TravelSender, result =>

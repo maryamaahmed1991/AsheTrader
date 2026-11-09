@@ -31,6 +31,7 @@ public sealed partial class WorkflowService : IDisposable
     private string error = "";
     public CoordinatorRun? Run { get; private set; }
     public PeerRoster? RemoteRoster { get; private set; }
+    public string RosterStatus { get; private set; } = "Import characters from AutoRetainer to get started.";
     public bool Connected => peer.IsConnected;
     public bool PairingEnabled => peer.IsEnabled;
     public bool IsHost => host;
@@ -38,7 +39,10 @@ public sealed partial class WorkflowService : IDisposable
     public bool RunningJob => Run is { Paused: false, Step: not CoordinatorStep.Finished };
     public bool ExpectsLogout => activeWorker?.Command.Kind == WorkerCommandKind.Game && activeWorker.Command.Operation.Kind != GameOperationKind.Inspect;
     public string ConnectionStatus => peer.Status;
-    public string Status => error.Length > 0 ? error : Run?.Status ?? executor.Status;
+    public string Status => error.Length > 0 ? error
+        : Run != null && (host || Run.Step != CoordinatorStep.Finished) ? Run.Status
+        : activeWorker != null && activeWorker.Command.Kind != WorkerCommandKind.Game ? plugin.Trader.Status
+        : executor.Status;
     private WorkflowSettings Settings => plugin.Config.Workflow;
     private bool HasAcceptedConnection => peer.SessionIdentity is { } session && session.ConnectionId == connectionId
         && session.RemotePeerId == acceptedPeerId
@@ -69,6 +73,11 @@ public sealed partial class WorkflowService : IDisposable
         RequireIdle();
         if (PairingEnabled) throw new InvalidOperationException("Disconnect the current LAN session before starting another host.");
         var address = SelectHostAddress();
+        if (string.IsNullOrWhiteSpace(Settings.PairingKey))
+        {
+            Settings.PairingKey = NewPairingKey();
+            plugin.Save();
+        }
         scanner.Stop();
         peer.StartHost(address, Settings.Port, Settings.PairingKey, Settings.PeerId);
         host = true;
@@ -129,12 +138,20 @@ public sealed partial class WorkflowService : IDisposable
     public void RefreshRosters()
     {
         ImportLocalCharacters();
-        if (HasAcceptedConnection) Send("roster", LocalRoster());
+        if (HasAcceptedConnection)
+        {
+            Send("roster", LocalRoster());
+            Send("roster-request", new { });
+        }
     }
 
     private void ImportLocalCharacters()
     {
-        if (!plugin.AutoRetainer.TryGetCharacters(out var imported, out _)) return;
+        if (!plugin.AutoRetainer.TryGetCharacters(out var imported, out var importError))
+        {
+            RosterStatus = $"Could not refresh this PC's characters: {importError} Enable AutoRetainer and try again. Previously configured characters are retained.";
+            return;
+        }
         foreach (var row in imported)
         {
             var character = plugin.Config.Characters.FirstOrDefault(x => x.ContentId == row.ContentId);
@@ -142,6 +159,9 @@ public sealed partial class WorkflowService : IDisposable
             character.Name = row.Name; character.World = row.World; character.ServiceAccount = row.ServiceAccount;
         }
         plugin.Save();
+        RosterStatus = imported.Count == 0
+            ? "AutoRetainer returned no characters. Configure this account's characters in AutoRetainer, then refresh."
+            : $"Refreshed {imported.Count} characters from this PC's AutoRetainer at {DateTime.Now:T}.";
     }
 
     public PeerRoster LocalRoster() => new()
@@ -221,6 +241,10 @@ public sealed partial class WorkflowService : IDisposable
             case "heartbeat": break;
             case "cache-request": Send("cache-response", ReadHints(Decode<InventoryHintRequest>(message.Payload))); break;
             case "cache-response": RemoteInventoryHints = Decode<InventoryHintResponse>(message.Payload); break;
+            case "roster-request":
+                ImportLocalCharacters();
+                Send("roster", LocalRoster());
+                break;
             case "roster":
                 var roster = Decode<PeerRoster>(message.Payload);
                 if (roster.PeerId != acceptedPeerId || roster.PeerId == Settings.PeerId) throw new InvalidDataException("Peer identity mismatch.");

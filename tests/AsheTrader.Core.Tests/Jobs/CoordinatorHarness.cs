@@ -37,6 +37,7 @@ public sealed partial class WorkflowService
     public IReadOnlyDictionary<ulong, SimulatedCharacter> Characters => characters;
     public Func<WorkerCommand, GameOperationResult, GameOperationResult>? TransformResult { get; set; }
     public uint? DepositMovementLimit { get; set; }
+    public uint? WithdrawMovementLimit { get; set; }
     public bool RejectNextSenderBeforeStart { get; set; }
     // The worker still persists the result. A subsequent query can recover a lost response.
     public Predicate<WorkerCommand>? SuppressInitialResponse { get; set; }
@@ -147,6 +148,7 @@ public sealed partial class WorkflowService
                 case GameOperationKind.Withdraw:
                     character.Location = "home";
                     moved = Math.Min(operation.Quantity, Math.Min(character.RetainerTotal, character.BagSpace));
+                    if (WithdrawMovementLimit is { } pickupLimit) moved = Math.Min(moved, pickupLimit);
                     RemoveStored(character, moved); character.Bags += moved;
                     break;
                 case GameOperationKind.Deposit:

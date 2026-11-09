@@ -13,11 +13,14 @@ namespace AsheTrader.Windows;
 public sealed class WorkflowPanel(Plugin plugin)
 {
     private Guid selectedJob;
+    private int page;
+    private bool? coordinatorRole;
     private string itemSearch = string.Empty;
     private bool revealKey;
     private bool confirmedOutcome;
     private Guid? reviewedTradeId;
     private string dependencies = "Dependency state has not been checked on this PC.";
+    private string dependencySummary = "Required plugins have not been checked on this PC yet.";
     private string notice = string.Empty;
     private List<(uint Id, string Name)>? itemCatalog;
     private readonly Dictionary<string, string> amountInputs = [];
@@ -26,6 +29,9 @@ public sealed class WorkflowPanel(Plugin plugin)
     private bool HasUnfinishedJob => Service.Run is { Step: not CoordinatorStep.Finished };
     private bool LocalActionRunning => Service.Busy || plugin.Trader.IsRunning || plugin.Fuel.Active;
     private bool EditingLocked => LocalActionRunning || HasUnfinishedJob;
+    private bool ReadyConnection => Service.Connected && Service.RemoteRoster != null;
+    private bool CoordinatorRole => HasUnfinishedJob || (Service.PairingEnabled ? Service.IsHost : coordinatorRole ?? !Settings.AllowRemoteControl);
+    private SavedTransferJob? SelectedJob => Settings.Jobs.FirstOrDefault(x => x.Definition.Id == selectedJob) ?? Settings.Jobs.FirstOrDefault();
 
     public void Draw()
     {
@@ -33,19 +39,39 @@ public sealed class WorkflowPanel(Plugin plugin)
         { confirmedOutcome = false; reviewedTradeId = null; }
         ImGui.PushID("AsheWorkflowPanel");
         ImGui.Spacing();
-        ImGui.TextWrapped(Service.ConnectionStatus);
-        ImGui.TextWrapped(Service.Status);
-        if (notice.Length > 0) ImGui.TextWrapped(notice);
+        ImGui.TextWrapped(ReadyConnection
+            ? $"Connected to {Service.RemoteRoster?.Name ?? "paired PC"} · {(Service.IsHost ? "This PC controls transfers" : Settings.AllowRemoteControl ? "Ready for coordinator" : "Enable control below to receive jobs")}"
+            : Service.Connected ? "Authenticating the paired PC and loading its characters..." : Service.PairingEnabled ? "Waiting for the other PC to connect..." : "Connect your two PCs to get started.");
+        if (LocalActionRunning || HasUnfinishedJob) ImGui.TextWrapped(Service.Status);
         DrawRunControls();
         ImGui.Separator();
-        if (ImGui.BeginTabBar("WorkflowTabs"))
+        string[] steps = ["1. Connect PCs", "2. Set up", "3. Review & run", "4. Activity"];
+        var width = Math.Max(90, (ImGui.GetContentRegionAvail().X - 24) / 4);
+        for (var index = 0; index < steps.Length; index++)
         {
-            if (ImGui.BeginTabItem("Pair PCs")) { DrawPairing(); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("Job setup")) { DrawJobs(); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("Retainer storage")) { DrawStorage(); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("Progress")) { DrawProgress(); ImGui.EndTabItem(); }
-            ImGui.EndTabBar();
+            if (index > 0) ImGui.SameLine();
+            ImGui.BeginDisabled(!CoordinatorRole && index is 1 or 2);
+            if (ImGui.Button((page == index ? "> " : "") + steps[index], new Vector2(width, 30))) page = index;
+            ImGui.EndDisabled();
         }
+        if (!CoordinatorRole && page is 1 or 2) page = 0;
+        if (ImGui.BeginChild("WorkflowPage", new Vector2(0, 0)))
+        {
+            if (notice.Length > 0)
+            {
+                ImGui.TextWrapped(notice);
+                if (ImGui.SmallButton("Dismiss message")) notice = string.Empty;
+                ImGui.Separator();
+            }
+            switch (page)
+            {
+                case 0: DrawPairing(); break;
+                case 1: DrawJobs(); break;
+                case 2: DrawReview(); break;
+                default: DrawProgress(); DrawActivityLog(); break;
+            }
+        }
+        ImGui.EndChild();
         ImGui.PopID();
     }
 
@@ -72,121 +98,164 @@ public sealed class WorkflowPanel(Plugin plugin)
     private void DrawPairing()
     {
         ImGui.Spacing();
-        ImGui.TextWrapped("On the coordinator, generate a pairing key and press Host. On the other PC, enter that key, find nearby coordinators, and select it. Both PCs remember the key for later sessions; IP addresses are found automatically.");
-        var addresses = Service.LocalAddresses;
-        var selectedAddress = addresses.FirstOrDefault(x => x.Address.ToString() == Settings.BindAddress);
-        var defaultAddress = addresses.FirstOrDefault(x => x.Preferred) ?? addresses.FirstOrDefault();
+        ImGui.TextUnformatted("Choose what this PC does");
+        ImGui.BeginDisabled(Service.PairingEnabled || EditingLocked);
+        if (ImGui.RadioButton("This PC controls transfers", CoordinatorRole)) coordinatorRole = true;
+        if (ImGui.RadioButton("This PC receives instructions", !CoordinatorRole)) coordinatorRole = false;
+        ImGui.EndDisabled();
+        if (HasUnfinishedJob) ImGui.TextWrapped("This PC has an unfinished coordinator job. Reconnect it as the coordinator to resume or resolve that job.");
+        var coordinator = CoordinatorRole;
+        ImGui.TextWrapped(coordinator
+            ? "Create and start your jobs here. On the other PC, choose 'receives instructions' and connect to this PC."
+            : "Connect once, then create and start jobs on the coordinator. You do not need to copy or recreate its transfer setup here.");
+        ImGui.Separator();
         var changed = false;
         ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning);
         var name = Settings.PeerName;
-        if (ImGui.InputText("This PC's label", ref name, 80)) { Settings.PeerName = name; changed = true; }
-        var addressPreview = selectedAddress != null ? $"{selectedAddress.Label} — {selectedAddress.Address}"
-            : defaultAddress != null ? $"Automatic — {defaultAddress.Label} ({defaultAddress.Address})" : "No home-network adapter found";
-        if (ImGui.BeginCombo("Coordinator network adapter", addressPreview))
-        {
-            if (ImGui.Selectable("Automatic", selectedAddress == null)) { Settings.BindAddress = ""; changed = true; }
-            foreach (var address in addresses)
-                if (ImGui.Selectable($"{address.Label} — {address.Address}##{address.Address}", address.Address.ToString() == Settings.BindAddress))
-                { Settings.BindAddress = address.Address.ToString(); changed = true; }
-            ImGui.EndCombo();
-        }
-        if (addresses.Count == 0) ImGui.TextWrapped("Connect to your home network, or enter an address under Advanced / manual connection.");
+        ImGui.SetNextItemWidth(Math.Min(310, ImGui.GetContentRegionAvail().X * .6f));
+        if (ImGui.InputText("This PC's name", ref name, 80)) { Settings.PeerName = name; changed = true; }
         ImGui.BeginDisabled(HasUnfinishedJob);
         var key = Settings.PairingKey;
-        if (ImGui.InputText("Pairing key", ref key, 128, revealKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password))
+        ImGui.SetNextItemWidth(Math.Min(310, ImGui.GetContentRegionAvail().X * .6f));
+        if (ImGui.InputText(coordinator ? "Shared pairing key" : "Key from coordinator", ref key, 128, revealKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password))
         { Settings.PairingKey = key.Trim(); changed = true; }
-        if (ImGui.Button("Generate pairing key")) { Settings.PairingKey = WorkflowService.NewPairingKey(); changed = true; }
+        if (coordinator && ImGui.Button(Settings.PairingKey.Length == 0 ? "Create pairing key" : "Replace pairing key"))
+        { Settings.PairingKey = WorkflowService.NewPairingKey(); changed = true; }
         ImGui.EndDisabled();
         ImGui.EndDisabled();
-        ImGui.SameLine();
-        ImGui.BeginDisabled(Settings.PairingKey.Length == 0);
-        if (ImGui.Button("Copy key")) ImGui.SetClipboardText(Settings.PairingKey);
-        ImGui.EndDisabled();
-        ImGui.Checkbox("Show pairing key", ref revealKey);
-        if (changed) plugin.Save();
-
-        ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning || Settings.PairingKey.Length == 0);
-        ImGui.BeginDisabled(defaultAddress == null && string.IsNullOrWhiteSpace(Settings.BindAddress));
-        if (ImGui.Button("Host as coordinator", new Vector2(185, 30))) plugin.QueueAction(Service.Host);
-        ImGui.EndDisabled();
-        ImGui.EndDisabled();
-        ImGui.SameLine();
-        ImGui.BeginDisabled(!Service.PairingEnabled);
-        if (ImGui.Button("Disconnect")) plugin.QueueAction(Service.Disconnect);
-        ImGui.EndDisabled();
-
-        ImGui.Spacing();
-        ImGui.TextUnformatted("Nearby coordinators");
-        ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning || HasUnfinishedJob || Service.Discovering);
-        if (ImGui.Button("Find nearby coordinators")) plugin.QueueAction(Service.StartDiscovery);
-        ImGui.EndDisabled();
-        if (Service.Discovering)
+        if (coordinator)
         {
-            ImGui.SameLine();
-            if (ImGui.Button("Stop search")) plugin.QueueAction(Service.StopDiscovery);
-        }
-        ImGui.TextWrapped(Service.DiscoveryStatus);
-        var nearby = Service.NearbyPeers;
-        foreach (var candidate in nearby)
-        {
-            ImGui.PushID($"{candidate.PeerId}/{candidate.Address}:{candidate.Port}");
-            var remembered = Settings.ExpectedRemotePeerId == candidate.PeerId;
-            var otherIdentity = Settings.ExpectedRemotePeerId.HasValue && !remembered;
-            ImGui.TextUnformatted(candidate.Name);
-            ImGui.SameLine();
-            ImGui.TextDisabled(remembered ? "(remembered PC; authentication pending)" : otherIdentity ? "(not the remembered PC)" : "(not yet authenticated)");
-            ImGui.TextDisabled($"{candidate.Address}:{candidate.Port}");
-            ImGui.SameLine();
-            ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning || HasUnfinishedJob || Settings.PairingKey.Length == 0 || otherIdentity);
-            if (ImGui.Button("Connect"))
-            {
-                var selected = candidate;
-                plugin.QueueAction(() => Service.ConnectDiscovered(selected));
-            }
+            ImGui.BeginDisabled(Settings.PairingKey.Length == 0);
+            if (ImGui.Button("Copy key for the other PC")) { ImGui.SetClipboardText(Settings.PairingKey); notice = "Pairing key copied. Enter it on the other PC once; both PCs remember it."; }
             ImGui.EndDisabled();
-            ImGui.PopID();
         }
-        if (nearby.Count > 0 && Settings.PairingKey.Length == 0)
-            ImGui.TextWrapped("Enter the coordinator's pairing key above to connect. Finding a PC does not grant it control.");
-        ImGui.TextWrapped("Keep both PCs on the same home network. The coordinator appears while hosting. If discovery is blocked by your network or firewall, use the manual connection below.");
+        ImGui.Checkbox("Show key", ref revealKey);
+        if (changed) plugin.Save();
+        if (Settings.PairingKey.Length == 0)
+            ImGui.TextWrapped(coordinator ? "Host below to create a key automatically, then copy it to your other PC once." : "Enter the coordinator's key once. Nearby discovery finds its address automatically.");
 
-        if (ImGui.CollapsingHeader("Advanced / manual connection"))
+        if (coordinator)
         {
-            var manualChanged = false;
             ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning);
+            if (ImGui.Button("Host for my other PC", new Vector2(220, 32))) plugin.QueueAction(Service.Host);
+            ImGui.EndDisabled();
+        }
+        else
+        {
+            ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning || HasUnfinishedJob || Service.Discovering);
+            if (ImGui.Button("Find my coordinator", new Vector2(220, 32))) plugin.QueueAction(Service.StartDiscovery);
+            ImGui.EndDisabled();
+            if (Service.Discovering)
+            {
+                ImGui.SameLine();
+                if (ImGui.Button("Stop search")) plugin.QueueAction(Service.StopDiscovery);
+            }
+            if (!Service.PairingEnabled)
+            {
+                ImGui.TextWrapped(Service.DiscoveryStatus);
+                foreach (var candidate in Service.NearbyPeers)
+                {
+                    ImGui.PushID($"{candidate.PeerId}/{candidate.Address}:{candidate.Port}");
+                    var remembered = Settings.ExpectedRemotePeerId == candidate.PeerId;
+                    var otherIdentity = Settings.ExpectedRemotePeerId.HasValue && !remembered;
+                    ImGui.TextWrapped(candidate.Name + (remembered ? " (remembered PC)" : otherIdentity ? " (different PC; see Advanced to replace pairing)" : " (key required to authenticate)"));
+                    ImGui.BeginDisabled(LocalActionRunning || HasUnfinishedJob || Settings.PairingKey.Length == 0 || otherIdentity);
+                    if (ImGui.Button("Connect to this PC"))
+                    {
+                        var selected = candidate;
+                        plugin.QueueAction(() => Service.ConnectDiscovered(selected));
+                    }
+                    ImGui.EndDisabled();
+                    ImGui.PopID();
+                }
+            }
+            ImGui.Spacing();
+            var allow = Settings.AllowRemoteControl;
+            if (ImGui.Checkbox("Allow the coordinator to run jobs on this PC", ref allow))
+            {
+                Settings.AllowRemoteControl = allow;
+                plugin.Save();
+                var enabled = allow;
+                plugin.QueueAction(() =>
+                {
+                    if (!enabled) Service.Pause("Paired workflow control was disabled on this PC.");
+                    Service.RefreshRosters();
+                });
+            }
+            ImGui.TextWrapped("This allows character changes, travel, retainer visits and trades for the coordinator's jobs. Turning it off pauses this PC.");
+            if (ReadyConnection)
+                ImGui.TextWrapped(Settings.AllowRemoteControl ? "Connected — ready for coordinator. Leave this PC running; start the job on the other PC." : "Connected — waiting for you to allow control above.");
+        }
+        if (Service.PairingEnabled)
+        {
+            if (ImGui.Button("Disconnect PCs")) plugin.QueueAction(Service.Disconnect);
+        }
+        ImGui.TextWrapped(Service.ConnectionStatus);
+        ImGui.TextWrapped("Both PCs must be on the same local network for automatic discovery. Keep the coordinator hosting while connecting.");
+        ImGui.Separator();
+        ImGui.TextUnformatted("Characters available for jobs");
+        ImGui.TextWrapped($"{Settings.PeerName}: {plugin.Config.Characters.Count} characters");
+        var remote = Service.RemoteRoster;
+        ImGui.TextWrapped(remote == null ? "Other PC: waiting for its character list" : $"{remote.Name}: {remote.Characters.Count} characters · control {(remote.ControlEnabled ? "enabled" : "disabled")}");
+        ImGui.BeginDisabled(LocalActionRunning);
+        if (ImGui.Button("Refresh characters on both PCs")) plugin.QueueAction(Service.RefreshRosters);
+        ImGui.EndDisabled();
+        ImGui.TextWrapped(Service.RosterStatus);
+        ImGui.TextWrapped("Characters come from AutoRetainer on each PC. Refresh after connecting or configuring more characters.");
+        if (ImGui.CollapsingHeader("View known characters"))
+            foreach (var entry in Service.AllCharacters())
+                ImGui.TextWrapped($"{CharacterName(entry.Character)} — {PeerName(entry.PeerId)}");
+        ImGui.Separator();
+        if (ImGui.Button("Check required plugins on this PC")) plugin.QueueAction(CheckDependencies);
+        ImGui.TextWrapped(dependencySummary);
+        ImGui.TextWrapped("Check this on both PCs. Keep AutoRetainer enabled, pause its multi mode, and let pending tasks finish.");
+        if (coordinator && ImGui.Button("Next: set up transfer", new Vector2(220, 32))) page = 1;
+        if (!coordinator && ImGui.Button("View activity", new Vector2(220, 32))) page = 3;
+        ImGui.Spacing();
+        if (ImGui.CollapsingHeader("Advanced: connection, plugins and retainer settings"))
+        {
+            DrawConnectionAdvanced(coordinator);
+            if (ImGui.CollapsingHeader("Retainer destinations on this PC")) DrawStorage();
+        }
+    }
+
+    private void DrawConnectionAdvanced(bool coordinator)
+    {
+        var manualChanged = false;
+        ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning);
+        if (coordinator)
+        {
+            var addresses = Service.LocalAddresses;
+            var selected = addresses.FirstOrDefault(x => x.Address.ToString() == Settings.BindAddress);
+            if (ImGui.BeginCombo("Network adapter", selected?.Label ?? "Automatic"))
+            {
+                if (ImGui.Selectable("Automatic", string.IsNullOrWhiteSpace(Settings.BindAddress))) { Settings.BindAddress = ""; manualChanged = true; }
+                foreach (var address in addresses)
+                    if (ImGui.Selectable($"{address.Label} — {address.Address}##{address.Address}", address.Address.ToString() == Settings.BindAddress))
+                    { Settings.BindAddress = address.Address.ToString(); manualChanged = true; }
+                ImGui.EndCombo();
+            }
             var bind = Settings.BindAddress;
             if (ImGui.InputText("Coordinator LAN address", ref bind, 64)) { Settings.BindAddress = bind.Trim(); manualChanged = true; }
-            var connect = Settings.ConnectAddress;
-            if (ImGui.InputText("Connect to coordinator", ref connect, 64)) { Settings.ConnectAddress = connect.Trim(); manualChanged = true; }
-            var port = Settings.Port;
-            if (ImGui.InputInt("Port", ref port)) { Settings.Port = Math.Clamp(port, 1, ushort.MaxValue); manualChanged = true; }
-            ImGui.EndDisabled();
-            if (manualChanged) plugin.Save();
-            ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning || HasUnfinishedJob || Settings.PairingKey.Length == 0 || string.IsNullOrWhiteSpace(Settings.ConnectAddress));
-            if (ImGui.Button("Connect manually as worker")) plugin.QueueAction(Service.Connect);
-            ImGui.EndDisabled();
         }
-
-        ImGui.Separator();
-        var allow = Settings.AllowRemoteControl;
-        if (ImGui.Checkbox("Allow the paired coordinator to run jobs on this PC", ref allow))
+        else
         {
-            Settings.AllowRemoteControl = allow;
-            plugin.Save();
-            var enabled = allow;
-            plugin.QueueAction(() =>
-            {
-                if (!enabled) Service.Pause("Paired workflow control was disabled on this PC.");
-                Service.RefreshRosters();
-            });
+            var connect = Settings.ConnectAddress;
+            if (ImGui.InputText("Coordinator LAN address", ref connect, 64)) { Settings.ConnectAddress = connect.Trim(); manualChanged = true; }
         }
-        ImGui.TextWrapped("Enable this on the worker. The coordinator controls only characters in this PC's imported roster.");
-        ImGui.TextWrapped("Both PCs need AutoRetainer for relogging, Lifestream for travel and inn access, and vnavmesh for walking. Pause AutoRetainer's own automation before starting. These checks report this PC only; check the other PC separately.");
-        if (ImGui.Button("Check local dependencies")) plugin.QueueAction(CheckDependencies);
-        ImGui.TextWrapped(dependencies);
+        var port = Settings.Port;
+        if (ImGui.InputInt("Port", ref port)) { Settings.Port = Math.Clamp(port, 1, ushort.MaxValue); manualChanged = true; }
+        ImGui.EndDisabled();
+        if (manualChanged) plugin.Save();
+        if (!coordinator)
+        {
+            ImGui.BeginDisabled(Service.PairingEnabled || LocalActionRunning || HasUnfinishedJob || Settings.PairingKey.Length == 0 || string.IsNullOrWhiteSpace(Settings.ConnectAddress));
+            if (ImGui.Button("Connect using manual address")) plugin.QueueAction(Service.Connect);
+            ImGui.EndDisabled();
+        }
         if (Settings.ExpectedRemotePeerId.HasValue)
         {
-            ImGui.TextDisabled("The paired PC's identity is remembered.");
+            ImGui.TextWrapped("Your paired PC's identity is remembered. Disconnect both PCs before replacing it.");
             ImGui.BeginDisabled(Service.PairingEnabled || EditingLocked);
             if (ImGui.Button("Forget paired PC"))
             {
@@ -197,17 +266,11 @@ public sealed class WorkflowPanel(Plugin plugin)
             ImGui.EndDisabled();
         }
         ImGui.Separator();
-        ImGui.BeginDisabled(Service.Busy);
-        if (ImGui.Button("Import / refresh both rosters")) plugin.QueueAction(Service.RefreshRosters);
-        ImGui.EndDisabled();
-        ImGui.TextUnformatted($"This PC: {plugin.Config.Characters.Count} known characters");
-        var remote = Service.RemoteRoster;
-        ImGui.TextUnformatted(remote == null ? "Other PC: connect to load its roster" : $"{remote.Name}: {remote.Characters.Count} characters · control {(remote.ControlEnabled ? "enabled" : "disabled")}");
-        if (ImGui.CollapsingHeader("Known characters"))
-            foreach (var entry in Service.AllCharacters())
-                ImGui.TextUnformatted($"{CharacterName(entry.Character)} — {PeerName(entry.PeerId)}");
+        ImGui.TextWrapped("Both PCs need AutoRetainer for character changes, Lifestream for travel and inn access, and vnavmesh for walking. Pause AutoRetainer's multi mode before running a job.");
+        if (ImGui.Button("Check plugins on this PC")) plugin.QueueAction(CheckDependencies);
+        ImGui.TextWrapped(dependencies);
+        ImGui.TextWrapped("This check covers this PC only. Check plugins on the other PC as well.");
     }
-
     private void DrawJobs()
     {
         ImGui.Spacing();
@@ -223,7 +286,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         ImGui.BeginDisabled(EditingLocked);
         if (ImGui.Button("New transfer job"))
         {
-            job = new SavedTransferJob { Definition = new TransferJobDefinition { Name = $"Transfer job {Settings.Jobs.Count + 1}", ItemId = 10155 } };
+            job = new SavedTransferJob { Definition = new TransferJobDefinition { Name = $"Transfer job {Settings.Jobs.Count + 1}", ItemId = 10155, QuantityMode = JobQuantityMode.DeliverAmount } };
             Settings.Jobs.Add(job); selectedJob = job.Definition.Id; plugin.Save();
         }
         if (job != null)
@@ -239,7 +302,11 @@ public sealed class WorkflowPanel(Plugin plugin)
         }
         ImGui.EndDisabled();
         if (EditingLocked) ImGui.TextWrapped("Job and storage settings are locked while a run is unfinished. Pause to inspect progress; end a resolved job to edit its setup.");
-        if (job == null) return;
+        if (job == null)
+        {
+            ImGui.TextWrapped("Create a transfer job, choose an item and its providers, then add recipients in the order you want them filled. New jobs start with a small, fixed delivery amount.");
+            return;
+        }
         var changed = false;
         ImGui.BeginDisabled(EditingLocked);
         var definition = job.Definition;
@@ -268,7 +335,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         });
 
         var roster = Service.AllCharacters().ToArray();
-        if (ImGui.CollapsingHeader("1. Source characters and retainers", ImGuiTreeNodeFlags.DefaultOpen))
+        if (ImGui.CollapsingHeader("Providers: who gives the items?", ImGuiTreeNodeFlags.DefaultOpen))
         {
             if (ImGui.SmallButton("Select all known characters")) { definition.Sources = roster.Select(x => x.Character.ContentId).Distinct().ToList(); changed = true; }
             ImGui.SameLine();
@@ -292,10 +359,11 @@ public sealed class WorkflowPanel(Plugin plugin)
                 ImGui.SameLine();
                 if (ImGui.SmallButton($"Remove##missing{missing}")) { definition.Sources.Remove(missing); changed = true; }
             }
-            ImGui.TextWrapped("All stored retainer inventories are included. Discovery verifies each selected character before allocation.");
+            if (roster.Length == 0) ImGui.TextWrapped("No characters yet. Connect both PCs and refresh characters in step 1.");
+            ImGui.TextWrapped("Providers use carried items first, then automatically return to their retainers for more when their bags run out. The job checks bags and every retainer before planning.");
         }
 
-        if (ImGui.CollapsingHeader("2. Recipients in priority order", ImGuiTreeNodeFlags.DefaultOpen))
+        if (ImGui.CollapsingHeader("Recipients: fill from top to bottom", ImGuiTreeNodeFlags.DefaultOpen))
         {
             for (var index = 0; index < definition.Recipients.Count; index++)
             {
@@ -303,7 +371,6 @@ public sealed class WorkflowPanel(Plugin plugin)
                 var priorityChanged = false;
                 ImGui.PushID($"recipient{recipient.CharacterId}");
                 ImGui.TextUnformatted($"{index + 1}. {CharacterName(recipient.CharacterId)}");
-                ImGui.SameLine();
                 ImGui.BeginDisabled(index == 0 || recipient.Quantity == null);
                 if (ImGui.SmallButton("Up"))
                 {
@@ -329,7 +396,7 @@ public sealed class WorkflowPanel(Plugin plugin)
                     var inputKey = $"{definition.Id}/{recipient.CharacterId}";
                     if (!amountInputs.TryGetValue(inputKey, out var amount)) amount = recipient.Quantity?.ToString(CultureInfo.InvariantCulture) ?? "1";
                     ImGui.SetNextItemWidth(210);
-                    if (ImGui.InputText(definition.QuantityMode == JobQuantityMode.RestockToTotal ? "Stock target" : "Amount / cap", ref amount, 24, ImGuiInputTextFlags.CharsDecimal))
+                    if (ImGui.InputText(definition.QuantityMode switch { JobQuantityMode.RestockToTotal => "Total in bags + retainers", JobQuantityMode.DeliverAmount => "Additional items to send", _ => "Maximum items to send" }, ref amount, 24, ImGuiInputTextFlags.CharsDecimal))
                     {
                         amountInputs[inputKey] = amount;
                         if (ulong.TryParse(amount, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
@@ -346,7 +413,7 @@ public sealed class WorkflowPanel(Plugin plugin)
                     if (ImGui.Selectable($"{CharacterName(entry.Character)} — {PeerName(entry.PeerId)}"))
                     {
                         var remainderIndex = definition.Recipients.FindIndex(x => x.Quantity == null);
-                        var recipient = new RecipientRule { CharacterId = entry.Character.ContentId, Quantity = definition.QuantityMode == JobQuantityMode.MoveAll && remainderIndex < 0 ? null : 1 };
+                        var recipient = new RecipientRule { CharacterId = entry.Character.ContentId, Quantity = definition.QuantityMode == JobQuantityMode.MoveAll && remainderIndex < 0 ? null : 10 };
                         if (remainderIndex >= 0) definition.Recipients.Insert(remainderIndex, recipient);
                         else definition.Recipients.Add(recipient);
                         changed = true;
@@ -356,7 +423,7 @@ public sealed class WorkflowPanel(Plugin plugin)
             ImGui.TextWrapped("The remainder recipient stays last. To move it earlier, turn off 'Take the remainder' and set its cap first. New recipients are inserted before an existing remainder recipient.");
         }
 
-        if (ImGui.CollapsingHeader("3. Relay characters"))
+        if (ImGui.CollapsingHeader("Optional: relay for characters on the same account"))
         {
             ImGui.TextWrapped("A transfer between characters on the same account uses a relay on the other PC. Select one available relay for each account that may receive temporary cargo.");
             foreach (var group in roster.GroupBy(x => x.PeerId))
@@ -371,9 +438,14 @@ public sealed class WorkflowPanel(Plugin plugin)
                     ImGui.EndCombo();
                 }
             }
+            foreach (var orphan in definition.RelayCharacters.Where(x => roster.All(character => character.PeerId != x.Key)).ToArray())
+            {
+                ImGui.TextWrapped($"Saved relay {CharacterName(orphan.Value)} belongs to a PC that is not connected.");
+                if (ImGui.SmallButton($"Remove this saved relay##{orphan.Key}")) { definition.RelayCharacters.Remove(orphan.Key); changed = true; }
+            }
         }
 
-        if (ImGui.CollapsingHeader("4. Meeting point", ImGuiTreeNodeFlags.DefaultOpen))
+        if (ImGui.CollapsingHeader("Meeting point: where the PCs trade", ImGuiTreeNodeFlags.DefaultOpen))
         {
             ImGui.TextWrapped("Stand at an outdoor location both accounts can reach, then record it. Choose a main aetheryte in that territory for the return trip.");
             if (ImGui.Button("Record my current meeting point"))
@@ -398,33 +470,142 @@ public sealed class WorkflowPanel(Plugin plugin)
         ImGui.EndDisabled();
         if (changed) plugin.Save();
         ImGui.Spacing();
-        ImGui.BeginDisabled(Service.Busy);
-        if (ImGui.Button("Read Allagan Tools inventory hints"))
-        {
-            var item = definition.ItemId; var highQuality = definition.HighQuality;
-            plugin.QueueAction(() => Service.RefreshInventoryHints(item, highQuality));
-        }
-        ImGui.EndDisabled();
-        ImGui.TextWrapped("Cached inventory hints appear in Progress. Missing hints mean unknown stock; every retainer is still visited during discovery.");
-        ImGui.BeginDisabled(EditingLocked || !Service.IsHost || !Service.Connected || Service.RemoteRoster is not { ControlEnabled: true } || HasInvalidAmounts(definition));
-        if (ImGui.Button("Scan inventories only", new Vector2(220, 34)))
-        {
-            var chosen = job;
-            plugin.QueueAction(() => Service.ScanJob(chosen));
-        }
-        ImGui.SameLine();
-        ImGui.BeginDisabled(job.Meeting.WorldId == 0 || job.Meeting.AetheryteId == 0);
-        if (ImGui.Button("Start this transfer job", new Vector2(230, 34)))
-        {
-            var chosen = job;
-            plugin.QueueAction(() => Service.StartJob(chosen));
-        }
-        ImGui.EndDisabled();
-        ImGui.EndDisabled();
-        ImGui.TextWrapped("Start with an inventory scan on both PCs. It visits the selected characters and retainers without trading. Full transfers also require a recorded meeting point.");
-        if (!Service.IsHost) ImGui.TextWrapped("Start jobs on the coordinator PC after pairing.");
+        if (ImGui.CollapsingHeader("Optional: retainer destinations on this PC")) DrawStorage();
+        ImGui.TextWrapped("When a recipient's bags fill, it returns to its home world, deposits into its allowed retainers, then comes back to continue. The default destination is a home-world inn.");
+        if (ImGui.Button("Next: review this transfer", new Vector2(250, 32))) page = 2;
     }
 
+    private void DrawReview()
+    {
+        var job = SelectedJob;
+        if (job == null)
+        {
+            ImGui.TextWrapped("Create a transfer job in step 2 first.");
+            if (ImGui.Button("Set up transfer")) page = 1;
+            return;
+        }
+        var definition = job.Definition;
+        ImGui.Spacing();
+        ImGui.TextWrapped(job.Definition.Name);
+        ImGui.TextUnformatted($"{ItemName(definition.ItemId)}{(definition.HighQuality ? " HQ" : "")} · {ModeName(definition.QuantityMode)}");
+        ImGui.TextWrapped($"Collect from {definition.Sources.Count} provider{(definition.Sources.Count == 1 ? "" : "s")}. Fill these recipients in priority order:");
+        foreach (var recipient in definition.Recipients.Select((value, index) => (value, index)))
+        {
+            var amount = recipient.value.Quantity;
+            var action = definition.QuantityMode switch
+            {
+                JobQuantityMode.RestockToTotal => $"Top up bags + retainers to {amount:N0}",
+                JobQuantityMode.DeliverAmount => $"Send {amount:N0} additional items",
+                _ => amount.HasValue ? $"Send up to {amount:N0} items" : "Send all remaining eligible items"
+            };
+            ImGui.TextWrapped($"{recipient.index + 1}. {CharacterName(recipient.value.CharacterId)}: {action}.");
+        }
+        ImGui.TextWrapped("Providers use carried items first, then automatically refill from retainers when they run out. Recipients deposit when full and return to keep trading.");
+        if (ImGui.CollapsingHeader("Review provider names and meeting location"))
+        {
+            foreach (var source in definition.Sources) ImGui.TextWrapped(CharacterName(source));
+            DrawLocation(job.Meeting);
+            foreach (var relay in definition.RelayCharacters)
+                ImGui.TextWrapped($"Relay on {PeerName(relay.Key)}: {CharacterName(relay.Value)}");
+        }
+        ImGui.Separator();
+        ImGui.TextUnformatted("Ready to run?");
+        var scanBlockers = GetScanBlockers(job);
+        var transferBlockers = GetTransferBlockers(job);
+        ReadinessLine(Service.IsHost && Service.Connected && Service.RemoteRoster != null, "PCs connected; this PC is coordinator", "Connect both PCs in step 1; host on this PC.");
+        ReadinessLine(Service.RemoteRoster is { ControlEnabled: true }, "Other PC allows control", "Enable 'Allow the coordinator to run jobs' on the other PC.");
+        ReadinessLine(definition.Sources.Count > 0 && definition.Recipients.Count > 0 && !HasInvalidAmounts(definition), "Providers, recipients and amounts selected", "Choose providers, recipients and positive amounts in step 2.");
+        ReadinessLine(job.Meeting.WorldId != 0 && job.Meeting.TerritoryId != 0 && job.Meeting.AetheryteId != 0, "Meeting point recorded", "Record an outdoor meeting point in step 2 before starting transfers.");
+        if (scanBlockers.Count > 0 || transferBlockers.Count > 0)
+        {
+            ImGui.Spacing();
+            foreach (var reason in scanBlockers.Concat(transferBlockers).Distinct()) ImGui.TextWrapped($"• {reason}");
+        }
+        ImGui.Spacing();
+        if (ImGui.Button("Check required plugins on this PC")) plugin.QueueAction(CheckDependencies);
+        ImGui.TextWrapped(dependencySummary);
+        ImGui.TextWrapped("Before running: check required plugins on both PCs, pause AutoRetainer multi mode and let its tasks finish. Close existing trade, retainer and confirmation dialogs.");
+        ImGui.Separator();
+        ImGui.TextWrapped("Inventory scan actively changes characters, travels to their home-world bells and opens each retainer. It does not move items. Record your meeting point before scanning, since the scan moves your character.");
+        ImGui.BeginDisabled(scanBlockers.Count > 0);
+        if (ImGui.Button("Scan inventories only", new Vector2(230, 34)))
+        {
+            plugin.QueueAction(() => Service.ScanJob(job));
+            page = 3;
+        }
+        ImGui.EndDisabled();
+        ImGui.BeginDisabled(scanBlockers.Count > 0 || transferBlockers.Count > 0);
+        if (ImGui.Button("Start transfer", new Vector2(230, 34)))
+        {
+            plugin.QueueAction(() => Service.StartJob(job));
+            page = 3;
+        }
+        ImGui.EndDisabled();
+        ImGui.TextWrapped("Start transfer scans current inventories again, builds the delivery plan, and then carries out trades. You can pause at any time.");
+        if (ImGui.Button("Back: edit setup")) page = 1;
+        if (ImGui.CollapsingHeader("Optional: cached inventory preview"))
+        {
+            ImGui.BeginDisabled(LocalActionRunning);
+            if (ImGui.Button("Read Allagan Tools hints"))
+            {
+                var item = definition.ItemId;
+                var highQuality = definition.HighQuality;
+                plugin.QueueAction(() => Service.RefreshInventoryHints(item, highQuality));
+            }
+            ImGui.EndDisabled();
+            ImGui.TextWrapped("Allagan Tools provides an optional cached preview. A missing entry means unknown stock. Every selected retainer is still visited during the live scan.");
+            DrawHints();
+        }
+    }
+
+    private List<string> GetScanBlockers(SavedTransferJob job)
+    {
+        var reasons = new List<string>();
+        var definition = job.Definition;
+        if (LocalActionRunning) reasons.Add("Pause the current action before starting another job.");
+        if (HasUnfinishedJob) reasons.Add("Resume the saved job, or resolve and end it before starting a new one.");
+        if (!Service.IsHost || !Service.Connected || Service.RemoteRoster == null) reasons.Add("Connect both PCs with this PC hosting in step 1.");
+        if (Service.RemoteRoster is not { ControlEnabled: true }) reasons.Add("Allow coordinator control on the other PC in step 1.");
+        if (definition.Sources.Count == 0) reasons.Add("Select at least one provider in step 2.");
+        if (definition.Recipients.Count == 0) reasons.Add("Add at least one recipient in step 2.");
+        if (HasInvalidAmounts(definition)) reasons.Add("Fix the highlighted quantity fields in step 2; use positive whole numbers.");
+        var known = Service.AllCharacters().Select(x => x.Character.ContentId).ToHashSet();
+        if (definition.Sources.Concat(definition.Recipients.Select(x => x.CharacterId)).Concat(definition.RelayCharacters.Values).Any(id => !known.Contains(id)))
+            reasons.Add("Some selected characters are missing. Refresh characters in step 1 or update your selections.");
+        if (definition.RelayCharacters.Any(relay => !Service.AllCharacters().Any(character => character.PeerId == relay.Key && character.Character.ContentId == relay.Value)))
+            reasons.Add("A saved relay belongs to an unavailable or different PC. Update the relay section in step 2.");
+        var item = Plugin.DataManager.GetExcelSheet<Item>().GetRowOrDefault(definition.ItemId);
+        if (item == null || item.Value.IsUntradable) reasons.Add("Choose a tradable item in step 2.");
+        else if (definition.HighQuality && !item.Value.CanBeHq) reasons.Add("This item has no high-quality version. Turn off high quality in step 2.");
+        if (definition.Sources.Count > 0 && definition.Recipients.Count > 0 && !HasInvalidAmounts(definition))
+        {
+            try { JobPlanner.ValidateDefinition(definition); }
+            catch (ArgumentException exception) { reasons.Add($"Check the saved job setup: {exception.Message.Split('\n')[0]}"); }
+        }
+        return reasons;
+    }
+
+    private List<string> GetTransferBlockers(SavedTransferJob job)
+    {
+        var reasons = new List<string>();
+        if (job.Meeting.WorldId == 0 || job.Meeting.TerritoryId == 0 || job.Meeting.AetheryteId == 0)
+            reasons.Add("A full transfer needs a recorded meeting point and arrival aetheryte in step 2. You can still scan inventories.");
+        var roster = Service.AllCharacters().ToArray();
+        foreach (var group in roster.GroupBy(x => x.PeerId))
+        {
+            var ids = group.Select(x => x.Character.ContentId).ToHashSet();
+            if (!job.Definition.Sources.Any(source => ids.Contains(source) && job.Definition.Recipients.Any(recipient => ids.Contains(recipient.CharacterId) && recipient.CharacterId != source))) continue;
+            var otherPeers = roster.Select(x => x.PeerId).Distinct().Where(id => id != group.Key).ToArray();
+            if (otherPeers.Length != 1 || !job.Definition.RelayCharacters.TryGetValue(otherPeers[0], out var relay) || !roster.Any(x => x.PeerId == otherPeers[0] && x.Character.ContentId == relay))
+                reasons.Add($"Transfers between characters on {PeerName(group.Key)} need a relay on the other PC. Choose it under the relay section in step 2.");
+        }
+        return reasons;
+    }
+
+    private static void ReadinessLine(bool ready, string yes, string no)
+    {
+        ImGui.TextWrapped(ready ? $"Ready: {yes}" : $"To do: {no}");
+    }
     private void DrawItemPicker(TransferJobDefinition definition, ref bool changed)
     {
         ImGui.TextUnformatted($"Item: {ItemName(definition.ItemId)}");
@@ -441,8 +622,13 @@ public sealed class WorkflowPanel(Plugin plugin)
                 ImGui.EndCombo();
             }
         }
-        var hq = definition.HighQuality;
-        if (ImGui.Checkbox("High quality only", ref hq)) { definition.HighQuality = hq; changed = true; }
+        var supportsHq = Plugin.DataManager.GetExcelSheet<Item>().GetRowOrDefault(definition.ItemId)?.CanBeHq == true;
+        if (supportsHq || definition.HighQuality)
+        {
+            var hq = definition.HighQuality;
+            if (ImGui.Checkbox("High quality only", ref hq)) { definition.HighQuality = hq; changed = true; }
+            if (!supportsHq) ImGui.TextWrapped("This item has no high-quality version. Turn off the saved HQ selection to continue.");
+        }
     }
 
     private void DrawStorage()
@@ -507,14 +693,26 @@ public sealed class WorkflowPanel(Plugin plugin)
     private void DrawProgress()
     {
         ImGui.Spacing();
-        DrawHints();
-        var run = Service.Run;
-        if (run == null) { ImGui.TextWrapped("Start a job to discover inventories and build its delivery plan. The worker PC reports its current operation above."); return; }
+        var run = CoordinatorRole ? Service.Run : null;
+        if (run == null)
+        {
+            ImGui.TextWrapped(CoordinatorRole ? "No transfer run yet. Set up a job, then review and start it in step 3." : ReadyConnection && Settings.AllowRemoteControl ? "Connected — ready for coordinator. Start the job on your other PC; this PC reports its actions here." : "Connect and allow coordinator control in step 1 to receive jobs.");
+            ImGui.TextWrapped(Service.Status);
+            return;
+        }
         ImGui.TextUnformatted(run.Job.Definition.Name);
         ImGui.TextUnformatted($"{ItemName(run.Job.Definition.ItemId)}{(run.Job.Definition.HighQuality ? " HQ" : "")} · {ModeName(run.Job.Definition.QuantityMode)}");
         ImGui.TextWrapped(run.Status);
+        ImGui.TextWrapped(run.Step == CoordinatorStep.Finished
+            ? run.Journal?.Plan.UnmetTargets.Count > 0
+                ? "Run ended with unmet targets. Review the shortages below; create a new job for any remaining items."
+                : "Run ended — inspect the results below before starting another job."
+            : run.Paused ? "Paused — use Resume / reconcile above when ready." : StageName(run.Step));
         if (run.Journal == null)
-            ImGui.TextUnformatted($"Discovery: {run.Snapshots.Count}/{run.DiscoveryOrder.Count} characters verified");
+        {
+            ImGui.TextUnformatted($"Inventory scan: {run.Snapshots.Count}/{run.DiscoveryOrder.Count} characters verified");
+            ImGui.ProgressBar(run.DiscoveryOrder.Count == 0 ? 0 : (float)run.Snapshots.Count / run.DiscoveryOrder.Count, new Vector2(-1, 18));
+        }
         else
         {
             try
@@ -524,7 +722,9 @@ public sealed class WorkflowPanel(Plugin plugin)
                 foreach (var recipient in run.Journal.Plan.Definition.Recipients)
                 {
                     var assigned = run.Journal.Plan.Allocations.Where(x => x.RecipientCharacterId == recipient.CharacterId).Aggregate(0UL, (sum, x) => sum + x.Quantity);
-                    ImGui.TextUnformatted($"{CharacterName(recipient.CharacterId)}: {ledger.DeliveredTo(recipient.CharacterId):N0} / {assigned:N0} allocated items delivered");
+                    var delivered = ledger.DeliveredTo(recipient.CharacterId);
+                    ImGui.TextWrapped($"{CharacterName(recipient.CharacterId)}: {delivered:N0} / {assigned:N0} planned items delivered");
+                    ImGui.ProgressBar(assigned == 0 ? 1 : (float)((double)delivered / assigned), new Vector2(-1, 18));
                 }
                 foreach (var shortage in run.Journal.Plan.UnmetTargets)
                     ImGui.TextWrapped($"Unmet target: {CharacterName(shortage.CharacterId)} needs {shortage.Missing:N0} more than the discovered available stock.");
@@ -536,13 +736,17 @@ public sealed class WorkflowPanel(Plugin plugin)
             }
             catch (Exception exception) { ImGui.TextWrapped($"Journal requires attention: {exception.Message}"); }
         }
+        foreach (var pickup in run.Withdrawn.Where(x => x.Value > 0))
+            ImGui.TextWrapped($"Collected from provider retainers: {CharacterName(pickup.Key)} · {pickup.Value:N0} items");
+        foreach (var deposit in run.Deposited.Where(x => x.Value > 0))
+            ImGui.TextWrapped($"Stored in recipient retainers: {CharacterName(deposit.Key)} · {deposit.Value:N0} items");
         if (ImGui.CollapsingHeader("Current operations", ImGuiTreeNodeFlags.DefaultOpen))
         {
             if (run.Pending.Count == 0) ImGui.TextUnformatted("No pending worker command.");
             foreach (var pending in run.Pending)
             {
                 var command = pending.Command;
-                ImGui.TextUnformatted($"{PeerName(pending.PeerId)} · {CharacterName(command.Operation.CharacterId)} · {(command.Kind == WorkerCommandKind.Game ? command.Operation.Kind.ToString() : command.Kind.ToString())}");
+                ImGui.TextWrapped($"{PeerName(pending.PeerId)} · {CharacterName(command.Operation.CharacterId)} · {OperationName(command)}");
                 var response = pending.Response;
                 ImGui.TextWrapped(response == null ? (pending.Ready ? "Receiver armed; awaiting the agreed trade." : "Waiting for the worker's observation.")
                     : response.Success ? $"Verified response: {response.Quantity:N0} items." : response.Error);
@@ -576,6 +780,46 @@ public sealed class WorkflowPanel(Plugin plugin)
             }
         }
     }
+
+    private void DrawActivityLog()
+    {
+        ImGui.Spacing();
+        if (!ImGui.CollapsingHeader("Recent activity", ImGuiTreeNodeFlags.DefaultOpen)) return;
+        if (ImGui.Button("Copy activity for troubleshooting"))
+            ImGui.SetClipboardText($"Ashe's Trader v0.2.2\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
+        if (plugin.Activity.Count == 0) ImGui.TextWrapped("Actions and outcomes will appear here when a job runs.");
+        foreach (var entry in plugin.Activity.Reverse()) ImGui.TextWrapped(entry);
+        DrawHints();
+    }
+
+    private static string StageName(CoordinatorStep step) => step switch
+    {
+        CoordinatorStep.DiscoverLogin or CoordinatorStep.DiscoverScan => "Scanning each selected character's bags and retainers",
+        CoordinatorStep.Plan or CoordinatorStep.SelectLeg => "Planning the next delivery",
+        CoordinatorStep.LoginSender or CoordinatorStep.LoginReceiver => "Logging in the characters for this delivery",
+        CoordinatorStep.InspectSender or CoordinatorStep.InspectReceiver => "Checking carried items and available inventory space",
+        CoordinatorStep.Withdraw => "Provider refill: collecting the next load from retainers",
+        CoordinatorStep.Deposit => "Recipient storage: making room in bags before continuing",
+        CoordinatorStep.TravelSender or CoordinatorStep.TravelReceiver => "Returning to the meeting point",
+        _ => "Trading and verifying the delivery on both PCs"
+    };
+
+    private static string OperationName(WorkerCommand command) => command.Kind switch
+    {
+        WorkerCommandKind.PreviewBatch => "Checking the next trade's contents",
+        WorkerCommandKind.ReceiveBatch => "Receiving and verifying a trade",
+        WorkerCommandKind.SendBatch => "Sending and verifying a trade",
+        _ => command.Operation.Kind switch
+        {
+            GameOperationKind.Login => "Changing character",
+            GameOperationKind.Inspect => "Checking inventory",
+            GameOperationKind.TravelMeeting => "Travelling to the meeting point",
+            GameOperationKind.ScanRetainers => "Scanning bags and retainers",
+            GameOperationKind.Withdraw => "Collecting items from provider retainers",
+            GameOperationKind.Deposit => "Depositing items into recipient retainers",
+            _ => "Working"
+        }
+    };
 
     private void CaptureMeeting(Guid jobId)
     {
@@ -634,9 +878,20 @@ public sealed class WorkflowPanel(Plugin plugin)
     {
         var ar = plugin.AutoRetainer.GetStatus();
         var ls = plugin.Lifestream.GetStatus();
+        var issues = new List<string>();
+        if (!ar.Ready) issues.Add("enable AutoRetainer");
+        else if (ar.Busy != false || ar.MultiModeEnabled != false) issues.Add("pause AutoRetainer multi mode and wait for its tasks");
+        if (!ls.Ready) issues.Add("enable Lifestream");
+        else if (ls.Busy != false) issues.Add("wait for Lifestream to become idle");
         string mesh;
-        try { mesh = Plugin.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.Nav.IsReady").InvokeFunc() ? "navigation mesh ready" : "navigation mesh not ready in this territory"; }
-        catch (Exception) { mesh = "vnavmesh unavailable or its IPC is not ready"; }
+        try
+        {
+            var ready = Plugin.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.Nav.IsReady").InvokeFunc();
+            mesh = ready ? "navigation mesh ready" : "navigation mesh not ready in this territory";
+            if (!ready) issues.Add("wait for vnavmesh to be ready in the current territory");
+        }
+        catch (Exception) { mesh = "vnavmesh unavailable or its IPC is not ready"; issues.Add("enable vnavmesh and wait for navigation to load"); }
+        dependencySummary = issues.Count == 0 ? $"Local plugins checked at {DateTime.Now:T}: available and idle. Check the other PC separately." : $"This PC needs attention: {string.Join("; ", issues)}. Checked {DateTime.Now:T}.";
         dependencies = $"AutoRetainer: {(ar.Ready ? $"available; busy={ar.Busy?.ToString() ?? "unknown"}, multi mode={ar.MultiModeEnabled?.ToString() ?? "unknown"}" : ar.Error)}. Lifestream: {(ls.Ready ? $"available; busy={ls.Busy?.ToString() ?? "unknown"}" : ls.Error)}. {mesh}. Checked {DateTime.Now:T}.";
     }
 }

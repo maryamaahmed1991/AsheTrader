@@ -46,6 +46,101 @@ public sealed class TransferCoordinatorTests
         Assert.Equal(700U, service.Trades.Take(firstLowPriority).Aggregate(0U, (sum, trade) => sum + trade.Quantity));
         Assert.DoesNotContain(service.Trades.Skip(firstLowPriority), trade => trade.ReceiverId == 3);
         Assert.True(service.Run.Deposited.GetValueOrDefault(3UL) <= Ledger(service).DeliveredTo(3));
+        Assert.Equal(900UL, service.Run.Withdrawn[1]);
+        Assert.Equal(500UL, service.Run.Withdrawn[2]);
+        Assert.All(service.Trace.Where(trace => trace.Operation == GameOperationKind.Withdraw),
+            pickup => Assert.InRange(pickup.Quantity, 1U, service.Characters[pickup.CharacterId].BagLimit));
+    }
+
+    [Fact]
+    public void ActualCoordinatorTradesCarriedStockThenCollectsOnlyTheRemainingTarget()
+    {
+        var service = new WorkflowService(PeerA, PeerB,
+            Sim(1, PeerA, 3, 17), Sim(2, PeerB));
+        service.StartJob(Saved(Job([1], (2, 10))));
+        service.RunUntil(run => run.Step == CoordinatorStep.Withdraw && run.Pending.Count == 0);
+
+        Assert.Equal(3UL, Ledger(service).DeliveredTo(2));
+        Assert.Contains("Collecting up to 7 items from provider retainers", service.Run!.Status);
+        Assert.Equal(17U, service.Characters[1].RetainerTotal);
+        service.RunToTerminal();
+
+        Assert.False(service.Run.Paused, service.LastError);
+        Assert.Equal(new uint[] { 3, 7 }, service.Trades.Select(trade => trade.Quantity));
+        var pickup = Assert.Single(service.Trace, trace => trace.Operation == GameOperationKind.Withdraw);
+        Assert.Equal(7U, pickup.Quantity);
+        Assert.Equal("meeting", pickup.StartLocation);
+        Assert.Equal(10U, service.Characters[1].RetainerTotal);
+        Assert.Equal(7UL, service.Run.Withdrawn[1]);
+        Assert.Equal(10UL, Ledger(service).DeliveredTo(2));
+    }
+
+    [Fact]
+    public void ActualCoordinatorLoadsBagCapacityThenTradesMultipleBatchesBeforeRefilling()
+    {
+        var source = Sim(1, PeerA, 100, 700, 600);
+        source.Retainers.Add(2001, 300); // A load may span more than one retainer.
+        var service = new WorkflowService(PeerA, PeerB, source, Sim(2, PeerB, bagLimit: 2000));
+        service.StartJob(Saved(Job([1], (2, 1100))));
+        service.RunToTerminal();
+
+        Assert.False(service.Run!.Paused, service.LastError);
+        Assert.Equal(new uint[] { 600, 400 }, service.Trace.Where(trace => trace.Operation == GameOperationKind.Withdraw).Select(trace => trace.Quantity));
+        Assert.Equal(new uint[] { 100, 495, 105, 400 }, service.Trades.Select(trade => trade.Quantity));
+        Assert.Equal(1000UL, service.Run.Withdrawn[1]);
+        Assert.Equal(1100UL, Ledger(service).DeliveredTo(2));
+        Assert.Equal(0UL, source.Total);
+    }
+
+    [Fact]
+    public void ActualCoordinatorProviderPickupsPreserveRestockProtectedStock()
+    {
+        var definition = Job([1], (1, 100), (2, 20));
+        definition.QuantityMode = JobQuantityMode.RestockToTotal;
+        var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 0, 120), Sim(2, PeerB));
+        service.StartJob(Saved(definition));
+        service.RunToTerminal();
+
+        Assert.False(service.Run!.Paused, service.LastError);
+        Assert.Equal(100UL, service.Characters[1].Total);
+        Assert.Equal(20UL, service.Run.Withdrawn[1]);
+        Assert.Equal(20U, Assert.Single(service.Trace, trace => trace.Operation == GameOperationKind.Withdraw).Quantity);
+        Assert.Equal(20UL, Ledger(service).DeliveredTo(2));
+    }
+
+    [Fact]
+    public void ActualCoordinatorPausesBeforePickupWhenProviderBagsHaveNoRoom()
+    {
+        var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 0, 10, 0), Sim(2, PeerB));
+        service.StartJob(Saved(Job([1], (2, 10))));
+        service.RunToTerminal();
+
+        Assert.True(service.Run!.Paused);
+        Assert.Contains("provider has no room", service.LastError);
+        Assert.DoesNotContain(service.Trace, trace => trace.Operation == GameOperationKind.Withdraw);
+        Assert.Empty(service.Trades);
+        Assert.Equal(0UL, Ledger(service).DeliveredTo(2));
+    }
+
+    [Fact]
+    public void ActualCoordinatorDoesNotReplaceMissingRelayCargoWithUnrelatedRetainerStock()
+    {
+        var definition = Job([1], (2, 10));
+        definition.RelayCharacters[PeerB] = 3;
+        var relay = Sim(3, PeerB, stored: 100);
+        var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 10), Sim(2, PeerA), relay);
+        service.StartJob(Saved(definition));
+        service.RunUntil(run => service.Trades.Count == 1 && run.Step == CoordinatorStep.SelectLeg);
+        relay.Bags = 0; // Cargo was manually removed between the two legs.
+        service.RunToTerminal();
+
+        Assert.True(service.Run!.Paused);
+        Assert.Contains("relay is missing", service.LastError);
+        Assert.Equal(100U, relay.RetainerTotal);
+        Assert.DoesNotContain(service.Trace, trace => trace.Operation == GameOperationKind.Withdraw && trace.CharacterId == 3);
+        Assert.Single(service.Trades);
+        Assert.Equal(0UL, Ledger(service).DeliveredTo(2));
+        Assert.Equal(10UL, Ledger(service).RelayCargo(3));
     }
 
     [Fact]
@@ -140,6 +235,148 @@ public sealed class TransferCoordinatorTests
         Assert.Equal(1000UL, Ledger(service).DeliveredTo(2));
         Assert.Equal(1000U, service.Trades.Aggregate(0U, (sum, trade) => sum + trade.Quantity));
         Assert.Equal(service.Trades.Count, service.Trades.Select(trade => trade.SenderCommandId).Distinct().Count());
+    }
+
+    [Fact]
+    public void ActualCoordinatorRecoversLostPickupThenContinuesMultipleProvidersAndReceiverOverflow()
+    {
+        var service = new WorkflowService(PeerA, PeerB,
+            Sim(1, PeerA, 3, 17, 7), Sim(2, PeerA, 2, 18, 6), Sim(3, PeerB, bagLimit: 5));
+        service.SuppressInitialResponse = command => command.Operation.Kind == GameOperationKind.Withdraw;
+        service.StartJob(Saved(Job([1, 2], (3, 40))));
+        service.RunUntil(run => run.Step == CoordinatorStep.Withdraw && run.Pending.Count == 1);
+
+        var originalCommand = Assert.Single(service.Run!.Pending).Command.Id;
+        Assert.Null(service.Run.Pending[0].Response);
+        Assert.Equal(7U, service.Characters[1].Bags);
+        Assert.Equal(3UL, Ledger(service).DeliveredTo(3));
+        service.SimulateCoordinatorRestart();
+        service.Resume();
+
+        Assert.Equal(CoordinatorStep.Withdraw, service.Run.Step);
+        Assert.Equal(originalCommand, Assert.Single(service.Run.Pending).Command.Id);
+        Assert.Equal(0UL, service.Run.Withdrawn.GetValueOrDefault(1UL));
+        service.SuppressInitialResponse = null;
+        service.Tick(); // Recover the original pickup outcome; do not collect a second load.
+        Assert.Equal(7UL, service.Run.Withdrawn[1]);
+        Assert.Single(service.Trace, trace => trace.Operation == GameOperationKind.Withdraw);
+        Assert.Equal(3UL, Ledger(service).DeliveredTo(3));
+        service.RunToTerminal();
+
+        Assert.False(service.Run.Paused, service.LastError);
+        Assert.Equal(40UL, Ledger(service).DeliveredTo(3));
+        Assert.Equal(17UL, service.Run.Withdrawn[1]);
+        Assert.Equal(18UL, service.Run.Withdrawn[2]);
+        Assert.Equal(0UL, service.Characters[1].Total + service.Characters[2].Total);
+        Assert.Equal(40UL, service.Characters[3].Total);
+        Assert.True(service.Trace.Count(trace => trace.Operation == GameOperationKind.Deposit) > 1);
+        Assert.True(service.Trace.Count(trace => trace.Operation == GameOperationKind.Withdraw && trace.CharacterId == 1) > 1);
+        Assert.True(service.Trace.Count(trace => trace.Operation == GameOperationKind.Withdraw && trace.CharacterId == 2) > 1);
+        Assert.Equal(40U, service.Trades.Aggregate(0U, (total, trade) => total + trade.Quantity));
+    }
+
+    [Fact]
+    public void ActualCoordinatorAccountsSavedPickupResultBeforeReinspectingProvider()
+    {
+        var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 0, 20), Sim(2, PeerB));
+        service.StartJob(Saved(Job([1], (2, 10))));
+        service.RunUntil(run => run.Step == CoordinatorStep.Withdraw
+            && run.Pending.SingleOrDefault()?.Response?.Observation is { MovedQuantity: 10 });
+
+        Assert.False(Assert.Single(service.Run!.Pending).InventoryAdjustmentApplied);
+        Assert.Equal(10U, service.Characters[1].Bags);
+        Assert.Equal(0UL, service.Run.Withdrawn.GetValueOrDefault(1UL));
+        service.SimulateCoordinatorRestart();
+        service.Resume();
+
+        Assert.Equal(10UL, service.Run.Withdrawn[1]);
+        Assert.Equal(CoordinatorStep.SelectLeg, service.Run.Step);
+        Assert.Empty(service.Run.Pending);
+        Assert.Equal(0UL, Ledger(service).DeliveredTo(2));
+        service.RunToTerminal();
+
+        Assert.False(service.Run.Paused, service.LastError);
+        Assert.Equal(10UL, Ledger(service).DeliveredTo(2));
+        Assert.Equal(10U, service.Characters[1].RetainerTotal);
+        Assert.Single(service.Trace, trace => trace.Operation == GameOperationKind.Withdraw);
+    }
+
+    [Fact]
+    public void ActualCoordinatorCountsFailedPartialPickupOnceAndTradesItAfterResume()
+    {
+        var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 0, 20), Sim(2, PeerB));
+        service.WithdrawMovementLimit = 4;
+        service.TransformResult = (command, result) =>
+        {
+            if (command.Operation.Kind == GameOperationKind.Withdraw && service.WithdrawMovementLimit.HasValue)
+            {
+                service.WithdrawMovementLimit = null;
+                result.Success = false;
+                result.Error = "Retainer interrupted after verified partial pickup.";
+            }
+            return result;
+        };
+        service.StartJob(Saved(Job([1], (2, 10))));
+        service.RunToTerminal();
+
+        Assert.True(service.Run!.Paused);
+        Assert.Contains("partial pickup", service.LastError);
+        Assert.Equal(4U, service.Characters[1].Bags);
+        Assert.Equal(4UL, service.Run.Withdrawn[1]);
+        Assert.Equal(0UL, Ledger(service).DeliveredTo(2));
+        service.SimulateCoordinatorRestart();
+        service.Resume();
+        Assert.Equal(4UL, service.Run.Withdrawn[1]);
+        service.RunToTerminal();
+
+        Assert.False(service.Run.Paused, service.LastError);
+        Assert.Equal(new uint[] { 4, 6 }, service.Trades.Select(trade => trade.Quantity));
+        Assert.Equal(new uint[] { 10, 6 }, service.Trace.Where(trace => trace.Operation == GameOperationKind.Withdraw).Select(trace => trace.Quantity));
+        Assert.Equal(10UL, service.Run.Withdrawn[1]);
+        Assert.Equal(10U, service.Characters[1].RetainerTotal);
+        Assert.Equal(10UL, Ledger(service).DeliveredTo(2));
+    }
+
+    [Fact]
+    public void ActualCoordinatorNeverReplaysUncertainPickupAfterRepeatedRestarts()
+    {
+        var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 0, 20), Sim(2, PeerB));
+        service.WithdrawMovementLimit = 6;
+        service.TransformResult = (command, result) =>
+        {
+            if (command.Operation.Kind == GameOperationKind.Withdraw)
+            {
+                result.Success = false;
+                result.MovementUncertain = true;
+                result.MovedQuantity = 4; // Six physically moved; only four were verified.
+                result.Error = "Pickup interrupted before its final movement could be verified.";
+            }
+            return result;
+        };
+        service.StartJob(Saved(Job([1], (2, 10))));
+        service.RunToTerminal();
+
+        Assert.True(service.Run!.Paused);
+        Assert.Contains("pickup has an uncertain outcome", service.LastError);
+        var originalCommand = Assert.Single(service.Run.Pending).Command.Id;
+        Assert.Equal(4UL, service.Run.Withdrawn[1]);
+        for (var restart = 0; restart < 2; restart++)
+        {
+            service.SimulateCoordinatorRestart();
+            service.Resume();
+            Assert.Equal(CoordinatorStep.Withdraw, service.Run.Step);
+            Assert.Equal(originalCommand, Assert.Single(service.Run.Pending).Command.Id);
+            service.RunToTerminal();
+
+            Assert.True(service.Run.Paused);
+            Assert.Contains("pickup has an uncertain outcome", service.LastError);
+            Assert.Equal(4UL, service.Run.Withdrawn[1]);
+            Assert.Equal(6U, service.Characters[1].Bags);
+            Assert.Equal(14U, service.Characters[1].RetainerTotal);
+            Assert.Single(service.Trace, trace => trace.Operation == GameOperationKind.Withdraw);
+            Assert.Empty(service.Trades);
+            Assert.Equal(0UL, Ledger(service).DeliveredTo(2));
+        }
     }
 
     [Fact]

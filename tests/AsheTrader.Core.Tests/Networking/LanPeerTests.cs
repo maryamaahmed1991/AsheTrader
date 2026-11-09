@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -58,6 +59,44 @@ public sealed class LanPeerTests
         await worker.ConnectAsync(IPAddress.Loopback, host.BoundPort, key, Guid.NewGuid());
         await Until(() => host.IsConnected);
         Assert.True(worker.IsConnected);
+    }
+
+    [Fact]
+    public async Task LegacyProtocolIsRejectedBeforeSessionAndListenerAcceptsCurrentPeer()
+    {
+        using var host = new LanPeer();
+        var key = LanPeer.GeneratePairingKey();
+        host.StartHost(IPAddress.Loopback, 0, key, Guid.NewGuid());
+        using var legacy = new System.Net.Sockets.TcpClient();
+        await legacy.ConnectAsync(IPAddress.Loopback, host.BoundPort);
+        // A valid version-1 worker hello must be rejected before proofs or application data.
+        var hello = new byte[61];
+        "ASHETRD1"u8.CopyTo(hello);
+        BinaryPrimitives.WriteInt32BigEndian(hello.AsSpan(8), 1);
+        hello[12] = 0;
+        Guid.NewGuid().TryWriteBytes(hello.AsSpan(13, 16));
+        RandomNumberGenerator.Fill(hello.AsSpan(29, 32));
+        await legacy.GetStream().WriteAsync(hello);
+
+        await Until(() => host.Status.Contains("Update Ashe's Trader to the same version on both PCs", StringComparison.Ordinal));
+        Assert.True(host.IsEnabled);
+        Assert.False(host.IsConnected);
+        Assert.Null(host.SessionIdentity);
+        Assert.Null(host.RemotePeerId);
+        Assert.False(host.TryReceive(out _));
+        Assert.Throws<InvalidOperationException>(() => host.Send(Message("roster", "must not send before authentication")));
+
+        using var worker = new LanPeer();
+        var workerId = Guid.NewGuid();
+        await worker.ConnectAsync(IPAddress.Loopback, host.BoundPort, key, workerId);
+        await Until(() => host.IsConnected);
+        Assert.Equal(workerId, host.RemotePeerId);
+        var refresh = Message("roster-request", "{}");
+        host.Send(refresh);
+        Assert.Equal(refresh, await Receive(worker));
+        var response = Message("roster", "current protocol peer");
+        worker.Send(response);
+        Assert.Equal(response, await Receive(host));
     }
 
     [Fact]

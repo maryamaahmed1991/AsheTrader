@@ -34,24 +34,45 @@ public sealed class MainWindow : Window
     {
         ImGui.TextUnformatted("ASHE'S TRADER");
         ImGui.SameLine();
-        ImGui.TextDisabled("v0.2.1 · two-PC test build");
+        ImGui.TextDisabled("v0.2.2 · two-PC test build");
+        ImGui.SameLine();
+        ImGui.BeginDisabled(!plugin.Trader.IsRunning && !plugin.Fuel.Active && !plugin.Workflow.Busy);
+        if (ImGui.Button("STOP ALL", new Vector2(110, 26))) plugin.QueueAction(plugin.StopAll);
+        ImGui.EndDisabled();
         ImGui.Separator();
-        ImGui.TextWrapped(plugin.Trader.Status);
-        ImGui.TextWrapped(plugin.Fuel.Status);
-        if (plugin.Trader.IsRunning || plugin.Fuel.Active || plugin.Workflow.Busy)
-        {
-            if (ImGui.Button("STOP CURRENT RUN", new Vector2(200, 32))) plugin.QueueAction(plugin.StopAll);
-        }
+        if (plugin.Trader.IsRunning) ImGui.TextWrapped(plugin.Trader.Status);
+        if (plugin.Fuel.Active) ImGui.TextWrapped(plugin.Fuel.Status);
         if (!string.IsNullOrEmpty(plugin.SettingsError)) ImGui.TextWrapped(plugin.SettingsError);
         if (!string.IsNullOrEmpty(error)) ImGui.TextWrapped(error);
         if (!ImGui.BeginTabBar("MainTabs")) return;
-        if (ImGui.BeginTabItem("Transfer jobs")) { workflowPanel.Draw(); ImGui.EndTabItem(); }
-        ImGui.BeginDisabled(plugin.Workflow.Busy);
-        if (ImGui.BeginTabItem("Trade lists")) { DrawTradeLists(); ImGui.EndTabItem(); }
-        if (ImGui.BeginTabItem("Characters")) { DrawCharacters(); ImGui.EndTabItem(); }
-        if (ImGui.BeginTabItem("Fuel & houses")) { DrawFuel(); ImGui.EndTabItem(); }
-        if (ImGui.BeginTabItem("Activity")) { DrawActivity(); ImGui.EndTabItem(); }
-        ImGui.EndDisabled();
+        if (ImGui.BeginTabItem("Transfers")) { workflowPanel.Draw(); ImGui.EndTabItem(); }
+        if (ImGui.BeginTabItem("Fuel & houses"))
+        {
+            if (ImGui.BeginChild("FuelPage", new Vector2(0, 0)))
+            {
+                ImGui.BeginDisabled(plugin.Workflow.Busy || plugin.Workflow.Run is { Step: not Workflow.CoordinatorStep.Finished });
+                DrawFuel();
+                ImGui.EndDisabled();
+            }
+            ImGui.EndChild();
+            ImGui.EndTabItem();
+        }
+        if (ImGui.BeginTabItem("Advanced tools"))
+        {
+            if (ImGui.BeginChild("AdvancedPage", new Vector2(0, 0)))
+            {
+                ImGui.TextWrapped("Transfer jobs handle the two-PC workflow automatically. These separate tools are for manually directed trades and character configuration.");
+                var workflowLocked = plugin.Workflow.Busy || plugin.Workflow.Run is { Step: not Workflow.CoordinatorStep.Finished };
+                if (workflowLocked) ImGui.TextWrapped("Manual actions and character settings are locked until the transfer job is resolved and ended.");
+                ImGui.BeginDisabled(workflowLocked);
+                if (ImGui.CollapsingHeader("Manual trade lists")) DrawTradeLists();
+                if (ImGui.CollapsingHeader("Character profiles")) DrawCharacters();
+                ImGui.EndDisabled();
+                if (ImGui.CollapsingHeader("Activity log")) DrawActivity();
+            }
+            ImGui.EndChild();
+            ImGui.EndTabItem();
+        }
         ImGui.EndTabBar();
     }
 
