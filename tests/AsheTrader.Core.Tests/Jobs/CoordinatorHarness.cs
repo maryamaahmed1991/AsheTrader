@@ -326,7 +326,7 @@ public sealed class SimulatedCharacter : SimulatedItemInventory
     public uint BagLimit { get; init; } = 999;
     public uint StorageLimit { get; init; } = 1_000_000;
     public bool ScanVerified { get; set; } = true;
-    public bool CacheAvailable { get; set; }
+    public bool CacheAvailable { get; set; } = true;
     public string Location { get; set; } = "home";
     public Dictionary<ItemKey, SimulatedItemInventory> OtherItems { get; } = [];
     public SimulatedItemInventory Inventory(uint itemId, bool highQuality = false)

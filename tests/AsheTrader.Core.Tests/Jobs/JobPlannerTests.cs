@@ -165,7 +165,7 @@ public sealed class JobPlannerTests
     }
 
     [Fact]
-    public void CachedRecipientCannotSupplyExactRestockBaseline()
+    public void CachedRecipientSuppliesEstimatedRestockBaseline()
     {
         var recipient = Character(2, PeerB, 4, 16);
         recipient.Verification = InventoryVerification.Cached;
@@ -173,9 +173,12 @@ public sealed class JobPlannerTests
         var definition = Job([1], (2, 100));
         definition.QuantityMode = JobQuantityMode.RestockToTotal;
 
-        var error = Assert.Throws<InvalidOperationException>(() => JobPlanner.Plan(definition, [Character(1, PeerA, 100), recipient]));
+        var plan = JobPlanner.Plan(definition, [Character(1, PeerA, 100), recipient]);
 
-        Assert.Contains("live bag and retainer total", error.Message);
+        Assert.True(plan.PlannedFromCache);
+        Assert.Equal(80UL, plan.AllocatedQuantity);
+        Assert.Equal(20UL, plan.ProtectedStock[2]);
+        Assert.False(recipient.IsFullyVerified);
     }
 
     [Fact]

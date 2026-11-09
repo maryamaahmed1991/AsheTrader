@@ -8,19 +8,44 @@ public sealed class AllaganInventoryCacheTests
     private const uint Item = 10155;
 
     [Fact]
-    public void CompleteObservedEmptyBagsAreKnownCachedZero()
+    public void CompleteOwnerTaggedEmptyBagsAreCachedZero()
     {
         var snapshot = Read(Empty());
         Assert.Equal(0U, snapshot.Quantity);
         Assert.Equal(140U * 999, snapshot.Capacity);
     }
 
-    [Fact]
-    public void EntirelySyntheticEmptyGroupIsUnknown()
+    [Theory]
+    [InlineData(false, 140U)]
+    [InlineData(true, 175U)]
+    public void CompleteReturnedEmptyPlaceholdersAreAcceptedAsCacheEstimates(bool retainer, uint slotCount)
     {
-        var rows = Empty();
+        var rows = Empty(retainer);
         foreach (var row in rows) row[23] = 0;
-        Assert.Throws<InvalidDataException>(() => Read(rows));
+        var snapshot = AllaganInventoryCache.Read(Owner, rows, retainer, Item, false, 999);
+        Assert.Equal(0U, snapshot.Quantity);
+        Assert.Equal(slotCount * 999, snapshot.Capacity);
+        Assert.All(snapshot.Items, slot => Assert.Equal(Owner, slot.OwnerId));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PartialEmptyPlaceholderGroupsDoNotInventMissingSlots(bool retainer)
+    {
+        var rows = Empty(retainer);
+        foreach (var row in rows) row[23] = 0;
+        rows.RemoveAt(rows.Count - 1);
+        Assert.Throws<InvalidDataException>(() => AllaganInventoryCache.Read(Owner, rows, retainer, Item, false, 999));
+    }
+
+    [Fact]
+    public void ForeignOwnerEmptySlotsRemainRejected()
+    {
+        var rows = Empty(true);
+        foreach (var row in rows) row[23] = 0;
+        rows[0][23] = Owner + 1;
+        Assert.Throws<InvalidDataException>(() => AllaganInventoryCache.Read(Owner, rows, true, Item, false, 999));
     }
 
     [Fact]
@@ -37,7 +62,7 @@ public sealed class AllaganInventoryCacheTests
     public void MissingOwnerIsNotAnEmptyInventory() => Assert.Throws<InvalidDataException>(() => Read([]));
 
     [Fact]
-    public void MissingPageFallsBackRatherThanInventingFreeSpace() => Assert.Throws<InvalidDataException>(() => Read(Empty().Take(105)));
+    public void MissingPageIsRejectedRatherThanInventingFreeSpace() => Assert.Throws<InvalidDataException>(() => Read(Empty().Take(105)));
 
     [Fact]
     public void RetainersUseFiveSortedPagesOf35()

@@ -47,9 +47,6 @@ public static class JobPlanner
                 throw new InvalidOperationException($"Character {characterId} has an invalid retainer collection.");
             if (stockOwners.Contains(characterId) && !snapshot.IsPlanningReady)
                 throw new InvalidOperationException($"Character {characterId} needs complete cached or verified bag and retainer inventories before planning.");
-            if (definition.QuantityMode == JobQuantityMode.RestockToTotal
-                && definition.Recipients.Any(recipient => recipient.CharacterId == characterId) && !snapshot.IsFullyVerified)
-                throw new InvalidOperationException($"Restock recipient {characterId} needs a live bag and retainer total before planning an exact target.");
             if (!stockOwners.Contains(characterId) && snapshot.Verification != InventoryVerification.Verified)
                 throw new InvalidOperationException($"Relay character {characterId}'s carried inventory must be verified before planning.");
             if (snapshot.Retainers.Any(retainer => retainer.RetainerId == 0)

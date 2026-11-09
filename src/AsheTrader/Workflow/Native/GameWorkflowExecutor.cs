@@ -50,6 +50,7 @@ public sealed class GameWorkflowExecutor
     private int shutdown;
     private long nextDiagnosticAt;
     private string lastDiagnosticState = string.Empty;
+    private readonly BellInteractionGate bellInteraction = new();
 
     public bool IsBusy => Volatile.Read(ref shutdown) == 0 && stage != Stage.Idle;
     public string Status { get; private set; } = "No workflow operation running.";
@@ -78,6 +79,7 @@ public sealed class GameWorkflowExecutor
         ownsLifestream = ownsNavigation = ownsRelog = restoreArSuppression = false;
         relogIdleSince = null;
         inventoryReadFailure = string.Empty;
+        bellInteraction.Reset();
         operationStarted = Environment.TickCount64;
         lastDiagnosticState = string.Empty;
         Trace($"operation begin; kind={command.Kind}; character={command.CharacterId}; name={NativeRetainers.DiagnosticText(command.CharacterName)}; world={NativeRetainers.DiagnosticText(command.World)}; item={command.ItemId}; hq={command.HighQuality}; quantity={command.Quantity}");
@@ -273,6 +275,17 @@ public sealed class GameWorkflowExecutor
                         }
                         Transition(Stage.SelectRetainer, "Selecting the next retainer…", 500);
                     }
+                    else
+                    {
+                        var decision = ObserveBellInteraction(now);
+                        if (decision == BellInteractionDecision.Exhausted)
+                            throw new InvalidOperationException("The summoning bell did not open after three attempts. No retainer or item action was issued. Check that the character can interact with the bell, then resume.");
+                        if (decision == BellInteractionDecision.Interact)
+                        {
+                            Trace($"summoning-bell open was not acknowledged; retrying approach; attempts={bellInteraction.Attempts}");
+                            Transition(Stage.ApproachBell, "Retrying the unopened summoning bell…", 500);
+                        }
+                    }
                     break;
                 case Stage.SelectRetainer:
                     if (retainerIndex >= roster.Count || (operation.Kind != GameOperationKind.ScanRetainers && moved >= operation.Quantity))
@@ -424,6 +437,18 @@ public sealed class GameWorkflowExecutor
     private void ApproachBell()
     {
         if (CurrentWorld != HomeWorld) throw new InvalidOperationException("Retainer access requires the character's home world.");
+        if (NativeRetainers.HasRetainerList)
+        {
+            // A delayed response can arrive while a retry is waiting to approach.
+            Transition(Stage.WaitList, "Reading the opened summoning-bell list…");
+            return;
+        }
+        var now = Environment.TickCount64;
+        if (ObserveBellInteraction(now) != BellInteractionDecision.Interact)
+        {
+            actionAfter = now + 250;
+            return;
+        }
         var bell = NativeRetainers.FindBell() ?? throw new InvalidOperationException("No summoning bell was found at the storage destination.");
         if (DistanceTo(bell.Position) > 3.5f)
         {
@@ -431,9 +456,16 @@ public sealed class GameWorkflowExecutor
             Transition(Stage.WaitBellWalk, "Walking to the summoning bell…", 500);
             return;
         }
+        bellInteraction.RecordAttempt(now);
+        Trace($"summoning-bell open attempt={bellInteraction.Attempts}/{BellInteractionGate.MaximumAttempts}");
         NativeRetainers.InteractBell(bell, Trace);
         Transition(Stage.WaitList, "Waiting for the summoning-bell list…", 1000);
     }
+
+    private BellInteractionDecision ObserveBellInteraction(long now) => bellInteraction.Observe(now,
+        PlayerReady && Plugin.ObjectTable.LocalPlayer?.IsTargetable == true,
+        NativeRetainers.BellInteractionBlocked,
+        Plugin.Condition[ConditionFlag.OccupiedSummoningBell]);
 
     private bool SelectedRetainerIsExpected()
     {
@@ -661,6 +693,8 @@ public sealed class GameWorkflowExecutor
             }
             if (stage == Stage.WaitInventory)
                 Trace($"inventory stability polls={inventoryStableFrames}; lastReadError={inventoryReadFailure}");
+            if (stage is Stage.ApproachBell or Stage.WaitBellWalk or Stage.WaitList)
+                Trace($"bell attempts={bellInteraction.Attempts}; acknowledged={bellInteraction.Acknowledged}; playerTargetable={Plugin.ObjectTable.LocalPlayer?.IsTargetable}; interactionBlocked={NativeRetainers.BellInteractionBlocked}");
         }
         catch (Exception exception) { Trace($"snapshot failed; type={exception.GetType().Name}; message={NativeRetainers.DiagnosticText(exception.Message)}"); }
     }

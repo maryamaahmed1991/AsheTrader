@@ -56,16 +56,18 @@ public sealed class CachedDiscoveryCoordinatorTests
     }
 
     [Fact]
-    public void MissingCacheOnlyScansTheCharacterWithMissingData()
+    public void MissingCachePausesWithoutLoggingInOrOpeningRetainers()
     {
         var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 10, cached: false), Sim(2, PeerB));
         service.ScanJob(Saved(Job([1], (2, 10))));
         service.RunToTerminal();
 
-        Assert.False(service.Run!.Paused, service.LastError);
-        Assert.Equal(1UL, Assert.Single(service.Trace, trace => trace.Operation == GameOperationKind.ScanRetainers).CharacterId);
-        Assert.True(service.Run.Snapshots[1].IsFullyVerified);
-        Assert.Equal(InventoryVerification.Cached, service.Run.Snapshots[2].Verification);
+        Assert.True(service.Run!.Paused);
+        Assert.All(service.Trace, trace => Assert.Equal(GameOperationKind.ReadCachedInventory, trace.Operation));
+        Assert.Empty(service.Run.Snapshots);
+        Assert.Null(service.Run.Journal);
+        Assert.Contains("Character 1@Home World on this PC", service.LastError);
+        Assert.Contains("then Resume", service.LastError);
         Assert.Contains("No complete cached", service.Run.DiscoveryNotes[1]);
     }
 
@@ -107,7 +109,7 @@ public sealed class CachedDiscoveryCoordinatorTests
     }
 
     [Fact]
-    public void IncompleteRetainerCacheFallsBackInsteadOfTreatingMissingItemsAsZero()
+    public void IncompleteRetainerCachePausesInsteadOfScanningOrTreatingMissingItemsAsZero()
     {
         var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, stored: 15), Sim(2, PeerB));
         service.TransformResult = (command, result) =>
@@ -122,9 +124,11 @@ public sealed class CachedDiscoveryCoordinatorTests
         service.StartJob(Saved(Job([1], (2, 15))));
         service.RunToTerminal();
 
-        Assert.False(service.Run!.Paused, service.LastError);
-        Assert.Contains(service.Trace, trace => trace.CharacterId == 1 && trace.Operation == GameOperationKind.ScanRetainers);
-        Assert.Equal(15UL, new TransferJobLedger(service.Run.Journal!).DeliveredTo(2));
+        Assert.True(service.Run!.Paused);
+        Assert.All(service.Trace, trace => Assert.Equal(GameOperationKind.ReadCachedInventory, trace.Operation));
+        Assert.Null(service.Run.Journal);
+        Assert.Empty(service.Trades);
+        Assert.Equal(15UL, service.Characters[1].Total);
     }
 
     [Fact]
@@ -161,7 +165,7 @@ public sealed class CachedDiscoveryCoordinatorTests
     }
 
     [Fact]
-    public void ExactRestockChecksRecipientLiveButReadsProvidersFromCache()
+    public void RestockUsesCachedRecipientTotalWithoutOpeningRetainers()
     {
         var definition = Job([1], (2, 20));
         definition.QuantityMode = JobQuantityMode.RestockToTotal;
@@ -170,10 +174,11 @@ public sealed class CachedDiscoveryCoordinatorTests
         service.RunToTerminal();
 
         Assert.False(service.Run!.Paused, service.LastError);
-        Assert.Equal(2UL, Assert.Single(service.Trace, trace => trace.Operation == GameOperationKind.ScanRetainers).CharacterId);
+        Assert.DoesNotContain(service.Trace, trace => trace.Operation == GameOperationKind.ScanRetainers);
+        Assert.True(service.Run.Journal!.Plan.PlannedFromCache);
         Assert.Equal(20UL, service.Characters[2].Total);
         Assert.Equal(10UL, new TransferJobLedger(service.Run.Journal!).DeliveredTo(2));
-        Assert.Contains("exact restock target", service.Run.DiscoveryNotes[2]);
+        Assert.Contains("no extra login scan", service.Run.DiscoveryNotes[2]);
     }
 
     [Fact]
@@ -190,10 +195,9 @@ public sealed class CachedDiscoveryCoordinatorTests
     }
 
     [Fact]
-    public void ResumeFailedLiveDiscoveryTriesCacheAgainBeforeRelogging()
+    public void ResumeAfterCacheRefreshReadsCacheAgainWithoutRelogging()
     {
         var source = Sim(1, PeerA, 10, cached: false);
-        source.ScanVerified = false;
         var service = new WorkflowService(PeerA, PeerB, source, Sim(2, PeerB));
         service.ScanJob(Saved(Job([1], (2, 10))));
         service.RunToTerminal();
@@ -208,5 +212,65 @@ public sealed class CachedDiscoveryCoordinatorTests
         Assert.False(service.Run!.Paused, service.LastError);
         Assert.Equal(previousLogins, service.Trace.Count(trace => trace.Operation == GameOperationKind.Login));
         Assert.Equal(InventoryVerification.Cached, service.Run.Snapshots[1].Verification);
+    }
+
+    [Fact]
+    public void MissingRemoteCacheNamesThePairedPcAndDoesNotStartGameplay()
+    {
+        var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 10), Sim(2, PeerB, cached: false));
+        service.StartJob(Saved(Job([1], (2, 10))));
+        service.RunToTerminal();
+
+        Assert.True(service.Run!.Paused);
+        Assert.Contains("Character 2@Home World on the paired PC", service.LastError);
+        Assert.All(service.Trace, trace => Assert.Equal(GameOperationKind.ReadCachedInventory, trace.Operation));
+        Assert.Null(service.Run.Journal);
+    }
+
+    [Theory]
+    [InlineData(CoordinatorStep.DiscoverLogin, GameOperationKind.Login)]
+    [InlineData(CoordinatorStep.DiscoverScan, GameOperationKind.ScanRetainers)]
+    public void SavedLegacyDiscoveryResumesFromCacheWithoutReissuingItsPendingCommand(CoordinatorStep legacyStep, GameOperationKind legacyOperation)
+    {
+        var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 3, 7), Sim(2, PeerB));
+        service.ScanJob(Saved(Job([1], (2, 10))));
+        service.Run!.Step = legacyStep;
+        service.Run.Pending.Add(new()
+        {
+            PeerId = PeerA,
+            Command = new() { Id = Guid.NewGuid(), Kind = WorkerCommandKind.Game,
+                Operation = new() { Kind = legacyOperation, CharacterId = 1, ItemId = 10155 } }
+        });
+        service.PauseForTest("Saved discovery from an older build");
+        service.SimulateCoordinatorRestart();
+        service.Resume();
+        service.RunToTerminal();
+
+        Assert.False(service.Run.Paused, service.LastError);
+        Assert.All(service.Trace, trace => Assert.Equal(GameOperationKind.ReadCachedInventory, trace.Operation));
+        Assert.Equal(10UL, service.Run.Snapshots[1].TotalQuantity);
+    }
+
+    [Fact]
+    public void StaleRestockBaselineRemainsAnEstimateWithoutForcingAnotherDiscoveryScan()
+    {
+        var definition = Job([1], (2, 20));
+        definition.QuantityMode = JobQuantityMode.RestockToTotal;
+        var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 20), Sim(2, PeerB, 5, 5));
+        service.TransformResult = (command, result) =>
+        {
+            if (command.Operation.Kind == GameOperationKind.ReadCachedInventory && command.Operation.CharacterId == 2)
+                result.Retainers = [new(1002, "Retainer", 0, false)];
+            return result;
+        };
+        service.StartJob(Saved(definition));
+        service.RunToTerminal();
+
+        Assert.False(service.Run!.Paused, service.LastError);
+        Assert.True(service.Run.Journal!.Plan.PlannedFromCache);
+        Assert.Equal(15UL, new TransferJobLedger(service.Run.Journal).DeliveredTo(2));
+        Assert.Equal(25UL, service.Characters[2].Total);
+        Assert.DoesNotContain(service.Trace, trace => trace.Operation == GameOperationKind.ScanRetainers);
+        Assert.Contains(service.Trace, trace => trace.Operation == GameOperationKind.Inspect && trace.CharacterId == 2);
     }
 }

@@ -370,7 +370,7 @@ public sealed class WorkflowPanel(Plugin plugin)
                 if (ImGui.SmallButton($"Remove##missing{missing}")) { definition.Sources.Remove(missing); changed = true; }
             }
             if (roster.Length == 0) UiTone.Wrapped(UiTone.Warning, "No characters yet. Connect both PCs and refresh characters in step 1.");
-            ImGui.TextWrapped("Providers use carried items first, then collect more from retainers as needed. Allagan Tools supplies cached bag and retainer counts for planning, so characters with complete data skip the discovery visit.");
+            ImGui.TextWrapped("Providers use carried items first, then collect more from retainers as needed. Planning uses Allagan Tools' saved bag and retainer counts without logging in to scan them again.");
         }
 
         if (ImGui.CollapsingHeader("Recipients: fill from top to bottom", ImGuiTreeNodeFlags.DefaultOpen))
@@ -603,8 +603,8 @@ public sealed class WorkflowPanel(Plugin plugin)
         UiTone.Status(dependencySummary);
         ImGui.TextWrapped("Before running: check required plugins on both PCs, pause AutoRetainer multi mode and let its tasks finish. Close existing trade, retainer and confirmation dialogs.");
         ImGui.Separator();
-        UiTone.Wrapped(UiTone.Info, "Inventory lookup uses each PC's Allagan Tools cache first. Complete cached characters need no login or retainer visit. Counts are estimates until checked in game.");
-        ImGui.TextWrapped("Missing cache data falls back to a live visit for that character, which can change characters and travel. Lookup never moves items. Record the meeting point before starting.");
+        UiTone.Wrapped(UiTone.Info, "Inventory lookup reads each PC's Allagan Tools cache. It never changes characters, travels or opens retainers.");
+        ImGui.TextWrapped("Cached counts, including empty slots, are used as reported. If a cache cannot be read, the job pauses with the affected character. Enable or refresh Allagan Tools on that PC, then resume.");
         ImGui.BeginDisabled(scanBlockers.Count > 0);
         if (ImGui.Button("Check inventories only", new Vector2(230, 34)))
         {
@@ -619,7 +619,7 @@ public sealed class WorkflowPanel(Plugin plugin)
             page = 3;
         }
         ImGui.EndDisabled();
-        ImGui.TextWrapped("Start transfer plans from cached counts, then logs in the characters needed for pickups and trades. Actual stock and receiving space are checked before movement. Exact total-restock targets still need a live recipient total. You can pause at any time.");
+        ImGui.TextWrapped("Start transfer logs in only for the planned work. There is no second full inventory scan after login. Restock amounts use cached totals too; actual carried stock and receiving space are checked when moving items. You can pause at any time.");
         if (ImGui.Button("Back: edit setup")) page = 1;
         if (ImGui.CollapsingHeader("Optional: cached inventory preview"))
         {
@@ -639,7 +639,7 @@ public sealed class WorkflowPanel(Plugin plugin)
                 plugin.QueueAction(() => Service.RefreshInventoryHints(item, highQuality));
             }
             ImGui.EndDisabled();
-            ImGui.TextWrapped("This quick preview lists known item holders. Jobs automatically read complete character and retainer caches; missing data triggers a live check for that character.");
+            ImGui.TextWrapped("This quick preview lists known item holders. Jobs use saved character and retainer counts; unavailable cache data pauses planning instead of starting a live scan.");
             DrawHints();
         }
     }
@@ -867,7 +867,7 @@ public sealed class WorkflowPanel(Plugin plugin)
                 var response = pending.Response;
                 var cacheQuery = command.Operation.Kind == GameOperationKind.ReadCachedInventory;
                 UiTone.Wrapped(response == null || cacheQuery ? UiTone.Info : response.Success ? UiTone.Good : UiTone.Error, response == null ? (pending.Ready ? "Receiver armed; awaiting the agreed trade." : "Waiting for the worker's observation.")
-                    : response.Success ? cacheQuery ? response.Observation?.CachedInventoryAvailable == true ? "Cached inventory received; not yet live verified." : "Cache unavailable; preparing a live check." : $"Verified response: {response.Quantity:N0} items." : response.Error);
+                    : response.Success ? cacheQuery ? response.Observation?.CachedInventoryAvailable == true ? "Cached inventory received; used for planning." : "Cache unavailable; refresh Allagan Tools on this character's PC, then resume." : $"Verified response: {response.Quantity:N0} items." : response.Error);
                 if (response?.BeforeQuantity is not null || response?.CurrentQuantity is not null)
                     ImGui.TextUnformatted($"Recorded bag count: {response?.BeforeQuantity?.ToString("N0") ?? "unknown"}; current: {response?.CurrentQuantity?.ToString("N0") ?? "unknown"}");
                 if (command.Kind is WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch)
@@ -959,7 +959,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         ImGui.Spacing();
         if (!ImGui.CollapsingHeader("Recent activity", ImGuiTreeNodeFlags.DefaultOpen)) return;
         if (ImGui.Button("Copy activity for troubleshooting"))
-            ImGui.SetClipboardText($"Ashe's Trader v0.3.4\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
+            ImGui.SetClipboardText($"Ashe's Trader v0.3.5\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
         if (plugin.Activity.Count == 0) ImGui.TextWrapped("Actions and outcomes will appear here when a job runs.");
         foreach (var entry in plugin.Activity.Reverse()) UiTone.Status(entry);
         DrawHints();
@@ -968,7 +968,7 @@ public sealed class WorkflowPanel(Plugin plugin)
     private static string StageName(CoordinatorStep step) => step switch
     {
         CoordinatorStep.DiscoverCache => "Reading cached inventories from the owning PC",
-        CoordinatorStep.DiscoverLogin or CoordinatorStep.DiscoverScan => "Checking inventory that needs a live observation",
+        CoordinatorStep.DiscoverLogin or CoordinatorStep.DiscoverScan => "Resuming legacy discovery through cached inventories",
         CoordinatorStep.Plan or CoordinatorStep.SelectLeg => "Planning the next delivery",
         CoordinatorStep.RelayLogin or CoordinatorStep.RelayInspect => "Choosing an automatic relay and checking its live inventory space",
         CoordinatorStep.LoginSender or CoordinatorStep.LoginReceiver => "Logging in the characters for this delivery",
@@ -1057,6 +1057,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         var ls = plugin.Lifestream.GetStatus();
         var cache = new AsheTrader.Integrations.AllaganToolsClient().IsAvailable;
         var issues = new List<string>();
+        if (!cache) issues.Add("enable Allagan Tools for cached inventory planning");
         if (!ar.Ready) issues.Add("enable AutoRetainer");
         else if (ar.Busy != false || ar.MultiModeEnabled != false) issues.Add("pause AutoRetainer multi mode and wait for its tasks");
         if (!ls.Ready) issues.Add("enable Lifestream");
@@ -1070,7 +1071,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         }
         catch (Exception) { mesh = "vnavmesh unavailable or its IPC is not ready"; issues.Add("enable vnavmesh and wait for navigation to load"); }
         dependencySummary = issues.Count == 0 ? $"Local plugins checked at {DateTime.Now:T}: available and idle. Check the other PC separately." : $"This PC needs attention: {string.Join("; ", issues)}. Checked {DateTime.Now:T}.";
-        dependencySummary += cache ? " Allagan Tools cache is available." : " Allagan Tools is unavailable; inventory discovery will need live visits.";
+        dependencySummary += cache ? " Allagan Tools cache is available." : " Inventory planning waits for Allagan Tools; it does not start live scans.";
         dependencies = $"AutoRetainer: {(ar.Ready ? $"available; busy={ar.Busy?.ToString() ?? "unknown"}, multi mode={ar.MultiModeEnabled?.ToString() ?? "unknown"}" : ar.Error)}. Lifestream: {(ls.Ready ? $"available; busy={ls.Busy?.ToString() ?? "unknown"}" : ls.Error)}. {mesh}. Checked {DateTime.Now:T}.";
     }
 }

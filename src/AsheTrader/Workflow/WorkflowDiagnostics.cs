@@ -31,7 +31,7 @@ public sealed partial class WorkflowService
         catch (Exception ex)
         {
             diagnosticTrace.Add("CaptureError", $"Snapshot unavailable: {ex.GetType().Name}: {ex.Message}");
-            return "Ashe's Trader diagnostics — snapshot capture failed; existing trace preserved.\n" + diagnosticTrace.Export();
+            return "Ashe's Trader diagnostics — snapshot capture failed; recent trace preserved.\n" + diagnosticTrace.ExportRecent(28000);
         }
     }
 
@@ -41,7 +41,7 @@ public sealed partial class WorkflowService
             throw new InvalidOperationException("Capture diagnostics on the active framework thread.");
         executor.CaptureDiagnosticSnapshot("User requested diagnostic report");
         var header = new WorkflowTrace(40, 2000);
-        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 1; timestamps UTC; this PC only");
+        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 2; timestamps UTC; this PC only");
         header.Add("Session", $"Role={(IsHost ? "coordinator" : "worker")}; connected={Connected}; paired={HasAcceptedConnection}; remoteControl={Settings.AllowRemoteControl}; journalHealthy={journalHealthy}");
         header.Add("Game", $"loggedIn={Plugin.ClientState.IsLoggedIn}; characterId={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; language={Plugin.ClientState.ClientLanguage}");
         header.Add("Status", Status);
@@ -65,9 +65,9 @@ public sealed partial class WorkflowService
         catch (Exception ex) { header.Add("Integration", $"Could not read plugin status: {ex.GetType().Name}"); }
         var report = new StringBuilder();
         report.AppendLine("Ashe's Trader diagnostics — includes character/retainer identifiers and menu labels; excludes pairing keys, configuration dumps and chat.");
-        report.AppendLine(header.Export());
-        report.AppendLine("--- Recent trace (up to 500 entries, oldest first) ---");
-        report.AppendLine(diagnosticTrace.Export());
+        report.AppendLine(header.ExportRecent(10000));
+        report.AppendLine("--- Latest trace (28,000-character budget, retained entries oldest first) ---");
+        report.AppendLine(diagnosticTrace.ExportRecent(28000));
         return report.ToString();
     }
 }

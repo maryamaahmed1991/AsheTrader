@@ -2,7 +2,7 @@ using Lumina.Excel.Sheets;
 
 namespace AsheTrader.Integrations;
 
-/// <summary>Optional read-only cache integration. Never treats absence as a verified zero.</summary>
+/// <summary>Read-only planning cache. Returned counts remain estimates; missing data is not a verified zero.</summary>
 public sealed class AllaganToolsClient
 {
     public bool IsAvailable
@@ -18,7 +18,7 @@ public sealed class AllaganToolsClient
     public bool TryGetKnownItemHolders(uint itemId, out IReadOnlyList<ulong> owners, out string error)
     {
         owners = [];
-        if (!IsAvailable) { error = "Allagan Tools is unavailable. This character needs a live inventory scan."; return false; }
+        if (!IsAvailable) { error = "Allagan Tools is unavailable. Enable it on this PC, then retry the cached inventory lookup."; return false; }
         try
         {
             // The returned values count both qualities and may include other inventory categories.
@@ -37,7 +37,7 @@ public sealed class AllaganToolsClient
         out AllaganCharacterInventorySnapshot? snapshot, out string error)
     {
         snapshot = null;
-        if (!IsAvailable) { error = "Allagan Tools is unavailable. This character needs a live inventory scan."; return false; }
+        if (!IsAvailable) { error = "Allagan Tools is unavailable. Enable it on this PC, then resume the job."; return false; }
         try
         {
             var item = Plugin.DataManager.GetExcelSheet<Item>().GetRowOrDefault(itemId);

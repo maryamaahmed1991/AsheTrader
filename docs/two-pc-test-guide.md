@@ -1,16 +1,16 @@
 # Two-PC testing: start here
 
-Test build: **0.3.4.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Protocol 4 requires both PCs to update together.
+Test build: **0.3.5.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 4.
 
 ## Reporting a stuck retainer menu
 
 Detailed logging is automatic in 0.3.3. Reproduce the problem once. On the PC whose character is stuck, leave the game menu open and select **Transfers → 4. Activity → Copy diagnostics**. The copy button is at the top of Activity and works while a job is running. Paste the report into your bug report, then pause the workflow. If both PCs were involved, copy each PC separately and label them coordinator/worker. If the job has already timed out, copy before reloading the plugin; the last failure snapshot remains in the trace.
 
-The report includes build/dependency versions, operation IDs and elapsed stages, expected/active retainer identity, addon visibility/readiness, expected menu text and visible menu entries, selection attempts, and inventory-page load state. It excludes pairing keys, configuration dumps, chat and dialogue bodies, but includes character/retainer identifiers and menu labels. The latest 500 bounded entries are retained for this plugin session; detailed entries also appear in Dalamud's log under `[WorkflowTrace]`. Repeated unchanged waits are sampled every five seconds, while menu details are repeated only when their state changes or a report is requested.
+The report includes build/dependency versions, operation IDs and elapsed stages, expected/active retainer identity, addon visibility/readiness, expected menu text and visible menu entries, selection attempts, and inventory-page load state. It excludes pairing keys, configuration dumps, chat and dialogue bodies, but includes character/retainer identifiers and menu labels. The latest 500 bounded entries are retained for this plugin session; copied reports select the newest complete entries within a 28,000-character trace budget so the failure is preserved when pasted. Detailed entries also appear in Dalamud's log under `[WorkflowTrace]`. Repeated unchanged waits are sampled every five seconds.
 
-Version 0.3.4 fixes the text mismatch confirmed by the diagnostic report: the sheet text omitted the dynamic slot count, while the visible storage option included it. Close the leftover retainer menus, reconnect both PCs and use **Resume / reconcile**. Watch for the storage inventory to open after the greeting. If it pauses again, copy diagnostics before reloading; the report now shows the localized prefix, matching entries and the selected callback index. Post-fix native behavior still needs this live test.
+Version 0.3.4 fixed the storage-label mismatch; the supplied trace confirms a successful ten-retainer scan. The next character's bell attempt occurred immediately after login and received no acknowledgement. Version 0.3.5 guards interaction readiness and retries bell opening a bounded number of times. Actual item movements are not automatically retried by that logic. Close leftover retainer menus, reconnect both PCs and use **Resume / reconcile**. Report the next failure with **Copy diagnostics** before reloading.
 
-This version uses Allagan Tools caches before attempting discovery logins. Enable Allagan Tools on both PCs. A paused pre-plan discovery resumes with a cache lookup; already-issued transfer plans keep their existing amounts and recovery checkpoints.
+This version uses Allagan Tools caches for all planning, including restock totals. It performs no discovery logins or second full scan after login. Complete empty cache groups are accepted as estimates. Unavailable or malformed cache data pauses with an explanation instead of visiting the character. A paused pre-plan discovery resumes with a cache lookup; already-issued transfer plans keep their existing amounts and recovery checkpoints.
 
 If version 0.3.0 stopped with **AutoRetainer cannot relog from the current game state**, update, reconnect both PCs, and use **Resume / reconcile** on the coordinator. That message was caused by checking AutoRetainer's title-screen-only login API while already logged in. Version 0.3.1 uses its supported relog command. Keep AutoRetainer multi mode off and Lifestream idle; the character switch must complete before scanning or trading proceeds.
 
@@ -20,7 +20,7 @@ The automated tests simulate game operations; native travel, retainer menus and 
 
 ### 1. Prepare both PCs
 
-- Enable AutoRetainer, Lifestream, vnavmesh and Allagan Tools. AutoRetainer must know the characters and their retainers belonging to that PC's account. Without Allagan Tools, discovery uses live visits.
+- Enable AutoRetainer, Lifestream, vnavmesh and Allagan Tools. AutoRetainer must know the characters and their retainers belonging to that PC's account. Without Allagan Tools, planning pauses.
 - Turn AutoRetainer **multi mode off**, let its tasks finish, and leave Lifestream idle. Close any trade, retainer or confirmation windows. Keep AutoRetainer itself enabled for character switching.
 - Choose one provider on the controlling PC and one recipient on the other account. Put **3 Ceruleum Tanks in the provider's bags and 17 on one of its retainers**. Leave room for ten tanks in the recipient's bags. Note its starting tank quantity.
 - Both characters must be able to visit the chosen meeting world and access their own retainers on their home worlds. Default storage access uses Lifestream's inn shortcut.
@@ -45,7 +45,7 @@ On the controlling PC, open **2. Set up** and create a job:
 - Provider: only the prepared character with 3 carried and 17 stored tanks.
 - Recipient: only the chosen character on the other PC.
 - Quantity: **10 additional items**, not a final stock target or unlimited remainder.
-- Meeting point: capture an accessible **outdoor position near a main aetheryte**. Set the matching main aetheryte for that territory. Record this before scanning, because scanning travels to storage.
+- Meeting point: capture an accessible **outdoor position near a main aetheryte**. Set the matching main aetheryte for that territory. This is required for the transfer; cache lookup does not travel.
 
 Leave the default inn storage route for this first test. No relay is needed when the provider and recipient are on different PCs. Relay selection is automatic when a same-account allocation needs one.
 
@@ -53,13 +53,13 @@ Leave the default inn storage route for this first test. No relay is needed when
 
 Open **3. Review & run**, resolve the listed setup issues, then choose **Check inventories only**.
 
-Expected with complete caches: no character switching, travel or retainer windows. Activity should show **3 carried + 17 stored** for the provider, marked **Cached**, plus recipient counts. Compare the totals with Allagan Tools. Cached retrieval times must not be labeled as live observation times. If a character or retainer lacks usable data, Activity explains why that character needs a live visit; only that character should log in and scan. No items move during this check.
+Expected: no character switching, travel or retainer windows. Activity should show **3 carried + 17 stored** for the provider, marked **Cached**, plus recipient counts. Compare the totals with Allagan Tools. Cached retrieval times must not be labeled as live observation times. If a character or retainer lacks usable data, Activity names the character and PC; refresh Allagan Tools there, then resume. No automatic live scan or item movement occurs during this check.
 
 If scanning stops, report the character, home/current world, visible menu, and exact activity/log message. Do not repeatedly resume an unexpected native UI state.
 
 ### 5. Run and check the refill
 
-Choose **Start transfer** from **3. Review & run**. The job reads the caches again. With complete data it goes directly to logging in the characters needed for the transfer, checking carried stock and space, and traveling. Exact **Restock to total** jobs additionally check recipients' full live totals; the additional-delivery test below does not need that scan.
+Choose **Start transfer** from **3. Review & run**. The job reads the caches again, then logs in the characters needed for the transfer, checks carried stock and space, and travels. **Restock to total** also uses cached totals without a full recipient scan. If those totals are stale, the final stock can differ from the target; confirmed delivery counts remain based on actual trades.
 
 Expected sequence:
 
@@ -75,7 +75,7 @@ Pickup progress is separate from delivery progress: withdrawing seven must not i
 ### Multiple items and automatic relays
 
 1. In the same saved job, add a second, different tradable item. Select that line and set its providers, recipients and a small additional amount, such as 2. Review must show both items and their separate amounts. All lines share the meeting point.
-2. Start the job and confirm the first item finishes before the second begins. Each item gets a new cache lookup, with live fallback only where needed. Activity must retain the first item's delivered total while showing the second's progress. An inventory-only run should check both items without moving either. Then test a recipient whose bags fill from the first item: received first-item stock should be stored to make room for the second, while the first item's delivery total stays unchanged.
+2. Start the job and confirm the first item finishes before the second begins. Each item gets a new cache lookup, without live discovery visits. Activity must retain the first item's delivered total while showing the second's progress. An inventory-only run should check both items without moving either. Then test a recipient whose bags fill from the first item: received first-item stock should be stored to make room for the second, while the first item's delivery total stays unchanged.
 3. Next, use a provider and recipient on the same PC/account. Refresh AutoRetainer characters on both PCs. Do not select a relay manually: the other PC's registered alt with the highest cached free-slot count should be tried automatically. Check the chosen name and live capacity in Activity.
 4. Confirm the route is provider → automatically chosen alt → final recipient. Relay cargo must not appear as final delivery. Cached providers and recipients skip discovery retainer scans; a relay-only alt needs a live bag-capacity check.
 5. After normal selection passes, test stale hints deliberately: give the highest-ranked alt no capacity for the item while AutoRetainer still reports space, with another eligible alt available. Expect a live check followed by automatic fallback to the next candidate before trading. If every candidate is full, expect a pause; free space, refresh character lists and resume.

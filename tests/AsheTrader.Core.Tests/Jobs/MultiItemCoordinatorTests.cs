@@ -62,7 +62,7 @@ public sealed class MultiItemCoordinatorTests
     }
 
     [Fact]
-    public void ScanOnlyVisitsAllItemInventoriesAndMovesNothing()
+    public void InventoryPreviewReadsAllItemCachesWithoutLoggingInOrMovingAnything()
     {
         var provider = Sim(1, PeerA, 3, 17);
         provider.Inventory(200).Retainers[1001] = 6;
@@ -75,8 +75,8 @@ public sealed class MultiItemCoordinatorTests
         Assert.All(service.Run.CompletedItems, item => { Assert.True(item.DiscoveryOnly); Assert.Null(item.Journal); Assert.Equal(2, item.Snapshots.Count); });
         Assert.Equal(20UL, service.Run.CompletedItems[0].Snapshots[1].TotalQuantity);
         Assert.Equal(6UL, service.Run.CompletedItems[1].Snapshots[1].TotalQuantity);
-        Assert.Equal(4, service.Trace.Count(command => command.Operation == GameOperationKind.ScanRetainers));
-        Assert.DoesNotContain(service.Trace, command => command.Operation is GameOperationKind.Withdraw or GameOperationKind.Deposit);
+        Assert.Equal(4, service.Trace.Count);
+        Assert.All(service.Trace, command => Assert.Equal(GameOperationKind.ReadCachedInventory, command.Operation));
         Assert.Empty(service.Trades);
         Assert.Equal(20UL, provider.Total);
         Assert.Equal(6UL, provider.Inventory(200).Total);

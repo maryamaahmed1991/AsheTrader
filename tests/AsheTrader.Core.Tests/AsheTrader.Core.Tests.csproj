@@ -26,5 +26,6 @@
     <Compile Include="../../src/AsheTrader/Workflow/WorkflowModels.cs" Link="Production/WorkflowModels.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/GameOperations.cs" Link="Production/GameOperations.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/RetainerMenuMatcher.cs" Link="Production/RetainerMenuMatcher.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/Native/BellInteractionGate.cs" Link="Production/BellInteractionGate.cs" />
   </ItemGroup>
 </Project>

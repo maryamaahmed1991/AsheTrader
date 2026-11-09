@@ -6,6 +6,37 @@ namespace AsheTrader.Core.Tests.Diagnostics;
 public sealed class WorkflowTraceTests
 {
     [Fact]
+    public void PasteBudgetKeepsNewestFailureAndCompleteChronologicalLines()
+    {
+        var trace = new WorkflowTrace();
+        for (var index = 0; index < 50; index++) trace.Add("native", $"earlier step {index}: " + new string('x', 100));
+        trace.Add("native", "bell interaction dispatched");
+        trace.Add("native", "bell failed to open");
+        var report = trace.ExportRecent(500);
+        Assert.InRange(report.Length, 1, 500);
+        Assert.Contains("earlier trace entries omitted", report);
+        Assert.DoesNotContain("earlier step 0:", report);
+        Assert.Contains("bell interaction dispatched", report);
+        Assert.EndsWith("bell failed to open", report);
+        Assert.True(report.IndexOf("bell interaction dispatched", StringComparison.Ordinal) < report.IndexOf("bell failed to open", StringComparison.Ordinal));
+        Assert.All(report.Split('\n').Skip(1), line => Assert.StartsWith("20", line));
+    }
+
+    [Fact]
+    public void UntrimmedRecentExportMatchesFullTraceAndDoesNotMutateIt()
+    {
+        var trace = new WorkflowTrace();
+        Assert.Equal(string.Empty, trace.ExportRecent(2000));
+        trace.Add("native", "one");
+        trace.Add("native", "two");
+        var full = trace.Export();
+        Assert.Equal(full, trace.ExportRecent(2000));
+        _ = trace.ExportRecent(128);
+        Assert.Equal(full, trace.Export());
+        Assert.Throws<ArgumentOutOfRangeException>(() => trace.ExportRecent(127));
+    }
+
+    [Fact]
     public void BoundedTraceKeepsRecentStepsAndImmutableExport()
     {
         var trace = new WorkflowTrace(capacity: 3);

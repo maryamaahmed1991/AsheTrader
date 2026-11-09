@@ -89,7 +89,7 @@ public sealed partial class WorkflowService
             run.Step = CoordinatorStep.Finished;
             run.Paused = run.HasShortages;
             run.Status = run.DiscoveryOnly
-                ? "Discovery complete. All selected items were read from complete caches or live scans; no items were moved."
+                ? "Discovery complete. All selected items were read from Allagan Tools caches; no characters were logged in and no items were moved."
                 : run.HasShortages
                     ? "All job items processed. Some requested quantities remain short; see each item's unmet targets."
                     : "Transfer job complete: all items' planned final deliveries are verified.";
@@ -340,8 +340,7 @@ public sealed partial class WorkflowService
         Run.Status = step switch
         {
             CoordinatorStep.DiscoverCache => $"Discovery {Run.DiscoveryIndex + 1}/{Run.DiscoveryOrder.Count}: reading Allagan Tools cached bags and retainers…",
-            CoordinatorStep.DiscoverLogin => $"Discovery {Run.DiscoveryIndex + 1}/{Run.DiscoveryOrder.Count}: switching character for a live inventory check…",
-            CoordinatorStep.DiscoverScan => "Inspecting carried inventory and every retainer…",
+            CoordinatorStep.DiscoverLogin or CoordinatorStep.DiscoverScan => "Replacing saved live discovery with an Allagan Tools cache lookup…",
             CoordinatorStep.Plan => "Allocating source stock in recipient priority order…",
             CoordinatorStep.Withdraw => $"Collecting up to {Math.Min(Run.DesiredQuantity, Run.SenderBagCapacity):N0} items from provider retainers; trading resumes after this load…",
             CoordinatorStep.Deposit => "Receiver is returning home and depositing job items into retainers…",
@@ -364,6 +363,14 @@ public sealed partial class WorkflowService
     {
         if (!host || !Connected || RemoteRoster == null) { Pause("Both paired clients must be connected."); return; }
         var run = Run!;
+        if (run.Journal == null && run.Step is CoordinatorStep.DiscoverLogin or CoordinatorStep.DiscoverScan)
+        {
+            // Older journals may have stopped in automatic live discovery. These commands
+            // do not move items; do not redispatch them or require a character login.
+            run.Pending.Clear();
+            SetStep(CoordinatorStep.DiscoverCache);
+            return;
+        }
         if (run.Pending.Count > 0 && Environment.TickCount64 >= resendAt)
         {
             resendAt = Environment.TickCount64 + 5000;
@@ -375,64 +382,38 @@ public sealed partial class WorkflowService
             }
         }
         if (AdvanceAutomaticRelayPreparation()) return;
-        if (run.Step is CoordinatorStep.DiscoverCache or CoordinatorStep.DiscoverLogin or CoordinatorStep.DiscoverScan)
+        if (run.Step == CoordinatorStep.DiscoverCache)
         {
             if (run.DiscoveryIndex >= run.DiscoveryOrder.Count) { SetStep(CoordinatorStep.Plan); return; }
             var id = run.DiscoveryOrder[run.DiscoveryIndex];
-            if (run.Step == CoordinatorStep.DiscoverCache)
+            Perform(id, GameOperationKind.ReadCachedInventory, CoordinatorStep.DiscoverCache, result =>
             {
-                if (!run.DiscoveryOnly && run.ActiveDefinition.QuantityMode == JobQuantityMode.RestockToTotal
-                    && run.ActiveDefinition.Recipients.Any(recipient => recipient.CharacterId == id))
-                {
-                    run.DiscoveryNotes[id] = "Checking the exact restock target: this recipient needs a current bag and retainer total.";
-                    SetStep(CoordinatorStep.DiscoverLogin);
-                    return;
-                }
-                string? fallback = null;
-                if (Perform(id, GameOperationKind.ReadCachedInventory, CoordinatorStep.DiscoverCache, result =>
-                {
-                    if (!result.CachedInventoryAvailable || !result.RetainerRosterKnown || result.CacheRetrievedAt == null
-                        || result.StackSize == 0 || result.Retainers.Any(retainer => retainer.RetainerId == 0)
-                        || result.Retainers.Select(retainer => retainer.RetainerId).Distinct().Count() != result.Retainers.Count)
-                    {
-                        fallback = string.IsNullOrWhiteSpace(result.Error) ? "The bag or retainer cache is incomplete." : result.Error;
-                        return;
-                    }
-                    var entry = Character(id);
-                    run.Snapshots[id] = new()
-                    {
-                        CharacterId = id, PeerId = entry.PeerId, Name = entry.Character.Name, World = entry.Character.World,
-                        BagQuantity = result.BagQuantity, BagCapacity = result.BagCapacity,
-                        Verification = InventoryVerification.Cached, HasCompleteCachedInventory = true,
-                        RetrievedAt = result.CacheRetrievedAt,
-                        Retainers = result.Retainers.Select(retainer => new RetainerStock
-                        {
-                            RetainerId = retainer.RetainerId, Name = retainer.Name, Quantity = retainer.Quantity,
-                            Verification = InventoryVerification.Cached,
-                        }).ToList(),
-                    };
-                    run.DiscoveryNotes[id] = "Allagan Tools cache: complete recorded bags and retainers; quantities will be checked during pickup and trading.";
-                    run.DiscoveryIndex++;
-                }) && fallback != null)
-                {
-                    run.DiscoveryNotes[id] = fallback;
-                    SetStep(CoordinatorStep.DiscoverLogin);
-                }
-            }
-            else if (run.Step == CoordinatorStep.DiscoverLogin) Perform(id, GameOperationKind.Login, CoordinatorStep.DiscoverScan);
-            else Perform(id, GameOperationKind.ScanRetainers, CoordinatorStep.DiscoverCache, result =>
-            {
-                if (!result.RetainerRosterVerified || result.Retainers.Any(x => !x.Verified))
-                    throw new InvalidOperationException("This character's retainer discovery is incomplete.");
                 var entry = Character(id);
+                if (!result.CachedInventoryAvailable || !result.RetainerRosterKnown || result.CacheRetrievedAt == null
+                    || result.StackSize == 0 || result.Retainers.Any(retainer => retainer.RetainerId == 0)
+                    || result.Retainers.Select(retainer => retainer.RetainerId).Distinct().Count() != result.Retainers.Count)
+                {
+                    var reason = string.IsNullOrWhiteSpace(result.Error) ? "The bag or retainer cache is incomplete." : result.Error;
+                    var pc = entry.PeerId == Settings.PeerId ? "this PC" : "the paired PC";
+                    run.DiscoveryNotes[id] = $"Allagan Tools cache unavailable for {entry.Character.Name}@{entry.Character.World} on {pc}. {reason}";
+                    throw new InvalidOperationException($"{run.DiscoveryNotes[id]} Enable Allagan Tools and refresh its inventory data on that PC, then Resume. Automatic login and retainer scans are disabled.");
+                }
                 run.Snapshots[id] = new()
                 {
                     CharacterId = id, PeerId = entry.PeerId, Name = entry.Character.Name, World = entry.Character.World,
                     BagQuantity = result.BagQuantity, BagCapacity = result.BagCapacity,
-                    Verification = InventoryVerification.Verified, RetainerRosterVerified = true, ObservedAt = result.ObservedAt,
-                    Retainers = result.Retainers.Select(x => new RetainerStock { RetainerId = x.RetainerId, Name = x.Name,
-                        Quantity = x.Quantity, Verification = InventoryVerification.Verified, ObservedAt = result.ObservedAt }).ToList()
+                    Verification = InventoryVerification.Cached, HasCompleteCachedInventory = true,
+                    RetrievedAt = result.CacheRetrievedAt,
+                    Retainers = result.Retainers.Select(retainer => new RetainerStock
+                    {
+                        RetainerId = retainer.RetainerId, Name = retainer.Name, Quantity = retainer.Quantity,
+                        Verification = InventoryVerification.Cached,
+                    }).ToList(),
                 };
+                run.DiscoveryNotes[id] = run.ActiveDefinition.QuantityMode == JobQuantityMode.RestockToTotal
+                    && run.ActiveDefinition.Recipients.Any(recipient => recipient.CharacterId == id)
+                    ? "Allagan Tools cache: restock amount uses the recorded bag and retainer total; no extra login scan."
+                    : "Allagan Tools cache: recorded bags and retainers; quantities will be checked during pickup and trading.";
                 run.DiscoveryIndex++;
             });
             return;

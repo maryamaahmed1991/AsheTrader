@@ -14,7 +14,10 @@ public sealed record AllaganCharacterInventorySnapshot(
 
 internal sealed record CachedContainerInventory(uint Quantity, uint Capacity, IReadOnlyList<CachedInventorySlot> Items);
 
-/// <summary>Decodes Allagan's numeric IPC records without treating missing pages as empty pages.</summary>
+/// <summary>
+/// Uses complete owner-scoped Allagan IPC groups as cached planning estimates, including
+/// returned empty placeholders. Missing pages are rejected; cache contents are not live verification.
+/// </summary>
 internal static class AllaganInventoryCache
 {
     // CriticalCommonLib InventoryItem.ToNumeric: sorted container/slot are 20/22 and owner is 23.
@@ -28,7 +31,6 @@ internal static class AllaganInventoryCache
         var firstContainer = retainer ? 10000U : 0U;
         var pages = retainer ? 5U : 4U;
         var slots = new Dictionary<(uint Container, uint Slot), CachedInventorySlot>();
-        var observedBagGroup = false;
         ulong quantity = 0, capacity = 0;
         foreach (var record in records)
         {
@@ -37,10 +39,11 @@ internal static class AllaganInventoryCache
             if (record[22] >= 35 || record[2] > uint.MaxValue || record[3] > uint.MaxValue)
                 throw new InvalidDataException("Allagan Tools returned an invalid cached bag slot.");
             var empty = record[2] == 0 && record[3] == 0;
-            // FillSlots creates owner=0 placeholders on cache load. They are valid only when empty.
+            // GetCharacterItems is scoped to ownerId. FillSlots creates owner=0 empty placeholders
+            // on cache load, and an unchanged live refresh can retain those placeholder records.
+            // Trust these returned empty slots as cache estimates, never as proof of live observation.
             if (record[23] != ownerId && !(record[23] == 0 && empty))
                 throw new InvalidDataException("Allagan Tools returned inventory belonging to a different owner.");
-            observedBagGroup |= record[23] == ownerId;
             if ((record[2] == 0) != (record[3] == 0)) throw new InvalidDataException("Allagan Tools returned an inconsistent cached item quantity.");
             var container = (uint)record[20]; var slot = (uint)record[22];
             var cached = new CachedInventorySlot(ownerId, container, slot, (uint)record[2], (uint)record[3], record[6] == 1);
@@ -51,10 +54,10 @@ internal static class AllaganInventoryCache
             quantity += record[3];
             if (record[4] == 0 && record[19] == 0) capacity += stackSize - record[3];
         }
-        // FillSlots can synthesize an entire never-observed category. The monitor loads each bag
-        // group atomically; require an owner-tagged witness in that group as well as every slot.
-        // An entirely empty saved group has no witness and deliberately falls back to a live scan.
-        if (!observedBagGroup || slots.Count != pages * 35)
+        // Allagan does not expose category-observation history through this IPC. A complete
+        // returned group is its planning baseline, even when all entries are empty placeholders.
+        // Do not manufacture slots for an absent owner, page or incomplete response.
+        if (slots.Count != pages * 35)
             throw new InvalidDataException(retainer
                 ? "Allagan Tools has no complete cached inventory for this retainer."
                 : "Allagan Tools has no complete cached carried inventory for this character.");

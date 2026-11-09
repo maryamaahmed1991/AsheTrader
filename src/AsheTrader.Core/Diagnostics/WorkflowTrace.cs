@@ -40,6 +40,30 @@ public sealed class WorkflowTrace
         lock (gate) return string.Join('\n', entries);
     }
 
+    /// <summary>Preserves the newest complete entries within a paste-friendly character budget.</summary>
+    public string ExportRecent(int maxCharacters)
+    {
+        if (maxCharacters < 128) throw new ArgumentOutOfRangeException(nameof(maxCharacters));
+        lock (gate)
+        {
+            var snapshot = entries.ToArray();
+            var start = snapshot.Length;
+            var length = 0;
+            while (start > 0)
+            {
+                var nextLength = length + snapshot[start - 1].Length + (start < snapshot.Length ? 1 : 0);
+                var noticeLength = start > 1 ? OmittedNotice(start - 1).Length + 1 : 0;
+                if (nextLength + noticeLength > maxCharacters) break;
+                start--;
+                length = nextLength;
+            }
+            var recent = string.Join('\n', snapshot.AsSpan(start).ToArray());
+            return start == 0 ? recent : OmittedNotice(start) + (recent.Length > 0 ? "\n" + recent : "");
+        }
+    }
+
+    private static string OmittedNotice(int count) => $"--- {count} earlier trace entries omitted; full detail remains in the Dalamud log. ---";
+
     private static string SingleLine(string value, int limit)
     {
         var output = new StringBuilder(Math.Min(limit, value.Length));

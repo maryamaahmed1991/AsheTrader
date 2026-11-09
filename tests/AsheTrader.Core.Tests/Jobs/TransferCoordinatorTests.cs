@@ -33,7 +33,11 @@ public sealed class TransferCoordinatorTests
         Assert.False(service.Run!.Paused, service.LastError);
         Assert.Equal(TransferJobState.Completed, service.Run.Journal!.State);
         Assert.Equal(4, service.Run.Snapshots.Count);
-        Assert.All(service.Run.Snapshots.Values, snapshot => Assert.True(snapshot.IsFullyVerified));
+        Assert.All(service.Run.Snapshots.Values, snapshot =>
+        {
+            Assert.True(snapshot.IsPlanningReady);
+            Assert.Equal(InventoryVerification.Cached, snapshot.Verification);
+        });
         Assert.Equal(700UL, Ledger(service).DeliveredTo(3));
         Assert.Equal(800UL, Ledger(service).DeliveredTo(4));
         Assert.Equal(720UL, service.Characters[3].Total); // The recipient's baseline stock remains protected.
@@ -163,15 +167,16 @@ public sealed class TransferCoordinatorTests
     }
 
     [Fact]
-    public void ActualCoordinatorRejectsUnverifiedRetainerDiscovery()
+    public void ActualCoordinatorRejectsUnavailableRetainerCache()
     {
         var source = Sim(1, PeerA, 10, 100);
-        source.ScanVerified = false;
+        source.CacheAvailable = false;
         var service = new WorkflowService(PeerA, PeerB, source, Sim(2, PeerB));
         service.StartJob(Saved(Job([1], (2, null))));
         service.RunToTerminal();
         Assert.True(service.Run!.Paused);
-        Assert.Contains("incomplete", service.LastError);
+        Assert.Contains("cache unavailable", service.LastError);
+        Assert.DoesNotContain(service.Trace, trace => trace.Operation is GameOperationKind.Login or GameOperationKind.ScanRetainers);
         Assert.Empty(service.Trades);
         Assert.Null(service.Run.Journal);
     }
@@ -182,7 +187,7 @@ public sealed class TransferCoordinatorTests
         var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 10), Sim(2, PeerB));
         service.TransformResult = (command, result) =>
         {
-            if (command.Operation.Kind == GameOperationKind.ScanRetainers) result.CharacterId = 999;
+            if (command.Operation.Kind == GameOperationKind.ReadCachedInventory) result.CharacterId = 999;
             return result;
         };
         service.StartJob(Saved(Job([1], (2, null))));

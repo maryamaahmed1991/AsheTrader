@@ -38,6 +38,13 @@ internal static unsafe class NativeRetainers
     public static bool HasRetainerMenu => Ready("SelectString") != null;
     public static bool HasRetainerInventory => AgentRetainer.Instance() != null && AgentRetainer.Instance()->IsAgentActive();
     public static bool HasVisibleRetainerInventory => HasRetainerInventory && (Ready("InventoryRetainer") != null || Ready("InventoryRetainerLarge") != null);
+    public static bool BellInteractionBlocked => HasNumeric || HasUnrelatedModal || HasRetainerList || HasRetainerMenu
+        || HasRetainerInventory || Ready("Talk") != null
+        || Plugin.Condition[ConditionFlag.Occupied] || Plugin.Condition[ConditionFlag.OccupiedInEvent]
+        || Plugin.Condition[ConditionFlag.OccupiedInQuestEvent] || Plugin.Condition[ConditionFlag.OccupiedInCutSceneEvent]
+        || Plugin.Condition[ConditionFlag.Casting] || Plugin.Condition[ConditionFlag.Jumping]
+        || Plugin.Condition[ConditionFlag.LoggingOut] || Plugin.Condition[ConditionFlag.WatchingCutscene]
+        || ActionManager.Instance() == null || ActionManager.Instance()->AnimationLock > 0;
 
     public static bool HasExpectedRetainerTalk(RetainerIdentity expected)
     {
@@ -391,11 +398,15 @@ internal static unsafe class NativeRetainers
 
     public static void InteractBell(IGameObject bell, Action<string>? trace = null)
     {
+        if (BellInteractionBlocked || Plugin.Condition[ConditionFlag.OccupiedSummoningBell])
+            throw new InvalidOperationException("The game is occupied and cannot open a new summoning-bell interaction.");
         if (!bell.IsTargetable || Plugin.ObjectTable.LocalPlayer == null || Vector3.Distance(bell.Position, Plugin.ObjectTable.LocalPlayer.Position) > 4)
             throw new InvalidOperationException("Summoning bell is not within interaction range.");
+        var targetSystem = TargetSystem.Instance();
+        if (targetSystem == null) throw new InvalidOperationException("The game's target system is not ready.");
         Plugin.TargetManager.Target = bell;
         Trace(trace, $"action summoning-bell interaction begin; object={bell.GameObjectId}; distance={Vector3.Distance(bell.Position, Plugin.ObjectTable.LocalPlayer.Position):F2}");
-        TargetSystem.Instance()->InteractWithObject((NativeObject*)bell.Address, false);
-        Trace(trace, "action summoning-bell interaction dispatched; awaiting RetainerList");
+        var result = targetSystem->InteractWithObject((NativeObject*)bell.Address, false);
+        Trace(trace, $"action summoning-bell interaction dispatched; nativeReturn={result}; awaiting RetainerList");
     }
 }
