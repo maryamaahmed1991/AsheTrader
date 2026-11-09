@@ -309,7 +309,7 @@ internal static unsafe class NativeRetainers
     public static bool BeginMove(ulong retainerId, NativeBagSlot slot, uint quantity, bool deposit, Action<string>? trace = null)
     {
         VerifyRetainer(retainerId);
-        if (!HasRetainerInventory || HasNumeric || HasUnrelatedModal) throw new InvalidOperationException("Another window prevents the retainer item movement.");
+        if (!HasVisibleRetainerInventory || HasNumeric || HasUnrelatedModal) throw new InvalidOperationException("The retainer inventory is not ready or another window prevents item movement.");
         var manager = InventoryManager.Instance();
         var source = manager->GetInventorySlot(slot.Container, slot.Slot);
         if (source == null || source->ItemId != slot.ItemId || source->IsHighQuality() != slot.HighQuality || source->Quantity != slot.Quantity
@@ -317,6 +317,8 @@ internal static unsafe class NativeRetainers
             || !slot.Movable || quantity == 0 || quantity > slot.Quantity || quantity > int.MaxValue)
             throw new InvalidOperationException("The source slot changed before the retainer movement.");
         var partial = quantity < slot.Quantity;
+        // The same native retrieve/retrieve-quantity commands used by reverse entrust,
+        // exposed through FFXIVClientStructs rather than a separate signature hook.
         var callback = deposit ? (partial ? 4UL : 1UL) : (partial ? 3UL : 0UL);
         Trace(trace, $"action retainer move begin; deposit={deposit}; retainer={retainerId}; item={slot.ItemId}; hq={slot.HighQuality}; source={slot.Container}/{slot.Slot}; sourceQuantity={slot.Quantity}; requested={quantity}; callback={callback}");
         AgentRetainer.Instance()->HandleCallback((uint)slot.Slot, slot.Container, default, callback);

@@ -1,11 +1,12 @@
 # Development build validation
 
-Build: 0.3.6.0, 8 November 2026. Target: Dalamud API 15, .NET 10, Windows.
+Build: 0.3.7.0, 9 November 2026. Target: Dalamud API 15, .NET 10, Windows.
 
 ## Completed checks
 
 - `scripts/Build.ps1` completed successfully, including restore, tests, Release compilation, and packaging.
-- 300 automated tests passed, with zero failures and zero skipped tests.
+- 311 automated tests passed, with zero failures and zero skipped tests.
+- Eleven withdrawal-confirmation regressions cover one dispatch interval, delayed source/destination agreement, transient matches, exact quantities, quality and unrelated-item changes, timeout without retry, immutable starting snapshots, large totals and cutscene timer suspension. AutoRetainer reverse entrust's native commands and change-driven pacing were checked against upstream source. Our native commands already matched; withdrawals now use a single 350 ms minimum interval instead of stacked 500/300/300 ms waits. Partial quantity dialogs are processed when ready. Initial inventory pages must be loaded and stable; menu transitions poll readiness. Exact counts on both inventories remain required. This timing policy is tested separately from the live native UI; actual withdrawal throughput requires the user's test.
 - The plugin Release build produced zero warnings and zero errors against the local Dalamud development libraries.
 - Ten relay-batching cases exercise production scheduling: multiple-provider collection before destination login, capacity-limited cycles, reload during collection/delivery, unexpected fullness, recipient priority, no unfunded logins, bounded retainer pickups, lost trade replies and legacy journals. Ledger allocations and quantities remain fixed; capacity observations are replay-safe and relay cargo is never deposited to make space.
 - Eight source/relay-ranking regressions cover direct routes, home-world locality, fewer funded providers, required-load estimates, deterministic ranking, full-selected-relay pause and unfunded routes. Five meeting-world tests cover distinct funded participants, relay inclusion, unused-character exclusion, tie/empty-plan behavior and candidate boundaries. World choices are estimates based on recorded home worlds, restricted to the captured data center and pinned once planned.

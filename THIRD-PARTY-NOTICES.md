@@ -1,6 +1,6 @@
 # Third-party references and licensing
 
-Ashe's Trader is distributed under GNU AGPL-3.0; see LICENSE.md. The plugin layout follows goatcorp's SamplePlugin template, and game-facing trade/fuel techniques were checked against the AGPL-licensed Henchman and AutoRetainer projects. Their projects and contributors retain their respective copyrights.
+Ashe's Trader is distributed under GNU AGPL-3.0; see LICENSE.md. The plugin layout follows goatcorp's SamplePlugin template, and game-facing techniques were checked against Henchman (AGPL) and AutoRetainer (BSD 3-Clause). Their projects and contributors retain their respective copyrights. Withdrawal pacing is independently implemented after comparing AutoRetainer's reverse entrust behavior; no reverse entrust source text is incorporated.
 
 - goatcorp/SamplePlugin, reference b8477daaa678a5dd72cdcd4a32bc249d3c23a598: https://github.com/goatcorp/SamplePlugin
 - Knightmore/Henchman, reference c5fa50e60d6e86acbac70ca255b29956fd9275ea: https://github.com/Knightmore/Henchman

@@ -965,7 +965,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         ImGui.Spacing();
         if (!ImGui.CollapsingHeader("Recent activity", ImGuiTreeNodeFlags.DefaultOpen)) return;
         if (ImGui.Button("Copy activity for troubleshooting"))
-            ImGui.SetClipboardText($"Ashe's Trader v0.3.6\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
+            ImGui.SetClipboardText($"Ashe's Trader v0.3.7\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
         if (plugin.Activity.Count == 0) ImGui.TextWrapped("Actions and outcomes will appear here when a job runs.");
         foreach (var entry in plugin.Activity.Reverse()) UiTone.Status(entry);
         DrawHints();

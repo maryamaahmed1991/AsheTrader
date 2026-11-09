@@ -1,6 +1,12 @@
 # Two-PC testing: start here
 
-Test build: **0.3.6.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 4.
+Test build: **0.3.7.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 4.
+
+## Test faster retainer withdrawals
+
+After updating both PCs, use one provider with empty carried stock and several full stacks of the chosen item on its retainers. Request enough to collect those stacks plus part of another stack, while leaving sufficient bag space. For Ceruleum Tanks, for example, put three full 999 stacks on a retainer and request 2,100. Confirm two full stacks and exactly 102 from the third are withdrawn, leaving 897 behind; then let the job trade the 2,100. If multiple providers are selected, ensure this test provider is the one allocated that quantity.
+
+Full stacks should advance promptly after the game acknowledges them; only the partial stack should need a quantity dialog. The single minimum interval is 350 ms; network/server delay can take longer. Watch one transition between retainers too. Inn cutscenes must still play normally. If it stalls or a quantity is unexpected, pause and use **Transfers → 4. Activity → Copy diagnostics** on the affected PC before reloading. The trace now includes `withdrawal confirmed`, quantities and elapsed milliseconds per stack. Do not retry an uncertain movement without reconciling the inventories.
 
 ## Test relay collection and cutscenes
 

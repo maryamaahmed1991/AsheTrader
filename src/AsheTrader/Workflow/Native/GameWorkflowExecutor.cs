@@ -47,6 +47,7 @@ public sealed class GameWorkflowExecutor
     private int inventoryStableFrames;
     private string inventoryFingerprint = string.Empty;
     private int moveStableFrames;
+    private RetainerTransferConfirmation? withdrawalConfirmation;
     private int shutdown;
     private long nextDiagnosticAt;
     private string lastDiagnosticState = string.Empty;
@@ -79,6 +80,7 @@ public sealed class GameWorkflowExecutor
         };
         roster = []; observed.Clear(); rosterLoaded = false; moved = 0; retainerIndex = 0; movementIssued = false;
         beforeBags = beforeRetainer = null;
+        withdrawalConfirmation = null;
         ownsLifestream = ownsNavigation = ownsRelog = restoreArSuppression = false;
         relogIdleSince = null;
         inventoryReadFailure = string.Empty;
@@ -214,6 +216,7 @@ public sealed class GameWorkflowExecutor
                 operationStarted += pausedFor.Value;
                 stageStarted += pausedFor.Value;
                 actionAfter += pausedFor.Value;
+                withdrawalConfirmation?.Suspend(pausedFor.Value);
                 if (relogIdleSince.HasValue) relogIdleSince += pausedFor.Value;
                 Status = statusBeforeCutscene;
                 Trace($"cutscene ended; no skip input sent; pausedMs={pausedFor.Value}; resuming observed game state");
@@ -304,7 +307,7 @@ public sealed class GameWorkflowExecutor
                                 throw new InvalidOperationException("A permitted destination retainer is absent from this character's roster.");
                             roster = roster.Where(x => operation.AllowedRetainerIds.Contains(x.Id)).ToArray();
                         }
-                        Transition(Stage.SelectRetainer, "Selecting the next retainer…", 500);
+                        Transition(Stage.SelectRetainer, "Selecting the next retainer…", StorageDelay(500));
                     }
                     else
                     {
@@ -322,44 +325,45 @@ public sealed class GameWorkflowExecutor
                     if (retainerIndex >= roster.Count || (operation.Kind != GameOperationKind.ScanRetainers && moved >= operation.Quantity))
                     { Transition(Stage.CloseList, "Closing the summoning bell…"); break; }
                     if (NativeRetainers.SelectRetainer(roster[retainerIndex], Trace))
-                        Transition(Stage.WaitRetainer, $"Waiting for {roster[retainerIndex].Name}…", 700);
+                        Transition(Stage.WaitRetainer, $"Waiting for {roster[retainerIndex].Name}…", StorageDelay(700));
                     break;
                 case Stage.WaitRetainer:
                     if (SelectedRetainerIsExpected() && Plugin.Condition[ConditionFlag.OccupiedSummoningBell]
                         && (NativeRetainers.HasRetainerMenu || NativeRetainers.HasExpectedRetainerTalk(CurrentRetainer) || NativeRetainers.HasVisibleRetainerInventory))
-                        Transition(Stage.OpenInventory, "Opening retainer storage…", 500);
+                        Transition(Stage.OpenInventory, "Opening retainer storage…", StorageDelay(500));
                     break;
                 case Stage.OpenInventory:
                     if (AdvanceOwnedRetainerTalk()) break;
                     if (NativeRetainers.HasVisibleRetainerInventory || NativeRetainers.SelectMenu(2378, CurrentRetainer.Id, Trace))
                     {
                         inventoryFingerprint = string.Empty; inventoryStableFrames = 0;
-                        Transition(Stage.WaitInventory, "Waiting for all retainer inventory pages…", 1000);
+                        Transition(Stage.WaitInventory, "Waiting for all retainer inventory pages…", StorageDelay(1000));
                     }
                     break;
                 case Stage.WaitInventory: WaitInventory(); break;
                 case Stage.Inventory: ProcessInventory(); break;
                 case Stage.WaitNumeric:
                     if (NativeRetainers.SubmitQuantity(CurrentRetainer.Id, moveQuantity, moveSourceQuantity, Trace))
-                        Transition(Stage.WaitMove, "Verifying retainer item movement…", 500);
+                        Transition(Stage.WaitMove, "Verifying retainer item movement…", StorageDelay(500));
                     break;
                 case Stage.WaitMove: VerifyMovement(); break;
                 case Stage.CloseInventory:
-                    if (!NativeRetainers.TryCloseTransferProgress(CurrentRetainer.Id, Trace)) { actionAfter = now + 500; break; }
+                    if (!NativeRetainers.TryCloseTransferProgress(CurrentRetainer.Id, Trace)) { actionAfter = now + StorageDelay(500, 100); break; }
                     NativeRetainers.HideInventory(CurrentRetainer.Id, Trace);
-                    Transition(Stage.QuitRetainer, "Dismissing the retainer…", 700);
+                    Transition(Stage.QuitRetainer, "Dismissing the retainer…", StorageDelay(700));
                     break;
                 case Stage.QuitRetainer:
-                    if (NativeRetainers.HasRetainerList) { retainerIndex++; Transition(Stage.SelectRetainer, "Selecting the next retainer…", 500); break; }
+                    if (NativeRetainers.HasRetainerList) { retainerIndex++; Transition(Stage.SelectRetainer, "Selecting the next retainer…", StorageDelay(500)); break; }
                     if (AdvanceOwnedRetainerTalk()) break;
-                    if (NativeRetainers.SelectMenu(2383, CurrentRetainer.Id, Trace)) Transition(Stage.WaitListAgain, "Waiting for the retainer list…", 700);
+                    if (NativeRetainers.HasVisibleRetainerInventory) break;
+                    if (NativeRetainers.SelectMenu(2383, CurrentRetainer.Id, Trace)) Transition(Stage.WaitListAgain, "Waiting for the retainer list…", StorageDelay(700));
                     break;
                 case Stage.WaitListAgain:
-                    if (NativeRetainers.HasRetainerList) { retainerIndex++; Transition(Stage.SelectRetainer, "Selecting the next retainer…", 500); }
+                    if (NativeRetainers.HasRetainerList) { retainerIndex++; Transition(Stage.SelectRetainer, "Selecting the next retainer…", StorageDelay(500)); }
                     else AdvanceOwnedRetainerTalk();
                     break;
                 case Stage.CloseList:
-                    NativeRetainers.CloseList(Trace); Transition(Stage.WaitClosed, "Waiting for the bell to close…", 700); break;
+                    NativeRetainers.CloseList(Trace); Transition(Stage.WaitClosed, "Waiting for the bell to close…", StorageDelay(700)); break;
                 case Stage.WaitClosed:
                     if (!NativeRetainers.HasRetainerList && !Plugin.Condition[ConditionFlag.OccupiedSummoningBell]) Finish(true);
                     break;
@@ -510,7 +514,7 @@ public sealed class GameWorkflowExecutor
         if (!SelectedRetainerIsExpected() || !NativeRetainers.AdvanceRetainerTalk(CurrentRetainer, Trace)) return false;
         // A speaker can have multiple lines. Do not send another click every frame,
         // and retain the existing stage deadline if a dialogue does not advance.
-        actionAfter = Environment.TickCount64 + 700;
+        actionAfter = Environment.TickCount64 + StorageDelay(700, 200);
         return true;
     }
 
@@ -523,7 +527,7 @@ public sealed class GameWorkflowExecutor
 
     private void WaitInventory()
     {
-        if (!NativeRetainers.HasRetainerInventory) return;
+        if (!NativeRetainers.HasVisibleRetainerInventory) return;
         ItemInventory inventory;
         try { inventory = NativeRetainers.ReadRetainer(CurrentRetainer.Id, operation!.ItemId, operation.HighQuality); }
         catch (InvalidOperationException exception)
@@ -536,7 +540,7 @@ public sealed class GameWorkflowExecutor
         var fingerprint = string.Join("|", inventory.AllItems.OrderBy(x => x.Key.ItemId).ThenBy(x => x.Key.HighQuality).Select(x => $"{x.Key}:{x.Value}"));
         inventoryStableFrames = fingerprint == inventoryFingerprint ? inventoryStableFrames + 1 : 0;
         inventoryFingerprint = fingerprint;
-        actionAfter = Environment.TickCount64 + 300;
+        actionAfter = Environment.TickCount64 + StorageDelay(300, 100);
         if (inventoryStableFrames >= 2) Transition(Stage.Inventory, "Inspecting retainer storage…");
     }
 
@@ -547,22 +551,25 @@ public sealed class GameWorkflowExecutor
         var retainer = NativeRetainers.ReadRetainer(CurrentRetainer.Id, op.ItemId, op.HighQuality);
         RecordRetainer(retainer.Quantity);
         if (op.Kind == GameOperationKind.ScanRetainers || moved >= op.Quantity)
-        { Transition(Stage.CloseInventory, "Closing verified retainer inventory…", 300); return; }
+        { Transition(Stage.CloseInventory, "Closing verified retainer inventory…", StorageDelay(300)); return; }
         var deposit = op.Kind == GameOperationKind.Deposit;
         var source = deposit ? bags : retainer;
         var destination = deposit ? retainer : bags;
         var slot = source.Slots.FirstOrDefault(x => x.ItemId == op.ItemId && x.HighQuality == op.HighQuality && x.Quantity > 0 && x.Movable);
         if (slot == null || destination.Capacity == 0)
-        { Transition(Stage.CloseInventory, "Continuing to the next retainer…", 300); return; }
+        { Transition(Stage.CloseInventory, "Continuing to the next retainer…", StorageDelay(300)); return; }
         beforeBags = bags; beforeRetainer = retainer;
         moveQuantity = Math.Min(op.Quantity - moved, Math.Min(slot.Quantity, destination.Capacity));
         moveSourceQuantity = slot.Quantity;
         moveStableFrames = 0;
+        withdrawalConfirmation = op.Kind == GameOperationKind.Withdraw
+            ? new(Environment.TickCount64, bags.AllItems, retainer.AllItems, new(op.ItemId, op.HighQuality), moveQuantity, deposit: false)
+            : null;
         // Set before invoking native code: a callback can reach the game before managed
         // execution reports an error. A false positive requires inspection, not a retry.
         movementIssued = true;
         var numeric = NativeRetainers.BeginMove(CurrentRetainer.Id, slot, moveQuantity, deposit, Trace);
-        Transition(numeric ? Stage.WaitNumeric : Stage.WaitMove, numeric ? "Setting the exact item quantity…" : "Verifying retainer item movement…", 500);
+        Transition(numeric ? Stage.WaitNumeric : Stage.WaitMove, numeric ? "Setting the exact item quantity…" : "Verifying retainer item movement…", StorageDelay(500));
     }
 
     private void VerifyMovement()
@@ -571,6 +578,20 @@ public sealed class GameWorkflowExecutor
         if (NativeRetainers.HasNumeric) return;
         var bags = NativeRetainers.ReadBags(op.ItemId, op.HighQuality);
         var retainer = NativeRetainers.ReadRetainer(CurrentRetainer.Id, op.ItemId, op.HighQuality);
+        if (withdrawalConfirmation is { } confirmation)
+        {
+            var now = Environment.TickCount64;
+            // Like reverse entrust, advance on observed inventory changes with one short
+            // command interval. Both exact deltas must agree on consecutive observations.
+            // No timeout ever permits redispatching an unconfirmed movement.
+            if (!confirmation.Observe(now, bags.AllItems, retainer.AllItems)) return;
+            moved = checked(moved + moveQuantity); RecordRetainer(retainer.Quantity);
+            Trace($"withdrawal confirmed; quantity={moveQuantity}; totalMoved={moved}; elapsedMs={confirmation.ElapsedMilliseconds(now)}; minimumIntervalMs={RetainerTransferConfirmation.MinimumIntervalMilliseconds}; sourceAndDestinationVerified=True");
+            withdrawalConfirmation = null;
+            movementIssued = false;
+            Transition(Stage.Inventory, $"Verified {moved:N0} item(s) withdrawn…");
+            return;
+        }
         var key = new ItemKey(op.ItemId, op.HighQuality);
         var deposit = op.Kind == GameOperationKind.Deposit;
         var bagsOkay = MatchesDelta(beforeBags!.AllItems, bags.AllItems, key, moveQuantity, !deposit);
@@ -598,6 +619,11 @@ public sealed class GameWorkflowExecutor
         }
         return true;
     }
+
+    // Only withdrawals use the faster readiness-driven path. Other native workflows
+    // keep their existing timing. Repeated UI inputs retain an explicit short throttle.
+    private int StorageDelay(int normalMilliseconds, int withdrawalMilliseconds = 0)
+        => operation?.Kind == GameOperationKind.Withdraw ? withdrawalMilliseconds : normalMilliseconds;
 
     private void RecordRetainer(uint quantity)
     {

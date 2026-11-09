@@ -29,5 +29,6 @@
     <Compile Include="../../src/AsheTrader/Workflow/Native/RetainerMenuMatcher.cs" Link="Production/RetainerMenuMatcher.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/BellInteractionGate.cs" Link="Production/BellInteractionGate.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/CutscenePreservation.cs" Link="Production/CutscenePreservation.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/Native/RetainerTransferConfirmation.cs" Link="Production/RetainerTransferConfirmation.cs" />
   </ItemGroup>
 </Project>
