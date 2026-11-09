@@ -4,6 +4,28 @@ public static class JobPlanner
 {
     /// <summary>Creates a fixed stock budget. Never re-plan from live inventory after a job has issued work.</summary>
     public static TransferPlan Plan(TransferJobDefinition definition, IEnumerable<JobCharacterSnapshot> snapshots)
+        => BuildPlan(definition, snapshots, true);
+
+    /// <summary>
+    /// Determines which accounts actually need an opposite-account relay after applying stock,
+    /// protected recipient totals and priority. It does not reserve stock or create executable routes.
+    /// </summary>
+    public static IReadOnlyList<Guid> RequiredRelaySourcePeers(TransferJobDefinition definition, IEnumerable<JobCharacterSnapshot> snapshots)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(snapshots);
+        ValidateDefinition(definition);
+        var all = snapshots.ToArray();
+        var candidates = JobModelCopies.Definition(definition);
+        candidates.RelayCharacters.Clear();
+        var allocationPreview = BuildPlan(candidates, all, false);
+        var byCharacter = all.ToDictionary(snapshot => snapshot.CharacterId);
+        return allocationPreview.Allocations
+            .Where(allocation => byCharacter[allocation.SourceCharacterId].PeerId == byCharacter[allocation.RecipientCharacterId].PeerId)
+            .Select(allocation => byCharacter[allocation.SourceCharacterId].PeerId).Distinct().Order().ToArray();
+    }
+
+    private static TransferPlan BuildPlan(TransferJobDefinition definition, IEnumerable<JobCharacterSnapshot> snapshots, bool createRoutes)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(snapshots);
@@ -14,7 +36,8 @@ public static class JobPlanner
         if (all.Select(snapshot => snapshot.CharacterId).Distinct().Count() != all.Length)
             throw new ArgumentException("Character snapshots contain duplicate character IDs.", nameof(snapshots));
         var byCharacter = all.ToDictionary(snapshot => snapshot.CharacterId);
-        var required = definition.Sources.Concat(definition.Recipients.Select(rule => rule.CharacterId))
+        var stockOwners = definition.Sources.Concat(definition.Recipients.Select(rule => rule.CharacterId)).ToHashSet();
+        var required = stockOwners
             .Concat(definition.RelayCharacters.Values).Distinct().ToArray();
         foreach (var characterId in required)
         {
@@ -22,8 +45,10 @@ public static class JobPlanner
                 throw new InvalidOperationException($"Character {characterId} has not been discovered.");
             if (snapshot.Retainers is null || snapshot.Retainers.Any(retainer => retainer is null))
                 throw new InvalidOperationException($"Character {characterId} has an invalid retainer collection.");
-            if (!snapshot.IsFullyVerified)
+            if (stockOwners.Contains(characterId) && !snapshot.IsFullyVerified)
                 throw new InvalidOperationException($"Character {characterId} and all of its retainers must be verified before planning.");
+            if (!stockOwners.Contains(characterId) && snapshot.Verification != InventoryVerification.Verified)
+                throw new InvalidOperationException($"Relay character {characterId}'s carried inventory must be verified before planning.");
             if (snapshot.Retainers.Any(retainer => retainer.RetainerId == 0)
                 || snapshot.Retainers.Select(retainer => retainer.RetainerId).Distinct().Count() != snapshot.Retainers.Count)
                 throw new InvalidOperationException($"Character {characterId} has an invalid retainer roster.");
@@ -74,7 +99,7 @@ public static class JobPlanner
                 if (sourceId == recipient.CharacterId || available[sourceId] == 0) continue;
                 var amount = Math.Min(left, available[sourceId]);
                 var source = byCharacter[sourceId];
-                var legs = CreateRoute(source, recipientSnapshot, definition.RelayCharacters, byCharacter);
+                var legs = createRoutes ? CreateRoute(source, recipientSnapshot, definition.RelayCharacters, byCharacter) : [];
                 plan.Allocations.Add(new TransferAllocation
                 {
                     SourceCharacterId = sourceId,
@@ -98,7 +123,7 @@ public static class JobPlanner
         if (source.PeerId != recipient.PeerId) return [Leg(source, recipient)];
         var candidates = relays.Where(pair => pair.Key != source.PeerId).ToArray();
         if (candidates.Length != 1)
-            throw new InvalidOperationException($"Transfer from {source.CharacterId} to {recipient.CharacterId} needs one designated relay character on the other account.");
+            throw new InvalidOperationException($"Transfer from {source.CharacterId} to {recipient.CharacterId} needs a verified relay character on the other account.");
         var relay = characters[candidates[0].Value];
         return [Leg(source, relay), Leg(relay, recipient)];
     }

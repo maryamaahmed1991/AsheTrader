@@ -16,15 +16,84 @@ public sealed partial class WorkflowService
         RequireIdle();
         RequirePair();
         if (Run is { Step: not CoordinatorStep.Finished }) throw new InvalidOperationException("Resume or end the existing paused job first.");
-        JobPlanner.ValidateDefinition(job.Definition);
+        ArgumentNullException.ThrowIfNull(job);
+        if (job.Definition is null || job.AdditionalItems is null || job.AdditionalItems.Any(item => item is null))
+            throw new ArgumentException("Every job item needs a complete transfer definition.", nameof(job));
+        var saved = Clone(job);
+        var definitions = saved.ItemDefinitions.ToArray();
+        foreach (var definition in definitions)
+        {
+            // Relay preferences from older templates do not opt characters into a new run.
+            // Existing in-flight journals keep their already assigned routes until resolved.
+            definition.RelayCharacters = [];
+            JobPlanner.ValidateDefinition(definition);
+            foreach (var id in DiscoveryCharacters(definition)) _ = Character(id);
+        }
+        if (definitions.Select(item => new ItemKey(item.ItemId, item.HighQuality)).Distinct().Count() != definitions.Length)
+            throw new ArgumentException("Add each item and quality only once per job; combine its recipient quantities on that item line.", nameof(job));
+        if (definitions.Select(item => item.Id).Distinct().Count() != definitions.Length)
+            throw new ArgumentException("Each job item needs its own stable ID. Remove and re-add the duplicate item line.", nameof(job));
         if (!discoveryOnly && (job.Meeting.WorldId == 0 || job.Meeting.TerritoryId == 0 || job.Meeting.AetheryteId == 0))
             throw new InvalidOperationException("Capture an outdoor meeting point and choose its main aetheryte before starting.");
-        var order = job.Definition.Sources.Concat(job.Definition.Recipients.Select(x => x.CharacterId))
-            .Concat(job.Definition.RelayCharacters.Values).Distinct().ToList();
-        foreach (var id in order) _ = Character(id);
-        Run = new() { Job = Clone(job), DiscoveryOnly = discoveryOnly, DiscoveryOrder = order, Step = CoordinatorStep.DiscoverLogin,
+        Run = new() { Job = saved, DiscoveryOnly = discoveryOnly, DiscoveryOrder = DiscoveryCharacters(saved.Definition), Step = CoordinatorStep.DiscoverLogin,
             Status = "Discovering source and destination inventories, including retainers…" };
         error = "";
+        SaveRun();
+    }
+
+    private static List<ulong> DiscoveryCharacters(TransferJobDefinition definition) =>
+        definition.Sources.Concat(definition.Recipients.Select(recipient => recipient.CharacterId)).Distinct().ToList();
+
+    private void CompleteItem()
+    {
+        var run = Run!;
+        if (run.Pending.Count != 0 || run.TradeOperationId.HasValue)
+            throw new InvalidOperationException("Resolve the current item's pending operation before proceeding to another item.");
+        if (run.Journal != null)
+        {
+            var ledger = new TransferJobLedger(run.Journal);
+            if (ledger.HasPendingOperation || run.Journal.Plan.Allocations.Any(allocation => allocation.Legs.Count == 2
+                && ledger.RelayCargo(allocation.Legs[0].ReceiverId) != 0))
+                throw new InvalidOperationException("Resolve the current item's relay cargo and trade evidence before proceeding to another item.");
+            run.Journal.State = run.Journal.Plan.HasShortage ? TransferJobState.Paused : TransferJobState.Completed;
+        }
+        if (run.CompletedItems.Any(item => item.ItemIndex == run.ActiveItemIndex))
+            throw new InvalidDataException("This item already has a completed checkpoint; inspect the saved job before continuing.");
+        var completed = new List<CoordinatorItemResult>(run.CompletedItems)
+        {
+            new()
+            {
+                ItemIndex = run.ActiveItemIndex, Definition = Clone(run.ActiveDefinition), DiscoveryOnly = run.DiscoveryOnly,
+                Journal = run.Journal == null ? null : Clone(run.Journal), Snapshots = Clone(run.Snapshots),
+                Withdrawn = new(run.Withdrawn), Deposited = new(run.Deposited), AutomaticRelays = new(run.AutomaticRelays)
+            }
+        };
+        var nextIndex = run.ActiveItemIndex + 1;
+        if (nextIndex < run.TotalItemCount)
+        {
+            var order = DiscoveryCharacters(run.Job.ItemDefinitions.ElementAt(nextIndex));
+            foreach (var id in order) _ = Character(id);
+            // One durable checkpoint switches item identity and clears every item-specific counter
+            // before any command for the next item can be issued.
+            Run = new()
+            {
+                Job = run.Job, DiscoveryOnly = run.DiscoveryOnly, ActiveItemIndex = nextIndex,
+                CompletedItems = completed, DiscoveryOrder = order, Step = CoordinatorStep.DiscoverLogin,
+                Status = $"Item {nextIndex + 1}/{run.TotalItemCount}: scanning fresh inventories before continuing…"
+            };
+            resendAt = 0;
+        }
+        else
+        {
+            run.CompletedItems = completed;
+            run.Step = CoordinatorStep.Finished;
+            run.Paused = run.HasShortages;
+            run.Status = run.DiscoveryOnly
+                ? "Discovery complete. All selected items, bags and retainers were inspected; no items were moved."
+                : run.HasShortages
+                    ? "All job items processed. Some requested quantities remain short; see each item's unmet targets."
+                    : "Transfer job complete: all items' planned final deliveries are verified.";
+        }
         SaveRun();
     }
 
@@ -36,6 +105,13 @@ public sealed partial class WorkflowService
             throw new InvalidOperationException("Wait for the local operation to stop before resuming.");
         if (Run is not { Paused: true, Step: not CoordinatorStep.Finished }) return;
         error = "";
+        if (Run.Journal == null)
+        {
+            // Pre-plan selections have not carried cargo and may be re-ranked after a pause.
+            // A created journal keeps its original routes pinned for durable trade accounting.
+            Run.AutomaticRelays.Clear(); Run.RejectedRelayCharacters.Clear();
+            Run.RelayCandidateId = null; Run.RelayCandidatePeerId = null;
+        }
         if (Run.TradeOperationId.HasValue)
         {
             var ledger = new TransferJobLedger(Run.Journal!);
@@ -63,8 +139,14 @@ public sealed partial class WorkflowService
                 // A pickup/deposit may have finished before its result reached this PC.
                 // Recover the original command ID rather than moving another load blindly.
                 storage.Response = null;
-                Run.Step = storage.Command.Operation.Kind == GameOperationKind.Deposit
-                    ? CoordinatorStep.Deposit : CoordinatorStep.Withdraw;
+                if (storage.InventoryItemIndex.HasValue)
+                {
+                    Run.PreviousItemDepositIndex = storage.InventoryItemIndex;
+                    Run.PreviousItemDepositCharacterId = storage.Command.Operation.CharacterId;
+                    Run.Step = CoordinatorStep.DepositPreviousItem;
+                }
+                else Run.Step = storage.Command.Operation.Kind == GameOperationKind.Deposit
+                        ? CoordinatorStep.Deposit : CoordinatorStep.Withdraw;
             }
             else
             {
@@ -111,7 +193,7 @@ public sealed partial class WorkflowService
     private static T Clone<T>(T value) => Decode<T>(Newtonsoft.Json.JsonConvert.SerializeObject(value));
 
     private WorkerCommand Command(ulong characterId, GameOperationKind kind, uint quantity = 0, TravelLocation? destination = null,
-        WorkerCommandKind workerKind = WorkerCommandKind.Game, ulong? partner = null)
+        WorkerCommandKind workerKind = WorkerCommandKind.Game, ulong? partner = null, TransferJobDefinition? item = null)
     {
         var identity = Character(characterId).Character;
         var command = new WorkerCommand
@@ -121,7 +203,7 @@ public sealed partial class WorkflowService
             Operation = new GameOperation
             {
                 Kind = kind, CharacterId = characterId, CharacterName = identity.Name, World = identity.World,
-                ItemId = Run.Job.Definition.ItemId, HighQuality = Run.Job.Definition.HighQuality,
+                ItemId = (item ?? Run.ActiveDefinition).ItemId, HighQuality = (item ?? Run.ActiveDefinition).HighQuality,
                 Quantity = quantity, Destination = destination == null ? null : Clone(destination)
             },
             Partner = partner.HasValue ? Clone(Character(partner.Value).Character) : null
@@ -130,9 +212,9 @@ public sealed partial class WorkflowService
         return command;
     }
 
-    private void Issue(Guid peerId, WorkerCommand command, bool marksTrade = false)
+    private void Issue(Guid peerId, WorkerCommand command, bool marksTrade = false, int? inventoryItemIndex = null)
     {
-        Run!.Pending.Add(new() { PeerId = peerId, Command = command });
+        Run!.Pending.Add(new() { PeerId = peerId, Command = command, InventoryItemIndex = inventoryItemIndex });
         if (marksTrade) new TransferJobLedger(Run.Journal!).MarkIssued(Run.TradeOperationId!.Value);
         SaveRun();
         Dispatch(peerId, command);
@@ -170,11 +252,13 @@ public sealed partial class WorkflowService
     }
 
     private bool Perform(ulong characterId, GameOperationKind kind, CoordinatorStep next, Action<GameOperationResult>? apply = null,
-        uint quantity = 0, TravelLocation? destination = null)
+        uint quantity = 0, TravelLocation? destination = null, int? inventoryItemIndex = null)
     {
         if (Run!.Pending.Count == 0)
         {
-            Issue(Character(characterId).PeerId, Command(characterId, kind, quantity, destination));
+            var definition = inventoryItemIndex.HasValue
+                ? Run.CompletedItems.Single(item => item.ItemIndex == inventoryItemIndex.Value).Definition : null;
+            Issue(Character(characterId).PeerId, Command(characterId, kind, quantity, destination, item: definition), inventoryItemIndex: inventoryItemIndex);
             return false;
         }
         var pending = Run.Pending.Single();
@@ -204,11 +288,50 @@ public sealed partial class WorkflowService
             var pickup = pending.Command.Operation.Kind == GameOperationKind.Withdraw;
             if (result.CharacterId != characterId || result.MovedQuantity > pending.Command.Operation.Quantity)
                 throw new InvalidDataException(pickup ? "Invalid provider pickup observation." : "Invalid deposit observation.");
-            var quantities = pickup ? Run!.Withdrawn : Run!.Deposited;
+            Dictionary<ulong, ulong> quantities;
+            if (pending.InventoryItemIndex is { } itemIndex)
+            {
+                var previous = Run!.CompletedItems.Single(item => item.ItemIndex == itemIndex);
+                if (pickup || pending.Command.Operation.ItemId != previous.Definition.ItemId
+                    || pending.Command.Operation.HighQuality != previous.Definition.HighQuality || previous.Journal == null)
+                    throw new InvalidDataException("The stored item does not match its completed job-item ledger.");
+                if (result.MovedQuantity > DepositAllowance(previous.Journal, previous.Deposited, characterId))
+                    throw new InvalidDataException("A previous-item deposit exceeded its remaining received-item allowance.");
+                quantities = previous.Deposited;
+            }
+            else quantities = pickup ? Run!.Withdrawn : Run!.Deposited;
             quantities[characterId] = checked(quantities.GetValueOrDefault(characterId) + result.MovedQuantity);
             pending.InventoryAdjustmentApplied = true;
             SaveRun();
         }
+    }
+
+    private static ulong DepositAllowance(TransferJobJournal journal, Dictionary<ulong, ulong> deposited, ulong characterId)
+    {
+        var received = journal.Operations.Where(operation => operation.State == TransferOperationState.Committed)
+            .Where(operation => journal.Plan.Allocations.Single(allocation => allocation.Id == operation.AllocationId).Legs[operation.LegIndex].ReceiverId == characterId)
+            .Aggregate(0UL, (sum, operation) => checked(sum + operation.Quantity));
+        var forwarded = journal.Operations.Where(operation => operation.State == TransferOperationState.Committed && operation.LegIndex > 0)
+            .Where(operation => journal.Plan.Allocations.Single(allocation => allocation.Id == operation.AllocationId).Legs[operation.LegIndex].SenderId == characterId)
+            .Aggregate(0UL, (sum, operation) => checked(sum + operation.Quantity));
+        var stored = deposited.GetValueOrDefault(characterId);
+        return forwarded <= received && stored <= received - forwarded ? received - forwarded - stored : 0;
+    }
+
+    private bool TryPreparePreviousItemDeposit(ulong characterId)
+    {
+        var run = Run!;
+        foreach (var item in run.CompletedItems)
+        {
+            if (item.Journal == null) continue;
+            var allowance = DepositAllowance(item.Journal, item.Deposited, characterId);
+            if (allowance == 0) continue;
+            run.PreviousItemDepositIndex = item.ItemIndex;
+            run.PreviousItemDepositCharacterId = characterId;
+            run.DesiredQuantity = (uint)Math.Min(uint.MaxValue, allowance);
+            return true;
+        }
+        return false;
     }
 
     private void SetStep(CoordinatorStep step)
@@ -221,10 +344,14 @@ public sealed partial class WorkflowService
             CoordinatorStep.Plan => "Allocating source stock in recipient priority order…",
             CoordinatorStep.Withdraw => $"Collecting up to {Math.Min(Run.DesiredQuantity, Run.SenderBagCapacity):N0} items from provider retainers; trading resumes after this load…",
             CoordinatorStep.Deposit => "Receiver is returning home and depositing job items into retainers…",
+            CoordinatorStep.DepositPreviousItem => "Storing received items from an earlier job line to make room for the next item…",
+            CoordinatorStep.RelayLogin => "Logging into the automatic relay candidate…",
+            CoordinatorStep.RelayInspect => "Checking the automatic relay's live inventory capacity…",
             CoordinatorStep.TravelSender or CoordinatorStep.TravelReceiver => "Bringing both characters to the meeting point…",
             CoordinatorStep.AwaitTrade => "Waiting for both clients to verify the agreed trade…",
             _ => $"Transfer job: {step}"
         };
+        if (Run.TotalItemCount > 1) Run.Status = $"Item {Run.ActiveItemIndex + 1}/{Run.TotalItemCount}: {Run.Status}";
         SaveRun();
     }
 
@@ -242,6 +369,7 @@ public sealed partial class WorkflowService
                 else Dispatch(pending.PeerId, pending.Command);
             }
         }
+        if (AdvanceAutomaticRelayPreparation()) return;
         if (run.Step is CoordinatorStep.DiscoverLogin or CoordinatorStep.DiscoverScan)
         {
             if (run.DiscoveryIndex >= run.DiscoveryOrder.Count) { SetStep(CoordinatorStep.Plan); return; }
@@ -268,11 +396,10 @@ public sealed partial class WorkflowService
         {
             if (run.DiscoveryOnly)
             {
-                run.Step = CoordinatorStep.Finished;
-                run.Status = "Discovery complete. All selected bags and retainers were inspected; no trades were performed.";
-                SaveRun(); return;
+                CompleteItem(); return;
             }
-            run.Journal = TransferJobLedger.Create(JobPlanner.Plan(run.Job.Definition, run.Snapshots.Values)).Journal;
+            if (!PrepareAutomaticRelays()) return;
+            run.Journal = TransferJobLedger.Create(JobPlanner.Plan(DefinitionWithAutomaticRelays(), run.Snapshots.Values)).Journal;
             SetStep(CoordinatorStep.SelectLeg);
             return;
         }
@@ -287,13 +414,7 @@ public sealed partial class WorkflowService
                 run.DesiredQuantity = (uint)Math.Min(uint.MaxValue, ledger.RemainingForLeg(allocation.Id, index));
                 SetStep(CoordinatorStep.LoginSender); return;
             }
-            run.Step = CoordinatorStep.Finished;
-            run.Paused = run.Journal.Plan.HasShortage;
-            run.Status = run.Journal.Plan.HasShortage
-                ? "Available stock delivered. Some requested quantities remain short; see the unmet-target list."
-                : "Transfer job complete: all planned final deliveries are verified.";
-            run.Journal.State = run.Journal.Plan.HasShortage ? TransferJobState.Paused : TransferJobState.Completed;
-            SaveRun(); return;
+            CompleteItem(); return;
         }
         var assignment = run.Journal.Plan.Allocations.Single(x => x.Id == run.AllocationId);
         var leg = assignment.Legs[run.LegIndex];
@@ -304,6 +425,8 @@ public sealed partial class WorkflowService
             case CoordinatorStep.InspectSender:
                 Perform(leg.SenderId, GameOperationKind.Inspect, CoordinatorStep.InspectReceiver, result =>
                 {
+                    run.PreviousItemDepositIndex = null;
+                    run.PreviousItemDepositCharacterId = 0;
                     run.SenderBagQuantity = result.BagQuantity;
                     run.SenderBagCapacity = result.BagCapacity;
                     run.SenderStackSize = result.StackSize;
@@ -315,7 +438,10 @@ public sealed partial class WorkflowService
                     if (run.LegIndex != 0)
                         throw new InvalidOperationException("The relay is missing its carried job items. Restore that cargo to its bags before resuming; unrelated retainer stock will not be collected.");
                     if (run.SenderBagCapacity == 0)
+                    {
+                        if (TryPreparePreviousItemDeposit(leg.SenderId)) { SetStep(CoordinatorStep.DepositPreviousItem); break; }
                         throw new InvalidOperationException("The provider has no room to collect its next load. Free bag space, then resume; confirmed deliveries are saved.");
+                    }
                     SetStep(CoordinatorStep.Withdraw);
                 }
                 break;
@@ -338,18 +464,17 @@ public sealed partial class WorkflowService
             case CoordinatorStep.InspectReceiver:
                 Perform(leg.ReceiverId, GameOperationKind.Inspect, CoordinatorStep.TravelSender, result =>
                 {
+                    run.PreviousItemDepositIndex = null;
+                    run.PreviousItemDepositCharacterId = 0;
                     run.ReceiverCapacity = result.BagCapacity;
                     if (result.BagCapacity == 0)
                     {
-                        var received = run.Journal.Operations.Where(x => x.State == TransferOperationState.Committed)
-                            .Where(x => run.Journal.Plan.Allocations.Single(a => a.Id == x.AllocationId).Legs[x.LegIndex].ReceiverId == leg.ReceiverId)
-                            .Aggregate(0UL, (sum, x) => checked(sum + x.Quantity));
-                        var relayed = run.Journal.Operations.Where(x => x.State == TransferOperationState.Committed && x.LegIndex > 0)
-                            .Where(x => run.Journal.Plan.Allocations.Single(a => a.Id == x.AllocationId).Legs[x.LegIndex].SenderId == leg.ReceiverId)
-                            .Aggregate(0UL, (sum, x) => checked(sum + x.Quantity));
-                        var stored = run.Deposited.GetValueOrDefault(leg.ReceiverId);
-                        var eligible = received > relayed + stored ? received - relayed - stored : 0;
-                        if (result.BagQuantity == 0 || eligible == 0) throw new InvalidOperationException("Receiver is full and has no received job items available to deposit. Free some space before resuming.");
+                        var eligible = DepositAllowance(run.Journal, run.Deposited, leg.ReceiverId);
+                        if (result.BagQuantity == 0 || eligible == 0)
+                        {
+                            if (TryPreparePreviousItemDeposit(leg.ReceiverId)) return;
+                            throw new InvalidOperationException("Receiver is full and has no received job items available to deposit. Free some space before resuming.");
+                        }
                         run.SenderBagQuantity = Math.Min(run.SenderBagQuantity, run.DesiredQuantity);
                         // Store the exact-item deposit allowance in the next command, then restore transfer quantity after reinspection.
                         run.DesiredQuantity = (uint)Math.Min(result.BagQuantity, eligible);
@@ -360,7 +485,7 @@ public sealed partial class WorkflowService
                 if (run.Step == CoordinatorStep.TravelSender)
                 {
                     // Capacity is returned in the just-applied result; use a separate marker set by the result handler below.
-                    if (run.ReceiverCapacity == 0) SetStep(CoordinatorStep.Deposit);
+                    if (run.ReceiverCapacity == 0) SetStep(run.PreviousItemDepositIndex.HasValue ? CoordinatorStep.DepositPreviousItem : CoordinatorStep.Deposit);
                 }
                 break;
             case CoordinatorStep.Deposit:
@@ -370,6 +495,17 @@ public sealed partial class WorkflowService
                         throw new InvalidOperationException("All permitted retainers are full or inaccessible. The job remains paused.");
                     run.DesiredQuantity = (uint)Math.Min(uint.MaxValue, ledger.RemainingForLeg(run.AllocationId, run.LegIndex));
                 }, run.DesiredQuantity);
+                break;
+            case CoordinatorStep.DepositPreviousItem:
+                var previousIndex = run.PreviousItemDepositIndex ?? throw new InvalidDataException("The previous item selected for storage is missing.");
+                Perform(run.PreviousItemDepositCharacterId, GameOperationKind.Deposit, CoordinatorStep.InspectSender, result =>
+                {
+                    if (result.MovedQuantity == 0)
+                        throw new InvalidOperationException("The earlier job item could not be stored. Check that its received stock is still carried and its permitted retainers have room, then resume.");
+                    run.DesiredQuantity = (uint)Math.Min(uint.MaxValue, ledger.RemainingForLeg(run.AllocationId, run.LegIndex));
+                    run.PreviousItemDepositIndex = null;
+                    run.PreviousItemDepositCharacterId = 0;
+                }, run.DesiredQuantity, inventoryItemIndex: previousIndex);
                 break;
             case CoordinatorStep.TravelSender: Perform(leg.SenderId, GameOperationKind.TravelMeeting, CoordinatorStep.TravelReceiver, destination: run.Job.Meeting); break;
             case CoordinatorStep.TravelReceiver: Perform(leg.ReceiverId, GameOperationKind.TravelMeeting, CoordinatorStep.PreviewBatch, destination: run.Job.Meeting); break;

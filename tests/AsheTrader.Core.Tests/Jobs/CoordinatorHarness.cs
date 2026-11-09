@@ -42,6 +42,13 @@ public sealed partial class WorkflowService
     // The worker still persists the result. A subsequent query can recover a lost response.
     public Predicate<WorkerCommand>? SuppressInitialResponse { get; set; }
 
+    public void SetCachedFreeSlots(ulong characterId, uint? freeSlots)
+    {
+        var profile = AllCharacters().Single(entry => entry.Character.ContentId == characterId).Character;
+        profile.InventoryFreeSlots = freeSlots;
+        profile.InventorySlotsRetrievedAt = freeSlots.HasValue ? DateTimeOffset.UtcNow : null;
+    }
+
     public WorkflowService(Guid localPeer, Guid remotePeer, params SimulatedCharacter[] initialCharacters)
     {
         settings = new() { PeerId = localPeer, AllowRemoteControl = true };
@@ -85,11 +92,12 @@ public sealed partial class WorkflowService
         if (interruptArmedReceiver && armedReceiver != null)
         {
             var character = characters[armedReceiver.Operation.CharacterId];
+            var stock = character.Inventory(armedReceiver.Operation.ItemId, armedReceiver.Operation.HighQuality);
             durableResponses[armedReceiver.Id] = new()
             {
                 CommandId = armedReceiver.Id, Ambiguous = true,
-                Unchanged = character.Bags == armedBefore, BeforeQuantity = armedBefore,
-                CurrentQuantity = character.Bags, Error = "Receiver interrupted before a verified result.",
+                Unchanged = stock.Bags == armedBefore, BeforeQuantity = armedBefore,
+                CurrentQuantity = stock.Bags, Error = "Receiver interrupted before a verified result.",
             };
             armedReceiver = null;
         }
@@ -133,8 +141,9 @@ public sealed partial class WorkflowService
         receivedCommands[command.Id] = Clone(command);
         commandOwners[command.Id] = owner;
         var character = characters[command.Operation.CharacterId];
+        var stock = character.Inventory(command.Operation.ItemId, command.Operation.HighQuality);
         if (character.PeerId != owner) throw new InvalidOperationException("Command went to the wrong peer.");
-        Trace.Add(new(command.Kind, command.Operation.Kind, character.Id, command.Operation.Quantity, character.Location));
+        Trace.Add(new(command.Kind, command.Operation.Kind, character.Id, command.Operation.Quantity, character.Location, command.Operation.ItemId, command.Operation.HighQuality));
 
         if (command.Kind == WorkerCommandKind.Game)
         {
@@ -147,18 +156,18 @@ public sealed partial class WorkflowService
                 case GameOperationKind.ScanRetainers: character.Location = "home"; break;
                 case GameOperationKind.Withdraw:
                     character.Location = "home";
-                    moved = Math.Min(operation.Quantity, Math.Min(character.RetainerTotal, character.BagSpace));
+                    moved = Math.Min(operation.Quantity, Math.Min(stock.RetainerTotal, character.BagSpace));
                     if (WithdrawMovementLimit is { } pickupLimit) moved = Math.Min(moved, pickupLimit);
-                    RemoveStored(character, moved); character.Bags += moved;
+                    RemoveStored(stock, moved); stock.Bags += moved;
                     break;
                 case GameOperationKind.Deposit:
                     character.Location = "home";
-                    moved = Math.Min(operation.Quantity, Math.Min(character.Bags, character.StorageSpace));
+                    moved = Math.Min(operation.Quantity, Math.Min(stock.Bags, character.StorageSpace));
                     if (DepositMovementLimit is { } limit) moved = Math.Min(moved, limit);
-                    character.Bags -= moved;
-                    var firstRetainer = character.Retainers.Keys.FirstOrDefault();
+                    stock.Bags -= moved;
+                    var firstRetainer = stock.Retainers.Keys.FirstOrDefault();
                     if (firstRetainer == 0 && moved != 0) throw new InvalidOperationException("No retainer to deposit into.");
-                    if (moved != 0) character.Retainers[firstRetainer] += moved;
+                    if (moved != 0) stock.Retainers[firstRetainer] += moved;
                     break;
                 case GameOperationKind.TravelMeeting:
                     if (operation.Destination == null) throw new InvalidOperationException("Travel destination omitted.");
@@ -178,7 +187,7 @@ public sealed partial class WorkflowService
         if (loggedIn.GetValueOrDefault(owner) != character.Id) throw new InvalidOperationException("Trade ran on the wrong active character.");
         if (command.Kind == WorkerCommandKind.PreviewBatch)
         {
-            var quantity = Math.Min(command.Operation.Quantity, Math.Min(character.Bags, checked(character.StackSize * 5)));
+            var quantity = Math.Min(command.Operation.Quantity, Math.Min(stock.Bags, checked(stock.StackSize * 5)));
             Deliver(owner, new() { CommandId = command.Id, Success = quantity != 0, Quantity = quantity });
             return;
         }
@@ -186,21 +195,22 @@ public sealed partial class WorkflowService
         if (command.Kind == WorkerCommandKind.ReceiveBatch)
         {
             if (armedReceiver != null) throw new InvalidOperationException("A receiver was already armed.");
-            armedReceiver = Clone(command); armedBefore = character.Bags;
+            armedReceiver = Clone(command); armedBefore = stock.Bags;
             AcceptResponse(owner, new() { CommandId = command.Id, Ready = true });
             return;
         }
 
         var arm = armedReceiver ?? throw new InvalidOperationException("The sender started without an armed receiver.");
         var receiver = characters[arm.Operation.CharacterId];
+        var receiverStock = receiver.Inventory(arm.Operation.ItemId, arm.Operation.HighQuality);
         if (RejectNextSenderBeforeStart)
         {
             RejectNextSenderBeforeStart = false;
             // Starting the receiver was durable, but its interruption still needs operator review.
             Deliver(receiver.PeerId, new()
             {
-                CommandId = arm.Id, Ambiguous = true, Unchanged = receiver.Bags == armedBefore,
-                BeforeQuantity = armedBefore, CurrentQuantity = receiver.Bags,
+                CommandId = arm.Id, Ambiguous = true, Unchanged = receiverStock.Bags == armedBefore,
+                BeforeQuantity = armedBefore, CurrentQuantity = receiverStock.Bags,
                 Error = "Receiver stopped without a verified trade result.",
             });
             Deliver(owner, new()
@@ -213,11 +223,12 @@ public sealed partial class WorkflowService
         }
         var amount = command.Operation.Quantity;
         if (arm.Operation.Quantity != amount || arm.Partner?.ContentId != character.Id
+            || arm.Operation.ItemId != command.Operation.ItemId || arm.Operation.HighQuality != command.Operation.HighQuality
             || command.Partner?.ContentId != receiver.Id || loggedIn.GetValueOrDefault(receiver.PeerId) != receiver.Id
-            || receiver.Location != "meeting" || character.Bags < amount || receiver.BagSpace < amount)
+            || receiver.Location != "meeting" || stock.Bags < amount || receiver.BagSpace < amount)
             throw new InvalidOperationException("The proposed trade cannot fit or does not match the armed partner.");
-        character.Bags -= amount; receiver.Bags += amount;
-        Trades.Add(new(character.Id, receiver.Id, amount, command.Id, arm.Id));
+        stock.Bags -= amount; receiverStock.Bags += amount;
+        Trades.Add(new(character.Id, receiver.Id, amount, command.Id, arm.Id, command.Operation.ItemId, command.Operation.HighQuality));
         Deliver(receiver.PeerId, new() { CommandId = arm.Id, Success = true, Quantity = amount });
         Deliver(owner, new() { CommandId = command.Id, Success = true, Quantity = amount });
         armedReceiver = null;
@@ -237,7 +248,7 @@ public sealed partial class WorkflowService
         var command = receivedCommands[resolution.CommandId];
         var previous = durableResponses[resolution.CommandId];
         var before = previous.BeforeQuantity ?? throw new InvalidOperationException("No pre-trade evidence.");
-        var current = characters[command.Operation.CharacterId].Bags;
+        var current = characters[command.Operation.CharacterId].Inventory(command.Operation.ItemId, command.Operation.HighQuality).Bags;
         if (!resolution.Transferred && before != current) throw new InvalidOperationException("The inventory is not unchanged.");
         Deliver(owner, new()
         {
@@ -254,16 +265,20 @@ public sealed partial class WorkflowService
         AcceptResponse(owner, response);
     }
 
-    private static GameOperationResult Result(SimulatedCharacter character, GameOperation operation, uint moved) => new()
+    private static GameOperationResult Result(SimulatedCharacter character, GameOperation operation, uint moved)
     {
-        Id = operation.Id, Success = true, CharacterId = character.Id, BagQuantity = character.Bags,
-        BagCapacity = character.BagSpace, StackSize = character.StackSize, MovedQuantity = moved,
-        RetainerRosterVerified = character.ScanVerified,
-        Retainers = character.Retainers.Select(pair => new RetainerInventorySnapshot(pair.Key, $"Retainer {pair.Key}", pair.Value, character.ScanVerified)).ToList(),
-        ObservedAt = DateTimeOffset.UtcNow,
-    };
+        var stock = character.Inventory(operation.ItemId, operation.HighQuality);
+        return new()
+        {
+            Id = operation.Id, Success = true, CharacterId = character.Id, BagQuantity = stock.Bags,
+            BagCapacity = character.BagSpace, StackSize = stock.StackSize, MovedQuantity = moved,
+            RetainerRosterVerified = character.ScanVerified,
+            Retainers = stock.Retainers.Select(pair => new RetainerInventorySnapshot(pair.Key, $"Retainer {pair.Key}", pair.Value, character.ScanVerified)).ToList(),
+            ObservedAt = DateTimeOffset.UtcNow,
+        };
+    }
 
-    private static void RemoveStored(SimulatedCharacter character, uint amount)
+    private static void RemoveStored(SimulatedItemInventory character, uint amount)
     {
         foreach (var id in character.Retainers.Keys.ToArray())
         {
@@ -275,7 +290,10 @@ public sealed partial class WorkflowService
     }
 
     private static CharacterProfile Profile(SimulatedCharacter character) => new()
-    { ContentId = character.Id, Name = $"Character {character.Id}", World = "Home World" };
+    {
+        ContentId = character.Id, Name = $"Character {character.Id}", World = "Home World",
+        InventoryFreeSlots = Math.Min(140U, character.BagSpace), InventorySlotsRetrievedAt = DateTimeOffset.UtcNow
+    };
 
     private sealed class HarnessPlugin
     {
@@ -290,22 +308,39 @@ public sealed partial class WorkflowService
     private sealed class HarnessPeer { public Guid? RemotePeerId { get; init; } }
 }
 
-public sealed class SimulatedCharacter
+public sealed class SimulatedCharacter : SimulatedItemInventory
 {
     public required ulong Id { get; init; }
     public required Guid PeerId { get; init; }
-    public uint Bags { get; set; }
     public uint BagLimit { get; init; } = 999;
-    public uint StackSize { get; init; } = 99;
     public uint StorageLimit { get; init; } = 1_000_000;
     public bool ScanVerified { get; set; } = true;
-    public Dictionary<ulong, uint> Retainers { get; init; } = [];
     public string Location { get; set; } = "home";
+    public Dictionary<ItemKey, SimulatedItemInventory> OtherItems { get; } = [];
+    public SimulatedItemInventory Inventory(uint itemId, bool highQuality = false)
+    {
+        if (itemId == 10155 && !highQuality) return this;
+        var key = new ItemKey(itemId, highQuality);
+        if (!OtherItems.TryGetValue(key, out var stock))
+        {
+            stock = new() { Retainers = Retainers.Keys.ToDictionary(id => id, _ => 0U) };
+            OtherItems[key] = stock;
+        }
+        return stock;
+    }
+    // A shared quantity-capacity ceiling models competing item occupancy for coordinator tests.
+    public uint BagSpace => (uint)Math.Max(0L, (long)BagLimit - Bags - OtherItems.Values.Sum(item => (long)item.Bags));
+    public uint StorageSpace => (uint)Math.Max(0L, (long)StorageLimit - RetainerTotal - OtherItems.Values.Sum(item => (long)item.RetainerTotal));
+}
+
+public class SimulatedItemInventory
+{
+    public uint Bags { get; set; }
+    public uint StackSize { get; init; } = 99;
+    public Dictionary<ulong, uint> Retainers { get; init; } = [];
     public uint RetainerTotal => checked((uint)Retainers.Values.Aggregate(0UL, (sum, value) => sum + value));
-    public uint BagSpace => BagLimit - Bags;
-    public uint StorageSpace => StorageLimit >= RetainerTotal ? StorageLimit - RetainerTotal : 0;
     public ulong Total => (ulong)Bags + RetainerTotal;
 }
 
-public sealed record SimulatedCommandTrace(WorkerCommandKind Kind, GameOperationKind Operation, ulong CharacterId, uint Quantity, string StartLocation);
-public sealed record SimulatedTrade(ulong SenderId, ulong ReceiverId, uint Quantity, Guid SenderCommandId, Guid ReceiverCommandId);
+public sealed record SimulatedCommandTrace(WorkerCommandKind Kind, GameOperationKind Operation, ulong CharacterId, uint Quantity, string StartLocation, uint ItemId, bool HighQuality);
+public sealed record SimulatedTrade(ulong SenderId, ulong ReceiverId, uint Quantity, Guid SenderCommandId, Guid ReceiverCommandId, uint ItemId, bool HighQuality);

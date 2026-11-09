@@ -1,6 +1,6 @@
 # Ashe's Trader: transfer-job requirements
 
-Status: agreed product requirements, implemented in the 0.2.2.0 development build for staged two-PC testing. Automated tests cover planning, accounting, LAN discovery/transport, and the transfer coordinator. No in-game trades, purchases, or retainer actions have been validated by this project yet.
+Status: agreed product requirements, implemented in the 0.3.0.0 development build for staged two-PC testing. Automated tests cover planning, accounting, LAN discovery/transport, and the transfer coordinator. No in-game trades, purchases, or retainer actions have been validated by this project yet.
 
 ## Confirmed requirements
 
@@ -17,9 +17,11 @@ Status: agreed product requirements, implemented in the 0.2.2.0 development buil
 
 ## Job definition
 
-A job specifies the item and quality, source characters, ordered recipients, quantity semantics, meeting point, allowed relay characters, and storage policy.
+A job specifies multiple item lines and a shared meeting point. Each line has an item and quality, source characters, ordered recipients and quantity semantics. Storage policies remain per character. Relay selection is automatic when an actual allocation requires another character on the opposite account.
 
-Proposed quantity modes:
+Item lines run sequentially. Each gets fresh inventory discovery and its own ledger, withdrawals, deposits and completed result. Completion of one line and activation of the next are saved together before any new command is issued. A shortfall does not skip the later lines; unresolved movement or trade evidence pauses the whole job. Duplicate item/quality lines are rejected. Existing single-item templates and in-flight journals retain their meaning.
+
+Quantity modes, independently selectable for each item:
 
 1. **Move all:** collect eligible source stock and allocate it in recipient order. A recipient may have a cap; at most the last recipient can have an unlimited remainder allocation.
 2. **Deliver an amount:** deliver the configured additional quantity during this job. Depositing those items on a recipient's retainers still counts as delivered.
@@ -66,6 +68,10 @@ When the receiver needs space:
 
 If source withdrawal itself needs inventory space, schedule bounded pickup/trade trips rather than assuming all retainer stock fits into one carried inventory.
 
+When a funded allocation needs a relay, rank opposite-account AutoRetainer characters by cached free bag slots and use a deterministic tie-break. Log into the highest-ranked eligible character and inspect its current item capacity; try the next candidate if it cannot receive any. A zero free-slot hint can still permit merging into an existing stack. Relay-only inspections do not claim that unrelated retainers were scanned. Only currently imported AutoRetainer characters with known slot counts are automatic candidates.
+
+Once the per-item journal is created, keep its selected relay fixed for recovery and cargo accounting. Do not replace it while cargo or an issued operation remains. Unexpected later capacity loss pauses the item rather than rewriting historical routes. A later item performs its own selection.
+
 If every permitted retainer is full, travel is unavailable, a retainer cannot be accessed, or the peer disconnects, pause the job with a specific reason and unresolved quantities. Do not convert incomplete work into success.
 
 ## LAN coordination and recovery
@@ -85,6 +91,8 @@ The game operation and local journal cannot be committed atomically. After inter
 - Route a transfer through an allowed character on the other account when required.
 - Exclude recipient-protected stock and relay cargo from source collection.
 - Perform multiple source withdrawal trips when carried inventory is too small.
+- Process multiple item/quality lines with independent quantities, shortages and restart checkpoints.
+- Choose automatic relays only for funded same-account routes; rank by AutoRetainer slots and fall back after a failed live capacity check.
 - Pause, home-world deposit, return, and resume multiple times during one delivery.
 - Preserve delivered totals after retainer deposits.
 - Respect exact quantities and HQ selection without over-withdrawing or over-delivering.

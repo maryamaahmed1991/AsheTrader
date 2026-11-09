@@ -1,6 +1,6 @@
 # Two-PC testing: start here
 
-Test build: **0.2.2.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals.
+Test build: **0.3.0.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys.
 
 The automated tests simulate game operations; native travel, retainer menus and trades still need this live test. Stop at the first unexpected action or error using **Pause workflow** or `/ashetrader stop`.
 
@@ -35,7 +35,7 @@ On the controlling PC, open **2. Set up** and create a job:
 - Quantity: **10 additional items**, not a final stock target or unlimited remainder.
 - Meeting point: capture an accessible **outdoor position near a main aetheryte**. Set the matching main aetheryte for that territory. Record this before scanning, because scanning travels to storage.
 
-Leave the default inn storage route for this first test. No relay is needed when the provider and recipient are on different PCs.
+Leave the default inn storage route for this first test. No relay is needed when the provider and recipient are on different PCs. Relay selection is automatic when a same-account allocation needs one.
 
 ### 4. Scan first
 
@@ -60,15 +60,28 @@ Pickup progress is separate from delivery progress: withdrawing seven must not i
 
 ## After the first session passes
 
+### Multiple items and automatic relays
+
+1. In the same saved job, add a second, different tradable item. Select that line and set its providers, recipients and a small additional amount, such as 2. Review must show both items and their separate amounts. All lines share the meeting point.
+2. Start the job and confirm the first item finishes before the second begins. Each item gets a fresh scan. Activity must retain the first item's delivered total while showing the second's progress. A scan-only run should inspect both items without moving either. Then test a recipient whose bags fill from the first item: received first-item stock should be stored to make room for the second, while the first item's delivery total stays unchanged.
+3. Next, use a provider and recipient on the same PC/account. Refresh AutoRetainer characters on both PCs. Do not select a relay manually: the other PC's registered alt with the highest cached free-slot count should be tried automatically. Check the chosen name and live capacity in Activity.
+4. Confirm the route is provider → automatically chosen alt → final recipient. Relay cargo must not appear as final delivery. Only the provider and final recipient need full retainer scans; a relay-only alt needs a live bag-capacity check.
+5. After normal selection passes, test stale hints deliberately: give the highest-ranked alt no capacity for the item while AutoRetainer still reports space, with another eligible alt available. Expect a live check followed by automatic fallback to the next candidate before trading. If every candidate is full, expect a pause; free space, refresh character lists and resume.
+6. Check the colored status labels remain readable: green ready/success, blue active information, amber waiting/attention, red blocked/error. Text must explain every status even without its color.
+
+AutoRetainer's free-slot figures are cached. The plugin checks current capacity before accepting a candidate. After a per-item plan has issued work, its relay stays fixed so recovery cannot assign old cargo to a different character. Unexpected later capacity loss pauses that item; subsequent items select again.
+
+### Larger runs and recovery
+
 Run these as separate, supervised tests. Each one checks a different behavior:
 
 1. **Repeated provider refills:** use a provider with more retainer stock than its available carrying capacity, plus a recipient with sufficient space. Expect multiple bounded home/bell → pickup → meeting → trade trips. Several trades from one carried load should not cause unnecessary storage trips.
 2. **Recipient overflow:** give the recipient limited bag space but enough permitted retainer capacity. It must first have space to receive job items. Expect home-world deposits of received items, return to the meeting point, then further trades. Depositing must not reduce the delivered count. Other item types remain untouched.
 3. **Multiple providers and priority:** add a second provider and two recipients with small finite quantities. Verify the first recipient is fulfilled before the second and each provider's retained stock agrees with the amounts moved.
-4. **Same-account route:** designate a relay on the other account. Expect provider → relay → final recipient. Relay holdings must not count as final delivery or become new source stock.
+4. **Same-account route across items:** let the job choose its relay for each item. Expect provider → relay → final recipient. Relay holdings must not count as final delivery or become new source stock.
 5. **Pause and reconnect:** pause between completed trades, then resume. Repeat with a LAN disconnect between trades. Completed deliveries must not repeat.
 
-Only after those pass, test interruption while a trade or storage movement is pending. Missing or conflicting evidence should pause for reconciliation. Saved completed results should recover without repeating the movement. Never confirm a reconciliation choice merely to dismiss an error.
+Only after those pass, test interruption while a trade or storage movement is pending, and then between completed item lines. Missing or conflicting evidence should pause for reconciliation. Saved completed results should recover without repeating the movement or rerunning a completed item. Never confirm a reconciliation choice merely to dismiss an error.
 
 For an uncertain retainer pickup or deposit, inspect the original character's bags and retainers. Preserve the journals and report the stop. Do not repeatedly resume an uncertain storage movement. When the plugin permits ending the paused job, create a new, freshly scanned job for the remaining quantities.
 

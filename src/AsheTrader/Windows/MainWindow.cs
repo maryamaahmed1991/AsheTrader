@@ -34,16 +34,16 @@ public sealed class MainWindow : Window
     {
         ImGui.TextUnformatted("ASHE'S TRADER");
         ImGui.SameLine();
-        ImGui.TextDisabled("v0.2.2 · two-PC test build");
+        ImGui.TextDisabled("v0.3.0 · two-PC test build");
         ImGui.SameLine();
         ImGui.BeginDisabled(!plugin.Trader.IsRunning && !plugin.Fuel.Active && !plugin.Workflow.Busy);
         if (ImGui.Button("STOP ALL", new Vector2(110, 26))) plugin.QueueAction(plugin.StopAll);
         ImGui.EndDisabled();
         ImGui.Separator();
-        if (plugin.Trader.IsRunning) ImGui.TextWrapped(plugin.Trader.Status);
-        if (plugin.Fuel.Active) ImGui.TextWrapped(plugin.Fuel.Status);
-        if (!string.IsNullOrEmpty(plugin.SettingsError)) ImGui.TextWrapped(plugin.SettingsError);
-        if (!string.IsNullOrEmpty(error)) ImGui.TextWrapped(error);
+        if (plugin.Trader.IsRunning) UiTone.Status(plugin.Trader.Status);
+        if (plugin.Fuel.Active) UiTone.Status(plugin.Fuel.Status);
+        if (!string.IsNullOrEmpty(plugin.SettingsError)) UiTone.Wrapped(UiTone.Error, plugin.SettingsError);
+        if (!string.IsNullOrEmpty(error)) UiTone.Wrapped(UiTone.Error, error);
         if (!ImGui.BeginTabBar("MainTabs")) return;
         if (ImGui.BeginTabItem("Transfers")) { workflowPanel.Draw(); ImGui.EndTabItem(); }
         if (ImGui.BeginTabItem("Fuel & houses"))
@@ -172,7 +172,7 @@ public sealed class MainWindow : Window
         if (ImGui.Button("Import / refresh AutoRetainer roster")) plugin.QueueAction(ImportCharacters);
         ImGui.SameLine();
         if (ImGui.Button("Add current character")) plugin.QueueAction(AddCurrentCharacter);
-        ImGui.TextWrapped(importStatus);
+        UiTone.Status(importStatus);
         ImGui.TextWrapped("Account labels belong to Ashe's Trader. AutoRetainer's service-account number is retained as metadata, and is not treated as a unique login.");
         if (!ImGui.BeginTable("Characters", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable)) return;
         ImGui.TableSetupColumn("Character"); ImGui.TableSetupColumn("Home world"); ImGui.TableSetupColumn("Account label"); ImGui.TableSetupColumn("AR service account"); ImGui.TableSetupColumn("Switch"); ImGui.TableHeadersRow();
@@ -210,14 +210,8 @@ public sealed class MainWindow : Window
 
     private void ImportCharacters()
     {
-        if (!plugin.AutoRetainer.TryGetCharacters(out var snapshots, out var failure)) { importStatus = failure; return; }
-        foreach (var snapshot in snapshots)
-        {
-            var existing = plugin.Config.Characters.FirstOrDefault(x => x.ContentId == snapshot.ContentId);
-            if (existing == null) { existing = new CharacterProfile { ContentId = snapshot.ContentId }; plugin.Config.Characters.Add(existing); }
-            existing.Name = snapshot.Name; existing.World = snapshot.World; existing.ServiceAccount = snapshot.ServiceAccount;
-        }
-        plugin.Save(); importStatus = $"Refreshed {snapshots.Count} characters. Your account labels and fuel profiles were kept.";
+        plugin.Workflow.RefreshRosters();
+        importStatus = plugin.Workflow.RosterStatus;
         plugin.Record(importStatus);
     }
 
@@ -296,7 +290,7 @@ public sealed class MainWindow : Window
         ImGui.TextWrapped("No run resumes automatically after reload. /ashetrader stop stops the current operation.");
         if (ImGui.Button("Reload shared settings")) plugin.ReloadSettings();
         ImGui.Separator();
-        foreach (var entry in plugin.Activity.Reverse()) ImGui.TextWrapped(entry);
+        foreach (var entry in plugin.Activity.Reverse()) UiTone.Status(entry);
     }
 
     private static string ItemName(uint id) => Plugin.DataManager.GetExcelSheet<Item>().TryGetRow(id, out var item) ? item.Name.ToString() : $"Item {id}";

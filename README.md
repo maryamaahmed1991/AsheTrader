@@ -10,7 +10,9 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 - Pair one coordinator PC and one worker PC using an authenticated, encrypted LAN connection.
 - Find nearby coordinators by PC label without copying IP addresses. Hosting chooses a local network adapter automatically; manual connection remains available.
 - Import each PC's AutoRetainer roster and read optional Allagan Tools inventory hints.
-- Save one-item transfer jobs with source characters, ordered recipients, quantities, HQ selection, relay characters, and a meeting point.
+- Save multiple item lines in one job, each with providers, ordered recipients, quantities and quality, sharing one meeting point.
+- Automatically choose relays for same-account transfers using AutoRetainer's cached free-slot counts, then verify live capacity before use.
+- Read status at a glance: green for ready/success, blue for active information, amber for waiting or attention, and red for blockers/errors. Text labels remain alongside colors.
 - Discover selected characters' carried inventories and every retainer before planning. A scan-only action performs no trades.
 - Allocate additional quantities, collect all with a final remainder recipient, or restock to a combined bag/retainer total.
 - Trade providers' carried stock first, then repeatedly collect bounded loads from their retainers and return to the meeting point until their assignments are complete.
@@ -38,7 +40,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.2.2.0.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.0.0.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
@@ -48,7 +50,7 @@ The plugin does not open a network listener or resume gameplay merely by loading
 
 ## Pair without entering an IP address
 
-Open **Transfers → 1. Connect PCs**. On the coordinator, choose **This PC controls transfers** and press **Host for my other PC**; an empty pairing key is generated automatically. The plugin selects an active home-network adapter, with an override under Advanced. On the worker, choose **This PC receives instructions**, enter the same key once, press **Find my coordinator**, and click **Connect to this PC** beside the coordinator's label. Enable **Allow the coordinator to run jobs on this PC**. Both PCs remember the key and authenticated peer identity, so later sessions need only Host, Find, and Connect. Update both PCs to the same build before pairing; version 0.2.2 uses a new workflow protocol and rejects older peers before exchanging commands.
+Open **Transfers → 1. Connect PCs**. On the coordinator, choose **This PC controls transfers** and press **Host for my other PC**; an empty pairing key is generated automatically. The plugin selects an active home-network adapter, with an override under Advanced. On the worker, choose **This PC receives instructions**, enter the same key once, press **Find my coordinator**, and click **Connect to this PC** beside the coordinator's label. Enable **Allow the coordinator to run jobs on this PC**. Both PCs remember the key and authenticated peer identity, so later sessions need only Host, Find, and Connect. Update both PCs to the same build before pairing; version 0.3.0 exchanges the AutoRetainer slot metadata required for automatic relays and rejects older peers before exchanging commands.
 
 Discovery uses small UDP queries and replies on port 45875 within the local subnet. It shares the host's label, peer ID, and TCP port; no pairing key, inventory, or commands are sent over discovery. The existing authenticated, encrypted TCP connection still verifies the selected peer before exchanging rosters or running jobs. Results expire when a coordinator stops responding, and discovery never starts gameplay or resumes a paused job.
 
@@ -60,7 +62,13 @@ Under **Transfers**, connect the PCs and refresh both character lists, then crea
 
 **3. Review & run** summarizes the intended transfer and explains missing setup. Scan-only discovery actively logs into characters, travels home and visits retainers, but moves no items. Starting a transfer performs a fresh discovery pass. Capture the outdoor meeting point before scanning. **4. Activity** keeps verified provider pickups, receiver deposits and final deliveries separate.
 
-Recipients are ordered. A finite amount means additional delivery in Move all/Deliver amount modes and final stock in Restock to total mode. Only the final recipient may take an unlimited remainder, and Restock to total requires explicit finite targets. Designate a relay on the other account for any source-to-recipient route within the same account.
+Add each requested item under the same saved job. Each item line has its own providers, ordered recipients and quantity mode. Lines run in order, with a fresh inventory scan and separate delivery accounting for each. The same item and quality may appear once per job; combine its recipient rules on that line. Existing single-item jobs remain usable.
+
+Recipients are ordered within each item. A finite amount means additional delivery in Move all/Deliver amount modes and final stock in Restock to total mode. Only the final recipient may take an unlimited remainder, and Restock to total requires explicit finite targets. A shortage on one item is recorded while the remaining items continue. An interrupted operation pauses the job before moving to another item. If an earlier line's received items fill the current provider or recipient's bags, the job can store those received items in retainers to make room; that movement stays charged to the earlier item and never changes its delivered total.
+
+Relays are automatic. After scanning providers and recipients, the planner determines whether any funded allocation needs a character on the opposite account. It ranks that PC's AutoRetainer characters by reported free inventory slots, checks the best candidate's live capacity for the item, and tries the next candidate if full. Known zero-slot candidates may still have mergeable stacks; unknown counts are not treated as verified zero. Relay-only characters need a bag inspection, not a scan of unrelated retainers.
+
+AutoRetainer slot counts are cached hints; their retrieval time is not an inventory observation time. Refresh both character lists after updating AutoRetainer. If no candidate can carry the item, the job pauses with instructions to free space and retry. Once a plan has issued work, its relay stays fixed so saved trade history and cargo remain attributable to the correct character. Unexpected later capacity loss pauses that item; the next item chooses its relay afresh.
 
 Capture the rendezvous while standing at an accessible outdoor point. Verify the aetheryte belongs to that territory. Capture a custom storage bell only on that character's home world; leaving it unset uses an inn. Retainer allowlists govern destination deposits; an empty allowlist means all available retainers.
 
@@ -86,7 +94,7 @@ Once a GitHub repository exists:
 
 1. Push this source, preserving the license and notices.
 2. Upload the built `AsheTrader-<version>.zip` as a public release asset.
-3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.2.2.0`.
+3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.0.0`.
 4. Commit the generated root `repo.json` on `main`. Its raw GitHub URL is the permanent custom-repository feed; update that file for each release.
 
 Source is hosted in [maryamaahmed1991/AsheTrader](https://github.com/maryamaahmed1991/AsheTrader), with installable packages under [Releases](https://github.com/maryamaahmed1991/AsheTrader/releases). Pairing secrets and runtime journals must not be committed or included in release artifacts.

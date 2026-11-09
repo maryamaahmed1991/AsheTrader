@@ -22,6 +22,10 @@ public sealed class WorkflowSettings
 public sealed class SavedTransferJob
 {
     public TransferJobDefinition Definition { get; set; } = new();
+    // Keep the original first-item field so saved single-item jobs need no destructive migration.
+    public List<TransferJobDefinition> AdditionalItems { get; set; } = [];
+    [Newtonsoft.Json.JsonIgnore]
+    public IEnumerable<TransferJobDefinition> ItemDefinitions => new[] { Definition }.Concat(AdditionalItems);
     public TravelLocation Meeting { get; set; } = new();
 }
 
@@ -72,6 +76,8 @@ public sealed class WorkerRecord
 public sealed class PendingCommand
 {
     public bool InventoryAdjustmentApplied { get; set; }
+    // Null means the active item; a value identifies a completed item whose received stock is being stored.
+    public int? InventoryItemIndex { get; set; }
     public Guid PeerId { get; set; }
     public WorkerCommand Command { get; set; } = new();
     public WorkerResponse? Response { get; set; }
@@ -82,13 +88,31 @@ public enum CoordinatorStep
 {
     DiscoverLogin, DiscoverScan, Plan, SelectLeg, LoginSender, LoginReceiver,
     InspectSender, Withdraw, InspectReceiver, Deposit, TravelSender, TravelReceiver,
-    PreviewBatch, ArmReceiver, SendBatch, AwaitTrade, Finished
+    PreviewBatch, ArmReceiver, SendBatch, AwaitTrade, Finished,
+    // Append new states so existing numeric journal states keep their meaning.
+    RelayLogin, RelayInspect, DepositPreviousItem
 }
 
 public sealed class CoordinatorRun
 {
     public bool DiscoveryOnly { get; set; }
     public SavedTransferJob Job { get; set; } = new();
+    public int ActiveItemIndex { get; set; }
+    public List<CoordinatorItemResult> CompletedItems { get; set; } = [];
+    public Dictionary<Guid, ulong> AutomaticRelays { get; set; } = [];
+    public List<ulong> RejectedRelayCharacters { get; set; } = [];
+    public ulong? RelayCandidateId { get; set; }
+    public Guid? RelayCandidatePeerId { get; set; }
+    public int? PreviousItemDepositIndex { get; set; }
+    public ulong PreviousItemDepositCharacterId { get; set; }
+    [Newtonsoft.Json.JsonIgnore]
+    public TransferJobDefinition ActiveDefinition => ActiveItemIndex >= 0 && ActiveItemIndex < TotalItemCount
+        ? Job.ItemDefinitions.ElementAt(ActiveItemIndex)
+        : throw new InvalidDataException("The saved job's active item index is invalid.");
+    [Newtonsoft.Json.JsonIgnore]
+    public int TotalItemCount => 1 + Job.AdditionalItems.Count;
+    [Newtonsoft.Json.JsonIgnore]
+    public bool HasShortages => Journal?.Plan.HasShortage == true || CompletedItems.Any(item => item.Journal?.Plan.HasShortage == true);
     public Dictionary<ulong, JobCharacterSnapshot> Snapshots { get; set; } = [];
     public List<ulong> DiscoveryOrder { get; set; } = [];
     public int DiscoveryIndex { get; set; }
@@ -108,6 +132,19 @@ public sealed class CoordinatorRun
     public List<PendingCommand> Pending { get; set; } = [];
     public bool Paused { get; set; }
     public string Status { get; set; } = "";
+}
+
+/// <summary>Completed item ledger and rules remain fixed; its storage counter can advance when later items need room.</summary>
+public sealed class CoordinatorItemResult
+{
+    public int ItemIndex { get; set; }
+    public TransferJobDefinition Definition { get; set; } = new();
+    public bool DiscoveryOnly { get; set; }
+    public TransferJobJournal? Journal { get; set; }
+    public Dictionary<ulong, JobCharacterSnapshot> Snapshots { get; set; } = [];
+    public Dictionary<ulong, ulong> Withdrawn { get; set; } = [];
+    public Dictionary<ulong, ulong> Deposited { get; set; } = [];
+    public Dictionary<Guid, ulong> AutomaticRelays { get; set; } = [];
 }
 
 public sealed record ManualResolution(Guid CommandId, bool Transferred);

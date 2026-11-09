@@ -14,8 +14,8 @@ internal static class PairingHandshake
 {
     private const int HelloLength = 61;
     private static ReadOnlySpan<byte> Magic => "ASHETRD1"u8;
-    // Version 2 requires support for the bidirectional roster-request workflow message.
-    internal const int ProtocolVersion = 2;
+    // Version 3 exchanges AutoRetainer slot metadata required for automatic relay selection.
+    internal const int ProtocolVersion = 3;
 
     internal static async Task<SessionSecrets> AuthenticateAsync(NetworkStream stream, byte[] pairingKey, Guid localPeerId, bool host, CancellationToken cancellationToken)
     {

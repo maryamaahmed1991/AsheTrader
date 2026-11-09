@@ -22,7 +22,7 @@ public sealed class TransferJobDefinition
     public JobQuantityMode QuantityMode { get; set; } = JobQuantityMode.MoveAll;
     public List<ulong> Sources { get; set; } = [];
     public List<RecipientRule> Recipients { get; set; } = [];
-    /// <summary>Each peer may nominate a character for relay legs through that peer's account.</summary>
+    /// <summary>Resolved automatic relay routes, pinned once a plan is issued. New runs ignore legacy template choices.</summary>
     public Dictionary<Guid, ulong> RelayCharacters { get; set; } = [];
 }
 

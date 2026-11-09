@@ -147,6 +147,13 @@ public sealed partial class WorkflowService : IDisposable
 
     private void ImportLocalCharacters()
     {
+        // Only current AutoRetainer registrations may be chosen automatically as relays.
+        // Keep manually configured profiles, but do not retain stale eligibility after a failed refresh.
+        foreach (var character in plugin.Config.Characters)
+        {
+            character.InventoryFreeSlots = null;
+            character.InventorySlotsRetrievedAt = null;
+        }
         if (!plugin.AutoRetainer.TryGetCharacters(out var imported, out var importError))
         {
             RosterStatus = $"Could not refresh this PC's characters: {importError} Enable AutoRetainer and try again. Previously configured characters are retained.";
@@ -157,6 +164,8 @@ public sealed partial class WorkflowService : IDisposable
             var character = plugin.Config.Characters.FirstOrDefault(x => x.ContentId == row.ContentId);
             if (character == null) { character = new() { ContentId = row.ContentId }; plugin.Config.Characters.Add(character); }
             character.Name = row.Name; character.World = row.World; character.ServiceAccount = row.ServiceAccount;
+            character.InventoryFreeSlots = row.InventorySpace;
+            character.InventorySlotsRetrievedAt = DateTimeOffset.UtcNow;
         }
         plugin.Save();
         RosterStatus = imported.Count == 0
@@ -168,7 +177,10 @@ public sealed partial class WorkflowService : IDisposable
     {
         PeerId = Settings.PeerId, Name = Settings.PeerName, ControlEnabled = host || Settings.AllowRemoteControl,
         Characters = plugin.Config.Characters.Select(x => new CharacterProfile
-        { ContentId = x.ContentId, Name = x.Name, World = x.World, AccountLabel = x.AccountLabel, ServiceAccount = x.ServiceAccount }).ToList()
+        {
+            ContentId = x.ContentId, Name = x.Name, World = x.World, AccountLabel = x.AccountLabel, ServiceAccount = x.ServiceAccount,
+            InventoryFreeSlots = x.InventoryFreeSlots, InventorySlotsRetrievedAt = x.InventorySlotsRetrievedAt
+        }).ToList()
     };
 
     public IEnumerable<(Guid PeerId, CharacterProfile Character)> AllCharacters() =>

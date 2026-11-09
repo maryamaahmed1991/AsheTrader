@@ -61,18 +61,20 @@ public sealed class LanPeerTests
         Assert.True(worker.IsConnected);
     }
 
-    [Fact]
-    public async Task LegacyProtocolIsRejectedBeforeSessionAndListenerAcceptsCurrentPeer()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task LegacyProtocolIsRejectedBeforeSessionAndListenerAcceptsCurrentPeer(int legacyVersion)
     {
         using var host = new LanPeer();
         var key = LanPeer.GeneratePairingKey();
         host.StartHost(IPAddress.Loopback, 0, key, Guid.NewGuid());
         using var legacy = new System.Net.Sockets.TcpClient();
         await legacy.ConnectAsync(IPAddress.Loopback, host.BoundPort);
-        // A valid version-1 worker hello must be rejected before proofs or application data.
+        // Older workers lack the current workflow/AutoRetainer metadata contract.
         var hello = new byte[61];
         "ASHETRD1"u8.CopyTo(hello);
-        BinaryPrimitives.WriteInt32BigEndian(hello.AsSpan(8), 1);
+        BinaryPrimitives.WriteInt32BigEndian(hello.AsSpan(8), legacyVersion);
         hello[12] = 0;
         Guid.NewGuid().TryWriteBytes(hello.AsSpan(13, 16));
         RandomNumberGenerator.Fill(hello.AsSpan(29, 32));
