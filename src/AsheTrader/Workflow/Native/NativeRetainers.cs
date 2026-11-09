@@ -1,5 +1,6 @@
 using System.Numerics;
 using AsheTrader.Core;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Game.Text.SeStringHandling;
@@ -32,7 +33,48 @@ internal static unsafe class NativeRetainers
     public static bool HasUnrelatedModal => Ready("SelectYesno") != null || Ready("Trade") != null;
     public static bool HasNumeric => Ready("InputNumeric") != null;
     public static bool HasRetainerList => Ready("RetainerList") != null;
+    public static bool HasRetainerMenu => Ready("SelectString") != null;
     public static bool HasRetainerInventory => AgentRetainer.Instance() != null && AgentRetainer.Instance()->IsAgentActive();
+    public static bool HasVisibleRetainerInventory => HasRetainerInventory && (Ready("InventoryRetainer") != null || Ready("InventoryRetainerLarge") != null);
+
+    public static bool HasExpectedRetainerTalk(RetainerIdentity expected)
+    {
+        var talk = (AddonTalk*)Ready("Talk");
+        if (talk == null || !Plugin.Condition[ConditionFlag.OccupiedSummoningBell]) return false;
+        // AddonTalk's first text node is the speaker (also used by TextToTalk/TalkUtils).
+        var speaker = talk->AtkTextNode220;
+        return speaker != null && speaker->NodeText.StringPtr.Value != null
+            && string.Equals(SeString.Parse(speaker->NodeText.StringPtr.Value).TextValue.Trim(), expected.Name.Trim(), StringComparison.Ordinal);
+    }
+
+    public static bool AdvanceRetainerTalk(RetainerIdentity expected)
+    {
+        if (!HasExpectedRetainerTalk(expected) || HasNumeric || HasUnrelatedModal) return false;
+        VerifyRetainer(expected.Id);
+        var addon = Ready("Talk");
+        var stage = AtkStage.Instance();
+        if (addon == null || stage == null) return false;
+        // The Talk event sequence used by ECommons' AddonMaster.Talk. Only the
+        // verified retainer's own greeting/farewell is eligible for this action.
+        var evt = new AtkEvent
+        {
+            Listener = (AtkEventListener*)addon,
+            Target = &stage->AtkEventTarget,
+            State = new() { StateFlags = (AtkEventStateFlags)132 },
+        };
+        var data = new AtkEventData();
+        addon->ReceiveEvent(AtkEventType.MouseDown, 0, &evt, &data);
+        addon->ReceiveEvent(AtkEventType.MouseClick, 0, &evt, &data);
+        addon->ReceiveEvent(AtkEventType.MouseUp, 0, &evt, &data);
+        return true;
+    }
+
+    public static string DescribeStorageUi()
+    {
+        string[] names = ["RetainerList", "Talk", "SelectString", "InventoryRetainer", "InventoryRetainerLarge", "RetainerItemTransferProgress", "InputNumeric", "SelectYesno", "Trade"];
+        var visible = names.Where(name => Ready(name) != null).ToArray();
+        return $"Ready windows: {(visible.Length == 0 ? "none" : string.Join(", ", visible))}; summoning-bell occupied: {Plugin.Condition[ConditionFlag.OccupiedSummoningBell]}";
+    }
 
     public static ItemInventory ReadBags(uint itemId, bool hq) => Read(Bags, itemId, hq);
     public static ItemInventory ReadRetainer(ulong expectedRetainer, uint itemId, bool hq)

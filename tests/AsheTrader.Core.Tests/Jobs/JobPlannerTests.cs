@@ -137,6 +137,48 @@ public sealed class JobPlannerTests
     }
 
     [Fact]
+    public void CompleteCacheCanBudgetStockWithoutBeingDeclaredVerified()
+    {
+        var source = Character(1, PeerA, 4, 16);
+        source.Verification = InventoryVerification.Cached;
+        source.RetainerRosterVerified = false;
+        source.HasCompleteCachedInventory = true;
+        source.Retainers[0].Verification = InventoryVerification.Cached;
+
+        var plan = JobPlanner.Plan(Job([1], (2, 20)), [source, Character(2, PeerB)]);
+
+        Assert.True(plan.PlannedFromCache);
+        Assert.Equal(20UL, plan.AllocatedQuantity);
+        Assert.False(source.IsFullyVerified);
+        Assert.True(source.IsPlanningReady);
+    }
+
+    [Fact]
+    public void CacheCompletenessFlagCannotOverrideUnknownRetainerData()
+    {
+        var source = Character(1, PeerA, 4, 16);
+        source.Verification = InventoryVerification.Cached;
+        source.HasCompleteCachedInventory = true;
+        source.Retainers[0].Verification = InventoryVerification.Unknown;
+
+        Assert.Throws<InvalidOperationException>(() => JobPlanner.Plan(Job([1], (2, null)), [source, Character(2, PeerB)]));
+    }
+
+    [Fact]
+    public void CachedRecipientCannotSupplyExactRestockBaseline()
+    {
+        var recipient = Character(2, PeerB, 4, 16);
+        recipient.Verification = InventoryVerification.Cached;
+        recipient.HasCompleteCachedInventory = true;
+        var definition = Job([1], (2, 100));
+        definition.QuantityMode = JobQuantityMode.RestockToTotal;
+
+        var error = Assert.Throws<InvalidOperationException>(() => JobPlanner.Plan(definition, [Character(1, PeerA, 100), recipient]));
+
+        Assert.Contains("live bag and retainer total", error.Message);
+    }
+
+    [Fact]
     public void MissingCharacterSnapshotIsNotEmptyStock()
     {
         Assert.Throws<InvalidOperationException>(() => JobPlanner.Plan(Job([1], (2, null)), [Character(2, PeerB)]));

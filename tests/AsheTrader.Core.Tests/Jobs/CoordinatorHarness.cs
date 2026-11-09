@@ -149,7 +149,8 @@ public sealed partial class WorkflowService
         {
             var operation = command.Operation;
             if (operation.Kind == GameOperationKind.Login) loggedIn[owner] = character.Id;
-            else if (loggedIn.GetValueOrDefault(owner) != character.Id) throw new InvalidOperationException("Operation ran on the wrong active character.");
+            else if (operation.Kind != GameOperationKind.ReadCachedInventory && loggedIn.GetValueOrDefault(owner) != character.Id)
+                throw new InvalidOperationException("Operation ran on the wrong active character.");
             uint moved = 0;
             switch (operation.Kind)
             {
@@ -268,6 +269,16 @@ public sealed partial class WorkflowService
     private static GameOperationResult Result(SimulatedCharacter character, GameOperation operation, uint moved)
     {
         var stock = character.Inventory(operation.ItemId, operation.HighQuality);
+        if (operation.Kind == GameOperationKind.ReadCachedInventory)
+            return new()
+            {
+                Id = operation.Id, Success = true, CharacterId = character.Id,
+                CachedInventoryAvailable = character.CacheAvailable, RetainerRosterKnown = character.CacheAvailable,
+                CacheRetrievedAt = character.CacheAvailable ? DateTimeOffset.UtcNow : null,
+                BagQuantity = stock.Bags, BagCapacity = character.BagSpace, StackSize = stock.StackSize,
+                Retainers = stock.Retainers.Select(pair => new RetainerInventorySnapshot(pair.Key, $"Retainer {pair.Key}", pair.Value, false)).ToList(),
+                Error = character.CacheAvailable ? string.Empty : "No complete cached inventory is available.",
+            };
         return new()
         {
             Id = operation.Id, Success = true, CharacterId = character.Id, BagQuantity = stock.Bags,
@@ -315,6 +326,7 @@ public sealed class SimulatedCharacter : SimulatedItemInventory
     public uint BagLimit { get; init; } = 999;
     public uint StorageLimit { get; init; } = 1_000_000;
     public bool ScanVerified { get; set; } = true;
+    public bool CacheAvailable { get; set; }
     public string Location { get; set; } = "home";
     public Dictionary<ItemKey, SimulatedItemInventory> OtherItems { get; } = [];
     public SimulatedItemInventory Inventory(uint itemId, bool highQuality = false)

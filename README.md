@@ -9,11 +9,11 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 - Follow four guided steps: Connect PCs, Set up, Review & run, and Activity. The worker has its own connected-and-ready view; only the coordinator configures jobs.
 - Pair one coordinator PC and one worker PC using an authenticated, encrypted LAN connection.
 - Find nearby coordinators by PC label without copying IP addresses. Hosting chooses a local network adapter automatically; manual connection remains available.
-- Import each PC's AutoRetainer roster and read optional Allagan Tools inventory hints.
+- Import each PC's AutoRetainer roster and plan from Allagan Tools' cached character and retainer inventories.
 - Save multiple item lines in one job, each with providers, ordered recipients, quantities and quality, sharing one meeting point.
 - Automatically choose relays for same-account transfers using AutoRetainer's cached free-slot counts, then verify live capacity before use.
 - Read status at a glance: green for ready/success, blue for active information, amber for waiting or attention, and red for blockers/errors. Text labels remain alongside colors.
-- Discover selected characters' carried inventories and every retainer before planning. A scan-only action performs no trades.
+- Skip discovery logins for characters with complete cached inventory. Missing cache data falls back to a live scan; inventory-only checks perform no trades.
 - Allocate additional quantities, collect all with a final remainder recipient, or restock to a combined bag/retainer total.
 - Trade providers' carried stock first, then repeatedly collect bounded loads from their retainers and return to the meeting point until their assignments are complete.
 - Return a full receiver home, deposit received job items into allowed retainers, then return and continue.
@@ -22,7 +22,7 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 
 ## Runtime requirements
 
-Both PCs need the same Ashe's Trader build, Dalamud API 15, AutoRetainer configured for their own account's characters, Lifestream, and vnavmesh. Allagan Tools is optional: its cache supplies hints, while live discovery supplies the verified counts used by a job.
+Both PCs need the same Ashe's Trader build, Dalamud API 15, AutoRetainer configured for their own account's characters, Lifestream, and vnavmesh. Enable Allagan Tools on both PCs to plan without visiting every character. It remains optional; missing or incomplete caches fall back to live discovery for the affected character.
 
 The accounts must be able to meet on the selected world. Use an outdoor meeting point in the same territory as its main aetheryte. Default retainer access uses Lifestream's home-world inn shortcut; a per-character home-world bell location can be captured instead. Characters must have the required travel unlocks and resources.
 
@@ -40,7 +40,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.1.0.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.2.0.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
@@ -60,9 +60,9 @@ If no coordinator appears, check that both PCs use the same home network and the
 
 Under **Transfers**, connect the PCs and refresh both character lists, then create a job in **2. Set up** on the coordinator. Each character must belong to only one PC's roster. Account labels are descriptive; peer identity and character content ID determine execution ownership. New jobs default to an additional delivery amount, with ten items for each new recipient; existing saved job quantities are preserved.
 
-**3. Review & run** summarizes the intended transfer and explains missing setup. Scan-only discovery actively logs into characters, travels home and visits retainers, but moves no items. Starting a transfer performs a fresh discovery pass. Capture the outdoor meeting point before scanning. **4. Activity** keeps verified provider pickups, receiver deposits and final deliveries separate.
+**3. Review & run** summarizes the intended transfer and explains missing setup. **Check inventories only** reads each PC's Allagan Tools cache without logging into characters with complete cached bags and retainer storage. Missing inventory or retainer ownership data falls back to a live visit for that character. No items move during lookup. Capture the meeting point first because fallback scans can travel. **4. Activity** labels cached estimates and live observations separately and keeps verified pickups, deposits and final deliveries separate.
 
-Add each requested item under the same saved job. Each item line has its own providers, ordered recipients and quantity mode. Lines run in order, with a fresh inventory scan and separate delivery accounting for each. The same item and quality may appear once per job; combine its recipient rules on that line. Existing single-item jobs remain usable.
+Add each requested item under the same saved job. Each item line has its own providers, ordered recipients and quantity mode. Lines run in order, with a new cache lookup and separate delivery accounting for each. The same item and quality may appear once per job; combine its recipient rules on that line. Existing single-item jobs remain usable.
 
 Recipients are ordered within each item. A finite amount means additional delivery in Move all/Deliver amount modes and final stock in Restock to total mode. Only the final recipient may take an unlimited remainder, and Restock to total requires explicit finite targets. A shortage on one item is recorded while the remaining items continue. An interrupted operation pauses the job before moving to another item. If an earlier line's received items fill the current provider or recipient's bags, the job can store those received items in retainers to make room; that movement stays charged to the earlier item and never changes its delivered total.
 
@@ -75,6 +75,8 @@ Capture the rendezvous while standing at an accessible outdoor point. Verify the
 Provider bags and retainer stored inventory are included automatically. When a provider runs out of carried stock, it returns home to collect another load, limited by its current bag capacity and the remaining assignment. It trades that load across as many batches as needed before another storage trip. Other storage types, equipped items, retainer sale listings, gil and crystals are outside this build's job scope. Items must be tradeable and match the selected quality.
 
 ## Progress and recovery
+
+Version 0.3.2 uses cached inventory for planning by default. AutoRetainer supplies the offline retainer ownership list; Allagan Tools supplies exact item/HQ bag and retainer counts. Cache retrieval time is not the last inventory observation time. Unknown storage is never counted as zero. Exact **Restock to total** jobs still verify recipients' full totals live before planning; an inventory-only preview can use their caches. Actual pickups, receiving space and trades are checked live. A source overestimate pauses when stock runs out; newly added stock outside the cached budget needs a later job. Issued plans remain fixed so recovery cannot duplicate work.
 
 Version 0.3.1 fixes character switching from inside the game. AutoRetainer's `CanAutoLogin` check and `Relog` IPC only allow the title screen; the adapter now uses its documented `/autoretainer relog Character Name@World` command, applying title readiness only while logged out. A dispatched command is not treated as a completed switch: the workflow waits for the requested character CID and idle AutoRetainer/Lifestream. If the switch stops without reaching the target, it pauses instead of repeatedly issuing commands.
 
@@ -96,7 +98,7 @@ Once a GitHub repository exists:
 
 1. Push this source, preserving the license and notices.
 2. Upload the built `AsheTrader-<version>.zip` as a public release asset.
-3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.1.0`.
+3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.2.0`.
 4. Commit the generated root `repo.json` on `main`. Its raw GitHub URL is the permanent custom-repository feed; update that file for each release.
 
 Source is hosted in [maryamaahmed1991/AsheTrader](https://github.com/maryamaahmed1991/AsheTrader), with installable packages under [Releases](https://github.com/maryamaahmed1991/AsheTrader/releases). Pairing secrets and runtime journals must not be committed or included in release artifacts.

@@ -1,16 +1,18 @@
 # Development build validation
 
-Build: 0.3.1.0, 8 November 2026. Target: Dalamud API 15, .NET 10, Windows.
+Build: 0.3.2.0, 8 November 2026. Target: Dalamud API 15, .NET 10, Windows.
 
 ## Completed checks
 
 - `scripts/Build.ps1` completed successfully, including restore, tests, Release compilation, and packaging.
-- 196 automated tests passed, with zero failures and zero skipped tests.
+- 229 automated tests passed, with zero failures and zero skipped tests.
 - The plugin Release build produced zero warnings and zero errors against the local Dalamud development libraries.
 - Tests exercise priority allocation, source/recipient overlap, relay accounting, exact item/HQ quantities, fuel calculations, settings conflicts, authenticated encrypted LAN transport, replay rejection, and reconnect behavior.
 - Discovery tests cover bounded packets, protocol validation, source/nonce/identity filtering, result expiry, broadcast calculation, localhost UDP discovery, and cancellation. A separate smoke test on the local private network interface successfully used directed broadcast to discover a test host, then authenticated and exchanged an encrypted message. This used two endpoints on one PC; physical two-PC discovery and the game's firewall rules still need user validation.
 - A reconnect regression confirms an old accepted socket generation cannot send into or consume messages from its replacement. The service accepts the selected/remembered identity before exchanging rosters.
-- Pairing protocol version 3 exchanges AutoRetainer slot metadata and rejects legacy v1/v2 peers before a session or application message is accepted, then remains available for a current peer. Both PCs must update together. Character refresh requests a fresh AutoRetainer roster from both PCs without a request loop.
+- Pairing protocol version 4 adds cached-inventory commands and rejects legacy v1/v2/v3 peers before a session or application message is accepted, then remains available for a current peer. Both PCs must update together. Character refresh requests a fresh AutoRetainer roster from both PCs without a request loop.
+- Eighteen cache-parser cases exercise the production Allagan numeric decoder, sorted bag/retainer slots, NQ/HQ separation, capacity, incomplete groups, foreign owners, duplicate slots, malformed quantities, and synthetic-empty fallback. Eleven coordinator cases and three planner cases cover cache-only discovery, selective live fallback, legacy resume, stale quantities, non-restock overlap protection, and exact restock recipient verification. Cache timestamps and quantities remain explicitly distinct from live observations.
+- Retainer greeting/farewell handling now requires the expected active retainer, occupied summoning bell and exact speaker name. It is throttled and limited to owned retainer interaction stages. Opening storage waits for an actual retainer menu, matching dialogue, or visible inventory. Timeout messages include the native stage and ready window names. These native UI changes were reviewed against upstream Talk handling and compiled, but still require live testing; no local log captured the reported timeout to establish its exact cause.
 - Coordinator tests compile the production coordinator into a simulated two-client harness. They cover discovery, pickup, trades, repeated overflow deposits, return travel, priority/relay delivery, interrupted trades, serialized recovery, partial deposits, lost deposit responses, and refusal to repeat uncertain deposits. Native game adapters are replaced by the harness in those tests.
 - Provider regressions cover carried stock followed by an exact remaining pickup, capacity-limited loads across multiple batches and retainers, protected recipient stock, no bag room, missing relay cargo, saved/lost pickup outcomes, partial failures, and uncertain pickups across repeated restarts. Verified pickup counters are separate from final deliveries.
 - Automatic-relay tests cover cached free-slot ranking, deterministic ties, opposite-account ownership, unknown counts, zero-slot merge capacity, actual funded-route detection, live full-candidate fallback, all-full recovery, and interrupted candidate checks. Issued plans keep their original relay routes.

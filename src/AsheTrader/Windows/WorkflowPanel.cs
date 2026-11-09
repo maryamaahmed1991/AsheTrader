@@ -363,7 +363,7 @@ public sealed class WorkflowPanel(Plugin plugin)
                 if (ImGui.SmallButton($"Remove##missing{missing}")) { definition.Sources.Remove(missing); changed = true; }
             }
             if (roster.Length == 0) UiTone.Wrapped(UiTone.Warning, "No characters yet. Connect both PCs and refresh characters in step 1.");
-            ImGui.TextWrapped("Providers use carried items first, then automatically return to their retainers for more when their bags run out. The job checks bags and every retainer before planning.");
+            ImGui.TextWrapped("Providers use carried items first, then collect more from retainers as needed. Allagan Tools supplies cached bag and retainer counts for planning, so characters with complete data skip the discovery visit.");
         }
 
         if (ImGui.CollapsingHeader("Recipients: fill from top to bottom", ImGuiTreeNodeFlags.DefaultOpen))
@@ -550,7 +550,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         var definitions = job.ItemDefinitions.ToArray();
         ImGui.Spacing();
         UiTone.Wrapped(UiTone.Info, job.Definition.Name);
-        ImGui.TextWrapped($"{definitions.Length} item{(definitions.Length == 1 ? "" : "s")} will run in order. Each item is scanned and tracked separately.");
+        ImGui.TextWrapped($"{definitions.Length} item{(definitions.Length == 1 ? "" : "s")} will run in order. Each item has its own inventory lookup and progress.");
         for (var itemIndex = 0; itemIndex < definitions.Length; itemIndex++)
         {
             var definition = definitions[itemIndex];
@@ -596,9 +596,10 @@ public sealed class WorkflowPanel(Plugin plugin)
         UiTone.Status(dependencySummary);
         ImGui.TextWrapped("Before running: check required plugins on both PCs, pause AutoRetainer multi mode and let its tasks finish. Close existing trade, retainer and confirmation dialogs.");
         ImGui.Separator();
-        UiTone.Wrapped(UiTone.Warning, "Inventory scan checks every item in this job. It actively changes characters, travels to their home-world bells and opens retainers. It does not move items. Record your meeting point first, since scanning moves your character.");
+        UiTone.Wrapped(UiTone.Info, "Inventory lookup uses each PC's Allagan Tools cache first. Complete cached characters need no login or retainer visit. Counts are estimates until checked in game.");
+        ImGui.TextWrapped("Missing cache data falls back to a live visit for that character, which can change characters and travel. Lookup never moves items. Record the meeting point before starting.");
         ImGui.BeginDisabled(scanBlockers.Count > 0);
-        if (ImGui.Button("Scan inventories only", new Vector2(230, 34)))
+        if (ImGui.Button("Check inventories only", new Vector2(230, 34)))
         {
             plugin.QueueAction(() => Service.ScanJob(job));
             page = 3;
@@ -611,7 +612,7 @@ public sealed class WorkflowPanel(Plugin plugin)
             page = 3;
         }
         ImGui.EndDisabled();
-        ImGui.TextWrapped("Start transfer processes all items in order, scanning current inventories before each item and carrying out its trades. You can pause at any time.");
+        ImGui.TextWrapped("Start transfer plans from cached counts, then logs in the characters needed for pickups and trades. Actual stock and receiving space are checked before movement. Exact total-restock targets still need a live recipient total. You can pause at any time.");
         if (ImGui.Button("Back: edit setup")) page = 1;
         if (ImGui.CollapsingHeader("Optional: cached inventory preview"))
         {
@@ -631,7 +632,7 @@ public sealed class WorkflowPanel(Plugin plugin)
                 plugin.QueueAction(() => Service.RefreshInventoryHints(item, highQuality));
             }
             ImGui.EndDisabled();
-            ImGui.TextWrapped("Allagan Tools provides an optional cached preview. A missing entry means unknown stock. Every selected retainer is still visited during the live scan.");
+            ImGui.TextWrapped("This quick preview lists known item holders. Jobs automatically read complete character and retainer caches; missing data triggers a live check for that character.");
             DrawHints();
         }
     }
@@ -749,7 +750,7 @@ public sealed class WorkflowPanel(Plugin plugin)
                     allowed = Settings.AllowedRetainers[character.ContentId];
                 }
                 ImGui.EndDisabled();
-                if (retainers.Count == 0) ImGui.TextWrapped("Retainer choices appear after a verified discovery run. All retainers are permitted by default.");
+                if (retainers.Count == 0) ImGui.TextWrapped("Retainer choices appear after an inventory lookup or live scan. All retainers are permitted by default.");
                 if (!useAll)
                 {
                     foreach (var retainer in retainers)
@@ -815,12 +816,15 @@ public sealed class WorkflowPanel(Plugin plugin)
             UiTone.Wrapped(UiTone.Info, $"Automatic relay on {PeerName(relay.Key)}: {CharacterName(relay.Value)} · live capacity checked");
         if (run.Journal == null)
         {
-            var scanned = run.DiscoveryOrder.Count(id => run.Snapshots.TryGetValue(id, out var snapshot) && snapshot.IsFullyVerified);
-            ImGui.TextUnformatted($"Inventory scan: {scanned}/{run.DiscoveryOrder.Count} provider/recipient characters verified");
+            var scanned = run.DiscoveryOrder.Count(id => run.Snapshots.TryGetValue(id, out var snapshot) && snapshot.IsPlanningReady);
+            var cached = run.Snapshots.Values.Count(snapshot => snapshot.IsPlanningReady && !snapshot.IsFullyVerified);
+            ImGui.TextUnformatted($"Inventory lookup: {scanned}/{run.DiscoveryOrder.Count} characters ready · {cached} from cache");
             UiTone.Progress(run.DiscoveryOrder.Count == 0 ? 0 : (float)scanned / run.DiscoveryOrder.Count, new Vector2(-1, 18));
         }
         else
         {
+            if (run.Journal.Plan.PlannedFromCache)
+                UiTone.Wrapped(UiTone.Info, "Planned from cached inventory estimates. Delivery counts below are confirmed trades; cache retrieval does not prove when inventory was last updated.");
             try
             {
                 var ledger = new TransferJobLedger(run.Journal);
@@ -854,8 +858,9 @@ public sealed class WorkflowPanel(Plugin plugin)
                 var command = pending.Command;
                 ImGui.TextWrapped($"{PeerName(pending.PeerId)} · {CharacterName(command.Operation.CharacterId)} · {ItemName(command.Operation.ItemId)}{(command.Operation.HighQuality ? " HQ" : "")} · {OperationName(command)}");
                 var response = pending.Response;
-                UiTone.Wrapped(response == null ? UiTone.Info : response.Success ? UiTone.Good : UiTone.Error, response == null ? (pending.Ready ? "Receiver armed; awaiting the agreed trade." : "Waiting for the worker's observation.")
-                    : response.Success ? $"Verified response: {response.Quantity:N0} items." : response.Error);
+                var cacheQuery = command.Operation.Kind == GameOperationKind.ReadCachedInventory;
+                UiTone.Wrapped(response == null || cacheQuery ? UiTone.Info : response.Success ? UiTone.Good : UiTone.Error, response == null ? (pending.Ready ? "Receiver armed; awaiting the agreed trade." : "Waiting for the worker's observation.")
+                    : response.Success ? cacheQuery ? response.Observation?.CachedInventoryAvailable == true ? "Cached inventory received; not yet live verified." : "Cache unavailable; preparing a live check." : $"Verified response: {response.Quantity:N0} items." : response.Error);
                 if (response?.BeforeQuantity is not null || response?.CurrentQuantity is not null)
                     ImGui.TextUnformatted($"Recorded bag count: {response?.BeforeQuantity?.ToString("N0") ?? "unknown"}; current: {response?.CurrentQuantity?.ToString("N0") ?? "unknown"}");
                 if (command.Kind is WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch)
@@ -875,15 +880,19 @@ public sealed class WorkflowPanel(Plugin plugin)
             }
             else { reviewedTradeId = null; confirmedOutcome = false; }
         }
-        if (ImGui.CollapsingHeader("Verified discovery snapshots"))
+        if (ImGui.CollapsingHeader("Inventory counts and sources"))
         {
-            ImGui.TextWrapped("These counts were observed during discovery. Delivery progress is tracked separately and remains valid after retainer deposits.");
+            ImGui.TextWrapped("Cached estimates and live observations are labeled separately. Delivery progress is tracked independently and remains valid after retainer deposits.");
+            foreach (var note in run.DiscoveryNotes)
+                UiTone.Wrapped(UiTone.Info, $"{CharacterName(note.Key)}: {note.Value}");
             foreach (var snapshot in run.Snapshots.Values)
             {
                 UiTone.Wrapped(snapshot.IsFullyVerified ? UiTone.Good : UiTone.Info,
                     $"{snapshot.Name}@{snapshot.World}: bags {snapshot.BagQuantity:N0}; " +
-                    (snapshot.RetainerRosterVerified ? $"retainers {snapshot.Retainers.Aggregate(0UL, (sum, x) => sum + x.Quantity):N0} · {snapshot.Verification}"
+                    (snapshot.RetainerRosterVerified || snapshot.HasCompleteCachedInventory ? $"retainers {snapshot.Retainers.Aggregate(0UL, (sum, x) => sum + x.Quantity):N0} · {snapshot.Verification}"
                         : $"relay capacity {snapshot.BagCapacity:N0}; retainers not scanned (not needed for relay use)"));
+                if (snapshot.Verification == InventoryVerification.Cached && snapshot.RetrievedAt is { } retrieved)
+                    ImGui.TextDisabled($"  Cache read at {retrieved.ToLocalTime():g}; last inventory observation time is unknown.");
                 foreach (var retainer in snapshot.Retainers)
                     ImGui.TextDisabled($"  {retainer.Name}: {retainer.Quantity:N0} · {retainer.Verification}");
             }
@@ -915,8 +924,8 @@ public sealed class WorkflowPanel(Plugin plugin)
         foreach (var deposit in deposited.Where(x => x.Value > 0))
             ImGui.TextWrapped($"Stored in recipient retainers: {CharacterName(deposit.Key)} · {deposit.Value:N0} items");
         foreach (var snapshot in snapshots.Values)
-            ImGui.TextWrapped($"Observed {snapshot.Name}@{snapshot.World}: bags {snapshot.BagQuantity:N0}; " +
-                (snapshot.RetainerRosterVerified ? $"retainers {snapshot.Retainers.Aggregate(0UL, (sum, x) => sum + x.Quantity):N0}"
+            ImGui.TextWrapped($"{snapshot.Verification} · {snapshot.Name}@{snapshot.World}: bags {snapshot.BagQuantity:N0}; " +
+                (snapshot.RetainerRosterVerified || snapshot.HasCompleteCachedInventory ? $"retainers {snapshot.Retainers.Aggregate(0UL, (sum, x) => sum + x.Quantity):N0}"
                     : "relay capacity checked; retainers not scanned"));
     }
 
@@ -925,7 +934,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         ImGui.Spacing();
         if (!ImGui.CollapsingHeader("Recent activity", ImGuiTreeNodeFlags.DefaultOpen)) return;
         if (ImGui.Button("Copy activity for troubleshooting"))
-            ImGui.SetClipboardText($"Ashe's Trader v0.3.1\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
+            ImGui.SetClipboardText($"Ashe's Trader v0.3.2\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
         if (plugin.Activity.Count == 0) ImGui.TextWrapped("Actions and outcomes will appear here when a job runs.");
         foreach (var entry in plugin.Activity.Reverse()) UiTone.Status(entry);
         DrawHints();
@@ -933,7 +942,8 @@ public sealed class WorkflowPanel(Plugin plugin)
 
     private static string StageName(CoordinatorStep step) => step switch
     {
-        CoordinatorStep.DiscoverLogin or CoordinatorStep.DiscoverScan => "Scanning each selected character's bags and retainers",
+        CoordinatorStep.DiscoverCache => "Reading cached inventories from the owning PC",
+        CoordinatorStep.DiscoverLogin or CoordinatorStep.DiscoverScan => "Checking inventory that needs a live observation",
         CoordinatorStep.Plan or CoordinatorStep.SelectLeg => "Planning the next delivery",
         CoordinatorStep.RelayLogin or CoordinatorStep.RelayInspect => "Choosing an automatic relay and checking its live inventory space",
         CoordinatorStep.LoginSender or CoordinatorStep.LoginReceiver => "Logging in the characters for this delivery",
@@ -955,6 +965,7 @@ public sealed class WorkflowPanel(Plugin plugin)
             GameOperationKind.Login => "Changing character",
             GameOperationKind.Inspect => "Checking inventory",
             GameOperationKind.TravelMeeting => "Travelling to the meeting point",
+            GameOperationKind.ReadCachedInventory => "Reading Allagan Tools cached inventory",
             GameOperationKind.ScanRetainers => "Scanning bags and retainers",
             GameOperationKind.Withdraw => "Collecting items from provider retainers",
             GameOperationKind.Deposit => "Depositing items into recipient retainers",
@@ -1019,6 +1030,7 @@ public sealed class WorkflowPanel(Plugin plugin)
     {
         var ar = plugin.AutoRetainer.GetStatus();
         var ls = plugin.Lifestream.GetStatus();
+        var cache = new AsheTrader.Integrations.AllaganToolsClient().IsAvailable;
         var issues = new List<string>();
         if (!ar.Ready) issues.Add("enable AutoRetainer");
         else if (ar.Busy != false || ar.MultiModeEnabled != false) issues.Add("pause AutoRetainer multi mode and wait for its tasks");
@@ -1033,6 +1045,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         }
         catch (Exception) { mesh = "vnavmesh unavailable or its IPC is not ready"; issues.Add("enable vnavmesh and wait for navigation to load"); }
         dependencySummary = issues.Count == 0 ? $"Local plugins checked at {DateTime.Now:T}: available and idle. Check the other PC separately." : $"This PC needs attention: {string.Join("; ", issues)}. Checked {DateTime.Now:T}.";
+        dependencySummary += cache ? " Allagan Tools cache is available." : " Allagan Tools is unavailable; inventory discovery will need live visits.";
         dependencies = $"AutoRetainer: {(ar.Ready ? $"available; busy={ar.Busy?.ToString() ?? "unknown"}, multi mode={ar.MultiModeEnabled?.ToString() ?? "unknown"}" : ar.Error)}. Lifestream: {(ls.Ready ? $"available; busy={ls.Busy?.ToString() ?? "unknown"}" : ls.Error)}. {mesh}. Checked {DateTime.Now:T}.";
     }
 }

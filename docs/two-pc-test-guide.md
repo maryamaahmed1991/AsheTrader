@@ -1,6 +1,8 @@
 # Two-PC testing: start here
 
-Test build: **0.3.1.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys.
+Test build: **0.3.2.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Protocol 4 requires both PCs to update together.
+
+This version uses Allagan Tools caches before attempting discovery logins. Enable Allagan Tools on both PCs. A paused pre-plan discovery resumes with a cache lookup; already-issued transfer plans keep their existing amounts and recovery checkpoints.
 
 If version 0.3.0 stopped with **AutoRetainer cannot relog from the current game state**, update, reconnect both PCs, and use **Resume / reconcile** on the coordinator. That message was caused by checking AutoRetainer's title-screen-only login API while already logged in. Version 0.3.1 uses its supported relog command. Keep AutoRetainer multi mode off and Lifestream idle; the character switch must complete before scanning or trading proceeds.
 
@@ -10,7 +12,7 @@ The automated tests simulate game operations; native travel, retainer menus and 
 
 ### 1. Prepare both PCs
 
-- Enable AutoRetainer, Lifestream and vnavmesh. AutoRetainer must know the characters belonging to that PC's account. Allagan Tools is optional.
+- Enable AutoRetainer, Lifestream, vnavmesh and Allagan Tools. AutoRetainer must know the characters and their retainers belonging to that PC's account. Without Allagan Tools, discovery uses live visits.
 - Turn AutoRetainer **multi mode off**, let its tasks finish, and leave Lifestream idle. Close any trade, retainer or confirmation windows. Keep AutoRetainer itself enabled for character switching.
 - Choose one provider on the controlling PC and one recipient on the other account. Put **3 Ceruleum Tanks in the provider's bags and 17 on one of its retainers**. Leave room for ten tanks in the recipient's bags. Note its starting tank quantity.
 - Both characters must be able to visit the chosen meeting world and access their own retainers on their home worlds. Default storage access uses Lifestream's inn shortcut.
@@ -39,17 +41,17 @@ On the controlling PC, open **2. Set up** and create a job:
 
 Leave the default inn storage route for this first test. No relay is needed when the provider and recipient are on different PCs. Relay selection is automatic when a same-account allocation needs one.
 
-### 4. Scan first
+### 4. Check cached inventories first
 
-Open **3. Review & run**, resolve the listed setup issues, then choose **Scan inventories only**.
+Open **3. Review & run**, resolve the listed setup issues, then choose **Check inventories only**.
 
-Expected: the plugin logs into the selected characters, returns them to their home worlds if needed, travels to storage, and visits every retainer. It moves no items. The activity/progress view should show **3 carried + 17 stored** for the provider and verified recipient counts. Compare those counts with the game before continuing.
+Expected with complete caches: no character switching, travel or retainer windows. Activity should show **3 carried + 17 stored** for the provider, marked **Cached**, plus recipient counts. Compare the totals with Allagan Tools. Cached retrieval times must not be labeled as live observation times. If a character or retainer lacks usable data, Activity explains why that character needs a live visit; only that character should log in and scan. No items move during this check.
 
 If scanning stops, report the character, home/current world, visible menu, and exact activity/log message. Do not repeatedly resume an unexpected native UI state.
 
 ### 5. Run and check the refill
 
-Choose **Start transfer** from **3. Review & run**. A fresh inventory scan at the beginning is expected; the earlier scan is a validation step, not permission to reuse potentially stale counts.
+Choose **Start transfer** from **3. Review & run**. The job reads the caches again. With complete data it goes directly to logging in the characters needed for the transfer, checking carried stock and space, and traveling. Exact **Restock to total** jobs additionally check recipients' full live totals; the additional-delivery test below does not need that scan.
 
 Expected sequence:
 
@@ -65,9 +67,9 @@ Pickup progress is separate from delivery progress: withdrawing seven must not i
 ### Multiple items and automatic relays
 
 1. In the same saved job, add a second, different tradable item. Select that line and set its providers, recipients and a small additional amount, such as 2. Review must show both items and their separate amounts. All lines share the meeting point.
-2. Start the job and confirm the first item finishes before the second begins. Each item gets a fresh scan. Activity must retain the first item's delivered total while showing the second's progress. A scan-only run should inspect both items without moving either. Then test a recipient whose bags fill from the first item: received first-item stock should be stored to make room for the second, while the first item's delivery total stays unchanged.
+2. Start the job and confirm the first item finishes before the second begins. Each item gets a new cache lookup, with live fallback only where needed. Activity must retain the first item's delivered total while showing the second's progress. An inventory-only run should check both items without moving either. Then test a recipient whose bags fill from the first item: received first-item stock should be stored to make room for the second, while the first item's delivery total stays unchanged.
 3. Next, use a provider and recipient on the same PC/account. Refresh AutoRetainer characters on both PCs. Do not select a relay manually: the other PC's registered alt with the highest cached free-slot count should be tried automatically. Check the chosen name and live capacity in Activity.
-4. Confirm the route is provider → automatically chosen alt → final recipient. Relay cargo must not appear as final delivery. Only the provider and final recipient need full retainer scans; a relay-only alt needs a live bag-capacity check.
+4. Confirm the route is provider → automatically chosen alt → final recipient. Relay cargo must not appear as final delivery. Cached providers and recipients skip discovery retainer scans; a relay-only alt needs a live bag-capacity check.
 5. After normal selection passes, test stale hints deliberately: give the highest-ranked alt no capacity for the item while AutoRetainer still reports space, with another eligible alt available. Expect a live check followed by automatic fallback to the next candidate before trading. If every candidate is full, expect a pause; free space, refresh character lists and resume.
 6. Check the colored status labels remain readable: green ready/success, blue active information, amber waiting/attention, red blocked/error. Text must explain every status even without its color.
 

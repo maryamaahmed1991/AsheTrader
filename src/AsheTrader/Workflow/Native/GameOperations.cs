@@ -2,7 +2,7 @@ using System.Numerics;
 
 namespace AsheTrader.Workflow.Native;
 
-public enum GameOperationKind { Login, Inspect, TravelMeeting, ScanRetainers, Withdraw, Deposit }
+public enum GameOperationKind { Login, Inspect, TravelMeeting, ScanRetainers, Withdraw, Deposit, ReadCachedInventory }
 
 public sealed class TravelLocation
 {
@@ -43,6 +43,10 @@ public sealed class GameOperationResult
     public uint MovedQuantity { get; set; }
     public bool MovementUncertain { get; set; }
     public bool RetainerRosterVerified { get; set; }
+    // Cache reads are read-only observations of another character, not live game operations.
+    public bool CachedInventoryAvailable { get; set; }
+    public bool RetainerRosterKnown { get; set; }
+    public DateTimeOffset? CacheRetrievedAt { get; set; }
     public List<RetainerInventorySnapshot> Retainers { get; set; } = [];
     public DateTimeOffset ObservedAt { get; set; }
 }

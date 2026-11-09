@@ -14,8 +14,8 @@ internal static class PairingHandshake
 {
     private const int HelloLength = 61;
     private static ReadOnlySpan<byte> Magic => "ASHETRD1"u8;
-    // Version 3 exchanges AutoRetainer slot metadata required for automatic relay selection.
-    internal const int ProtocolVersion = 3;
+    // Version 4 adds read-only cached-inventory commands and explicit cache provenance.
+    internal const int ProtocolVersion = 4;
 
     internal static async Task<SessionSecrets> AuthenticateAsync(NetworkStream stream, byte[] pairingKey, Guid localPeerId, bool host, CancellationToken cancellationToken)
     {

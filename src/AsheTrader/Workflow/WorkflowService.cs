@@ -37,7 +37,8 @@ public sealed partial class WorkflowService : IDisposable
     public bool IsHost => host;
     public bool Busy => activeWorker != null || executor.IsBusy || Run is { Paused: false, Step: not CoordinatorStep.Finished };
     public bool RunningJob => Run is { Paused: false, Step: not CoordinatorStep.Finished };
-    public bool ExpectsLogout => activeWorker?.Command.Kind == WorkerCommandKind.Game && activeWorker.Command.Operation.Kind != GameOperationKind.Inspect;
+    public bool ExpectsLogout => activeWorker?.Command.Kind == WorkerCommandKind.Game
+        && activeWorker.Command.Operation.Kind is not (GameOperationKind.Inspect or GameOperationKind.ReadCachedInventory);
     public string ConnectionStatus => peer.Status;
     public string Status => error.Length > 0 ? error
         : Run != null && (host || Run.Step != CoordinatorStep.Finished) ? Run.Status
@@ -294,7 +295,8 @@ public sealed partial class WorkflowService : IDisposable
     {
         if (!Enum.IsDefined(command.Kind) || command.Id == Guid.Empty || command.JobId == Guid.Empty
             || command.Operation == null || command.Operation.Id != command.Id || !Enum.IsDefined(command.Operation.Kind)
-            || command.Operation.CharacterId == 0)
+            || command.Operation.CharacterId == 0
+            || command.Operation.Kind == GameOperationKind.ReadCachedInventory && command.Kind != WorkerCommandKind.Game)
             throw new InvalidDataException("Invalid worker command.");
         var fingerprint = JsonConvert.SerializeObject(command);
         if (workerRecords.TryGetValue(command.Id, out var previous))
@@ -307,7 +309,7 @@ public sealed partial class WorkflowService : IDisposable
         if (!journalHealthy) throw new InvalidOperationException("Worker journal is unavailable.");
         if (workerRecords.Values.Any(x => x.Command.Kind is WorkerCommandKind.ReceiveBatch or WorkerCommandKind.SendBatch
             && (x.Response == null || x.Response.Ambiguous))
-            && !(command.Kind == WorkerCommandKind.Game && command.Operation.Kind is GameOperationKind.Login or GameOperationKind.Inspect))
+            && !(command.Kind == WorkerCommandKind.Game && command.Operation.Kind is GameOperationKind.Login or GameOperationKind.Inspect or GameOperationKind.ReadCachedInventory))
         { Reply(caller, new() { CommandId = command.Id, Error = "This worker has an unresolved trade. Reconcile it before issuing more work." }); return; }
         if (caller != Settings.PeerId && !Settings.AllowRemoteControl)
         { Reply(caller, new() { CommandId = command.Id, Error = "Enable paired workflow control on this PC." }); return; }
@@ -321,7 +323,7 @@ public sealed partial class WorkflowService : IDisposable
         if (command.Operation.ItemId == 0 || command.Operation.ItemId == 1) throw new InvalidOperationException("Select a tradable inventory item.");
         if (command.Kind != WorkerCommandKind.Game && command.Operation.Quantity == 0) throw new InvalidOperationException("Empty trade batch.");
         var ar = plugin.AutoRetainer.GetStatus();
-        if (ar.Ready && (ar.Busy != false || ar.MultiModeEnabled != false))
+        if (command.Operation.Kind != GameOperationKind.ReadCachedInventory && ar.Ready && (ar.Busy != false || ar.MultiModeEnabled != false))
         { Reply(caller, new() { CommandId = command.Id, Error = "AutoRetainer must be idle with multi-mode paused." }); return; }
         activeReplyPeer = caller;
         receiverReadySent = false;
@@ -332,6 +334,12 @@ public sealed partial class WorkflowService : IDisposable
         {
             if (command.Kind == WorkerCommandKind.Game)
             {
+                if (command.Operation.Kind == GameOperationKind.ReadCachedInventory)
+                {
+                    var cached = ReadCachedInventory(command.Operation);
+                    CompleteWorker(new() { CommandId = command.Id, Success = true, Observation = cached });
+                    return;
+                }
                 if (command.Operation.Kind is GameOperationKind.ScanRetainers or GameOperationKind.Withdraw or GameOperationKind.Deposit)
                 {
                     command.Operation.Destination = Settings.StorageRoutes.GetValueOrDefault(character.ContentId);
@@ -475,8 +483,10 @@ public sealed partial class WorkflowService : IDisposable
     }
 
     public IReadOnlyList<RetainerInventorySnapshot> GetKnownRetainers(ulong characterId) => workerRecords.Values
-        .Where(x => x.Command.Operation.CharacterId == characterId && x.Command.Operation.Kind == GameOperationKind.ScanRetainers
-            && x.Response?.Observation is { Success: true, RetainerRosterVerified: true })
-        .OrderByDescending(x => x.Response!.Observation!.ObservedAt)
+        .Where(x => x.Command.Operation.CharacterId == characterId
+            && x.Command.Operation.Kind is GameOperationKind.ScanRetainers or GameOperationKind.ReadCachedInventory
+            && x.Response?.Observation is { Success: true } observation
+            && (observation.RetainerRosterVerified || observation.CachedInventoryAvailable && observation.RetainerRosterKnown))
+        .OrderByDescending(x => x.Response!.Observation!.CacheRetrievedAt ?? x.Response.Observation.ObservedAt)
         .FirstOrDefault()?.Response?.Observation?.Retainers ?? [];
 }

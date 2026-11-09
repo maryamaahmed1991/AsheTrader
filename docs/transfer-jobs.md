@@ -1,6 +1,6 @@
 # Ashe's Trader: transfer-job requirements
 
-Status: agreed product requirements, implemented in the 0.3.1.0 development build for staged two-PC testing. Automated tests cover planning, accounting, LAN discovery/transport, and the transfer coordinator. No in-game trades, purchases, or retainer actions have been validated by this project yet.
+Status: agreed product requirements, implemented in the 0.3.2.0 development build for staged two-PC testing. Automated tests cover planning, accounting, LAN discovery/transport, and the transfer coordinator. No in-game trades, purchases, or retainer actions have been validated by this project yet.
 
 ## Confirmed requirements
 
@@ -39,11 +39,11 @@ Each PC imports its local AutoRetainer roster and obtains local Allagan Tools sn
 
 Allagan Tools cached counts accelerate planning but are not proof that storage is complete or current. Its IPC initialization flag only establishes API availability. A missing owner, empty result, or omitted zero-count entry must not be interpreted as a verified empty retainer.
 
-Track two different timestamps: when a cached result was retrieved and when Ashe's Trader actually observed a loaded inventory. Do not relabel cache retrieval time as inventory freshness. Record character-to-retainer ownership when visiting a character and checking its real retainer roster; the currently exposed Allagan Tools ownership query is scoped to the active character and may include shared storage.
+Track two different timestamps: when a cached result was retrieved and when Ashe's Trader actually observed a loaded inventory. Do not relabel cache retrieval time as inventory freshness. AutoRetainer's offline character data supplies the known retainer IDs and names, since Allagan Tools' ownership query is scoped to the active character. Validate all expected cached bag pages and every known retainer, including owner-tagged evidence that each bag group was observed. All-synthetic empty placeholder inventories remain unknown.
 
-An initial discovery pass logs into selected characters and visits unverified retainers as needed. Unknown storage remains visible as unknown. A job cannot claim it collected from every source if any required source remains unscanned or inaccessible.
+Initial discovery reads cached inventory from each character's owning PC. Complete cached characters skip login and retainer visits. Missing data falls back to live discovery for that character, with the reason in Activity. Exact RestockToTotal recipients still require live totals before an executable plan; cache-only previews can show estimates. Completed transfers report verified deliveries of planned stock, not proof that stale caches included every item in the account.
 
-Before withdrawing, trading, or depositing, verify current inventory and capacity. Update the plan when cached quantities disagree with the live inventory. Allagan Tools is an information provider; withdrawal/deposit actions need a separate validated retainer executor.
+Before withdrawing, trading, or depositing, verify current inventory and capacity. Source overestimates pause if stock is exhausted; underestimates leave additional stock for a later job. Never rewrite an issued plan from cache changes, since its allocations and movement history must remain stable for recovery. Allagan Tools is an information provider; withdrawal/deposit actions use the separate native retainer executor.
 
 ## Execution and capacity recovery
 
@@ -111,7 +111,7 @@ The game operation and local journal cannot be committed atomically. After inter
 
 ## Implementation status and validation
 
-The development build includes paired LAN coordination, AR roster/relog integration, optional Allagan Tools hints, live retainer discovery, priority allocation, same-account relay routes, bounded withdrawals, trade batches, overflow deposits, travel, and saved progress. The configuration window provides scan-only discovery and explicit interrupted-trade reconciliation. Source allocations remain fixed after verified discovery; unexpected stock changes pause execution rather than silently changing those allocations.
+The development build includes paired LAN coordination, AR roster/relog integration, Allagan Tools cached planning with selective live fallback, priority allocation, same-account relay routes, bounded withdrawals, trade batches, overflow deposits, travel, and saved progress. The configuration window provides inventory-only discovery and explicit interrupted-trade reconciliation. Source allocations remain fixed after planning; actual stock and capacity are checked during execution, and exhaustion pauses rather than silently changing issued allocations.
 
 The next required work is the [staged two-PC validation](two-pc-test-guide.md). Automated native workflows have compiled against the local game libraries but have not been exercised in-game. Validate retainer callbacks, menu transitions, native trade observations, and travel before running large jobs.
 

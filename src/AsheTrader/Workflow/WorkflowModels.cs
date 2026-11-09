@@ -90,7 +90,7 @@ public enum CoordinatorStep
     InspectSender, Withdraw, InspectReceiver, Deposit, TravelSender, TravelReceiver,
     PreviewBatch, ArmReceiver, SendBatch, AwaitTrade, Finished,
     // Append new states so existing numeric journal states keep their meaning.
-    RelayLogin, RelayInspect, DepositPreviousItem
+    RelayLogin, RelayInspect, DepositPreviousItem, DiscoverCache
 }
 
 public sealed class CoordinatorRun
@@ -116,6 +116,7 @@ public sealed class CoordinatorRun
     public Dictionary<ulong, JobCharacterSnapshot> Snapshots { get; set; } = [];
     public List<ulong> DiscoveryOrder { get; set; } = [];
     public int DiscoveryIndex { get; set; }
+    public Dictionary<ulong, string> DiscoveryNotes { get; set; } = [];
     public CoordinatorStep Step { get; set; }
     public TransferJobJournal? Journal { get; set; }
     public Guid AllocationId { get; set; }

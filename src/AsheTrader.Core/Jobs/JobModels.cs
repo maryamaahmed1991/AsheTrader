@@ -47,12 +47,17 @@ public sealed class JobCharacterSnapshot
     public uint BagCapacity { get; set; }
     public InventoryVerification Verification { get; set; }
     public bool RetainerRosterVerified { get; set; }
+    /// <summary>All expected bag and retainer slots were present in the cache; not a live verification.</summary>
+    public bool HasCompleteCachedInventory { get; set; }
     public List<RetainerStock> Retainers { get; set; } = [];
     public DateTimeOffset? RetrievedAt { get; set; }
     public DateTimeOffset? ObservedAt { get; set; }
     public ulong TotalQuantity => Retainers.Aggregate(BagQuantity, (total, retainer) => checked(total + retainer.Quantity));
     public bool IsFullyVerified => Verification == InventoryVerification.Verified && RetainerRosterVerified
         && Retainers.All(retainer => retainer.Verification == InventoryVerification.Verified);
+    public bool IsPlanningReady => IsFullyVerified || (HasCompleteCachedInventory
+        && Verification is InventoryVerification.Cached or InventoryVerification.Verified
+        && Retainers.All(retainer => retainer.Verification is InventoryVerification.Cached or InventoryVerification.Verified));
 }
 
 public sealed class TransferLeg
@@ -82,6 +87,7 @@ public sealed class UnmetTarget
 
 public sealed class TransferPlan
 {
+    public bool PlannedFromCache { get; set; }
     public TransferJobDefinition Definition { get; set; } = new();
     public List<TransferAllocation> Allocations { get; set; } = [];
     public List<UnmetTarget> UnmetTargets { get; set; } = [];

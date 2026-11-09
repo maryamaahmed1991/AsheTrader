@@ -64,6 +64,7 @@ public sealed class LanPeerTests
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
+    [InlineData(3)]
     public async Task LegacyProtocolIsRejectedBeforeSessionAndListenerAcceptsCurrentPeer(int legacyVersion)
     {
         using var host = new LanPeer();

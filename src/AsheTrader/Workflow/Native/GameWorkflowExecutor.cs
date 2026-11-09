@@ -60,6 +60,7 @@ public sealed class GameWorkflowExecutor
         if (IsBusy) return false;
         ArgumentNullException.ThrowIfNull(command);
         if (!Enum.IsDefined(command.Kind)) throw new ArgumentException("Unknown gameplay operation.");
+        if (command.Kind == GameOperationKind.ReadCachedInventory) throw new ArgumentException("Cached inventory queries must be handled without invoking the native gameplay executor.");
         if (command.Id == Guid.Empty || command.CharacterId == 0) throw new ArgumentException("Operation and character IDs are required.");
         if (command.Kind is not GameOperationKind.Login && command.ItemId == 0) throw new ArgumentException("An item is required for this operation.");
         if (command.Kind is GameOperationKind.Withdraw or GameOperationKind.Deposit && command.Quantity == 0) throw new ArgumentException("A positive quantity is required.");
@@ -181,7 +182,7 @@ public sealed class GameWorkflowExecutor
             var now = Environment.TickCount64;
             if (now - operationStarted > 1_200_000) throw new TimeoutException("The operation exceeded twenty minutes.");
             var allowance = stage is Stage.WaitLogin or Stage.WaitWorld or Stage.WaitTerritory or Stage.WaitInn ? 300_000 : 90_000;
-            if (now - stageStarted > allowance) throw new TimeoutException($"Timed out while {Status}");
+            if (now - stageStarted > allowance) throw new TimeoutException(TimeoutDescription());
             if (now < actionAfter) return;
             if (stage != Stage.Begin && stage != Stage.WaitLogin)
             {
@@ -273,10 +274,13 @@ public sealed class GameWorkflowExecutor
                         Transition(Stage.WaitRetainer, $"Waiting for {roster[retainerIndex].Name}…", 700);
                     break;
                 case Stage.WaitRetainer:
-                    if (SelectedRetainerIsExpected()) Transition(Stage.OpenInventory, "Opening retainer storage…", 500);
+                    if (SelectedRetainerIsExpected() && Plugin.Condition[ConditionFlag.OccupiedSummoningBell]
+                        && (NativeRetainers.HasRetainerMenu || NativeRetainers.HasExpectedRetainerTalk(CurrentRetainer) || NativeRetainers.HasVisibleRetainerInventory))
+                        Transition(Stage.OpenInventory, "Opening retainer storage…", 500);
                     break;
                 case Stage.OpenInventory:
-                    if (NativeRetainers.SelectMenu(2378, CurrentRetainer.Id))
+                    if (AdvanceOwnedRetainerTalk()) break;
+                    if (NativeRetainers.HasVisibleRetainerInventory || NativeRetainers.SelectMenu(2378, CurrentRetainer.Id))
                     {
                         inventoryFingerprint = string.Empty; inventoryStableFrames = 0;
                         Transition(Stage.WaitInventory, "Waiting for all retainer inventory pages…", 1000);
@@ -296,10 +300,12 @@ public sealed class GameWorkflowExecutor
                     break;
                 case Stage.QuitRetainer:
                     if (NativeRetainers.HasRetainerList) { retainerIndex++; Transition(Stage.SelectRetainer, "Selecting the next retainer…", 500); break; }
+                    if (AdvanceOwnedRetainerTalk()) break;
                     if (NativeRetainers.SelectMenu(2383, CurrentRetainer.Id)) Transition(Stage.WaitListAgain, "Waiting for the retainer list…", 700);
                     break;
                 case Stage.WaitListAgain:
                     if (NativeRetainers.HasRetainerList) { retainerIndex++; Transition(Stage.SelectRetainer, "Selecting the next retainer…", 500); }
+                    else AdvanceOwnedRetainerTalk();
                     break;
                 case Stage.CloseList:
                     NativeRetainers.CloseList(); Transition(Stage.WaitClosed, "Waiting for the bell to close…", 700); break;
@@ -425,6 +431,22 @@ public sealed class GameWorkflowExecutor
     {
         try { NativeRetainers.VerifyRetainer(CurrentRetainer.Id); return true; }
         catch (InvalidOperationException) { return false; }
+    }
+
+    private bool AdvanceOwnedRetainerTalk()
+    {
+        if (!SelectedRetainerIsExpected() || !NativeRetainers.AdvanceRetainerTalk(CurrentRetainer)) return false;
+        // A speaker can have multiple lines. Do not send another click every frame,
+        // and retain the existing stage deadline if a dialogue does not advance.
+        actionAfter = Environment.TickCount64 + 700;
+        return true;
+    }
+
+    private string TimeoutDescription()
+    {
+        var expected = retainerIndex < roster.Count ? $" Retainer: {CurrentRetainer.Name}." : string.Empty;
+        return $"Timed out while {Status} Stage: {stage}.{expected} {NativeRetainers.DescribeStorageUi()}. "
+            + "Open Activity and use Copy activity when reporting this pause. No item movement was retried automatically.";
     }
 
     private void WaitInventory()
