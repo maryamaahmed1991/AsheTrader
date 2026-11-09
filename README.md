@@ -40,7 +40,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.3.0.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.4.0.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
@@ -76,6 +76,8 @@ Provider bags and retainer stored inventory are included automatically. When a p
 
 ## Progress and recovery
 
+Version 0.3.4 fixes the confirmed retainer-menu stall: the game inserts a slot count into the storage option, so comparing it with the unformatted sheet text never matched. Storage selection now uses the first localized text payload and requires one unique matching option. Quit still requires an exact match. After updating both PCs, close any leftover retainer windows, reconnect and resume the paused discovery. Incomplete Allagan Tools caches can still require live scans; this fix does not treat unknown inventories as empty.
+
 Version 0.3.3 adds automatic detailed diagnostics. On the affected PC, open **Transfers → 4. Activity → Copy diagnostics** while the menu is still stuck, then paste the report when reporting the issue. The bounded session trace includes menu text/match results, native action attempts, elapsed stages, retainer identity and inventory loading. It excludes pairing keys, full configuration, chat and dialogue bodies. Capture before reloading the plugin; detailed records also appear in Dalamud's log under `[WorkflowTrace]`. Capturing a report is read-only and does not resume or repeat an action.
 
 Version 0.3.2 uses cached inventory for planning by default. AutoRetainer supplies the offline retainer ownership list; Allagan Tools supplies exact item/HQ bag and retainer counts. Cache retrieval time is not the last inventory observation time. Unknown storage is never counted as zero. Exact **Restock to total** jobs still verify recipients' full totals live before planning; an inventory-only preview can use their caches. Actual pickups, receiving space and trades are checked live. A source overestimate pauses when stock runs out; newly added stock outside the cached budget needs a later job. Issued plans remain fixed so recovery cannot duplicate work.
@@ -100,7 +102,7 @@ Once a GitHub repository exists:
 
 1. Push this source, preserving the license and notices.
 2. Upload the built `AsheTrader-<version>.zip` as a public release asset.
-3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.3.0`.
+3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.4.0`.
 4. Commit the generated root `repo.json` on `main`. Its raw GitHub URL is the permanent custom-repository feed; update that file for each release.
 
 Source is hosted in [maryamaahmed1991/AsheTrader](https://github.com/maryamaahmed1991/AsheTrader), with installable packages under [Releases](https://github.com/maryamaahmed1991/AsheTrader/releases). Pairing secrets and runtime journals must not be committed or included in release artifacts.

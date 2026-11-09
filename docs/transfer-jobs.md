@@ -1,6 +1,6 @@
 # Ashe's Trader: transfer-job requirements
 
-Status: agreed product requirements, implemented in the 0.3.3.0 development build for staged two-PC testing. Automated tests cover planning, accounting, LAN discovery/transport, and the transfer coordinator. No in-game trades, purchases, or retainer actions have been validated by this project yet.
+Status: agreed product requirements, implemented in the 0.3.4.0 development build for staged two-PC testing. Automated tests cover planning, accounting, LAN discovery/transport, and the transfer coordinator. User diagnostics confirm bell access and retainer greeting advancement; post-fix storage selection, item movement, trades and purchases still require live validation.
 
 ## Confirmed requirements
 

@@ -5,6 +5,7 @@ using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Game.Text.SeStringHandling;
+using Dalamud.Game.Text.SeStringHandling.Payloads;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.UI;
@@ -105,8 +106,9 @@ internal static unsafe class NativeRetainers
             }
             if (menuRow.HasValue)
             {
-                var expectedText = Plugin.DataManager.GetExcelSheet<Addon>().GetRow(menuRow.Value).Text.ExtractText().Trim();
-                lines.Add($"menu expectedRow={menuRow.Value}; text={DiagnosticText(expectedText)}; length={expectedText.Length}");
+                var expectedText = MenuMatchText(menuRow.Value);
+                var allowSuffix = menuRow.Value == 2378;
+                lines.Add($"menu expectedRow={menuRow.Value}; text={DiagnosticText(expectedText)}; length={expectedText.Length}; rule={(allowSuffix ? "unique localized prefix" : "exact")}");
                 var menu = (AddonSelectString*)Ready("SelectString");
                 if (menu == null) lines.Add("menu entries unavailable: SelectString is absent, hidden or not ready");
                 else if (!Plugin.Condition[ConditionFlag.OccupiedSummoningBell]) lines.Add("menu entries omitted: no owned summoning-bell interaction");
@@ -120,7 +122,8 @@ internal static unsafe class NativeRetainers
                         {
                             var pointer = menu->PopupMenu.PopupMenu.EntryNames[index].Value;
                             var value = pointer == null ? null : SeString.Parse(pointer).TextValue.Trim();
-                            lines.Add($"menu[{index}] text={DiagnosticText(value)}; length={value?.Length ?? 0}; exactMatch={string.Equals(value, expectedText, StringComparison.Ordinal)}");
+                            var matches = value != null && (allowSuffix ? value.StartsWith(expectedText, StringComparison.Ordinal) : value.Equals(expectedText, StringComparison.Ordinal));
+                            lines.Add($"menu[{index}] text={DiagnosticText(value)}; length={value?.Length ?? 0}; matches={matches}");
                         }
                     }
                     else lines.Add("menu entries omitted: layout count outside supported range 0..40");
@@ -259,23 +262,38 @@ internal static unsafe class NativeRetainers
     public static bool SelectMenu(uint localizedAddonRow, ulong expected, Action<string>? trace = null)
     {
         VerifyRetainer(expected);
+        if (!Plugin.Condition[ConditionFlag.OccupiedSummoningBell] || HasNumeric || HasUnrelatedModal)
+            throw new InvalidOperationException("The summoning-bell interaction ended or another window prevents retainer menu selection.");
         var addon = (AddonSelectString*)Ready("SelectString");
         if (addon == null) return false;
-        var text = Plugin.DataManager.GetExcelSheet<Addon>().GetRow(localizedAddonRow).Text.ExtractText().Trim();
+        var text = MenuMatchText(localizedAddonRow);
         var count = addon->PopupMenu.PopupMenu.EntryCount;
         if (count is < 0 or > 40 || text.Length == 0) throw new InvalidOperationException("Retainer menu layout is incompatible.");
+        var entries = new string?[count];
         for (var index = 0; index < count; index++)
         {
             var pointer = addon->PopupMenu.PopupMenu.EntryNames[index].Value;
-            if (pointer == null) continue;
-            if (!string.Equals(SeString.Parse(pointer).TextValue.Trim(), text, StringComparison.Ordinal)) continue;
-            var value = new AtkValue { Type = AtkValueType.Int, Int = index };
-            Trace(trace, $"action SelectString begin; row={localizedAddonRow}; index={index}; text={DiagnosticText(text)}; retainer={expected}; callback=[{index}]");
-            var callbackResult = addon->FireCallback(1, &value, true);
-            Trace(trace, $"action SelectString dispatched; callbackReturn={callbackResult}; awaiting observed UI change");
-            return true;
+            entries[index] = pointer == null ? null : SeString.Parse(pointer).TextValue;
         }
-        return false;
+        var selected = RetainerMenuMatcher.FindUnique(entries, text, localizedAddonRow == 2378);
+        if (selected < 0) return false;
+        var value = new AtkValue { Type = AtkValueType.Int, Int = selected };
+        Trace(trace, $"action SelectString begin; row={localizedAddonRow}; index={selected}; text={DiagnosticText(text)}; retainer={expected}; callback=[{selected}]");
+        var callbackResult = addon->FireCallback(1, &value, true);
+        Trace(trace, $"action SelectString dispatched; callbackReturn={callbackResult}; awaiting observed UI change");
+        return true;
+    }
+
+    private static string MenuMatchText(uint rowId)
+    {
+        var localized = Plugin.DataManager.GetExcelSheet<Addon>().GetRow(rowId).Text;
+        if (rowId != 2378) return localized.ExtractText().Trim();
+        // Row 2378 contains an evaluated slot-count payload. ExtractText omits the number
+        // but keeps its surrounding text, so it can never equal the rendered menu entry.
+        // AutoRetainer uses the first localized text payload as the stable prefix.
+        var prefix = SeString.Parse(localized.Data.Span).Payloads.OfType<TextPayload>().FirstOrDefault()?.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(prefix)) throw new InvalidOperationException("The localized retainer storage label is unavailable.");
+        return prefix;
     }
 
     public static bool BeginMove(ulong retainerId, NativeBagSlot slot, uint quantity, bool deposit, Action<string>? trace = null)

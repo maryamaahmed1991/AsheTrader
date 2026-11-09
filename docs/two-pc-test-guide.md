@@ -1,6 +1,6 @@
 # Two-PC testing: start here
 
-Test build: **0.3.3.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Protocol 4 requires both PCs to update together.
+Test build: **0.3.4.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Protocol 4 requires both PCs to update together.
 
 ## Reporting a stuck retainer menu
 
@@ -8,7 +8,7 @@ Detailed logging is automatic in 0.3.3. Reproduce the problem once. On the PC wh
 
 The report includes build/dependency versions, operation IDs and elapsed stages, expected/active retainer identity, addon visibility/readiness, expected menu text and visible menu entries, selection attempts, and inventory-page load state. It excludes pairing keys, configuration dumps, chat and dialogue bodies, but includes character/retainer identifiers and menu labels. The latest 500 bounded entries are retained for this plugin session; detailed entries also appear in Dalamud's log under `[WorkflowTrace]`. Repeated unchanged waits are sampled every five seconds, while menu details are repeated only when their state changes or a report is requested.
 
-This release instruments the reported menu stall; it does not claim the underlying cause has been confirmed. The report distinguishes a retainer-identity gate, menu readiness, text mismatch and a dispatched selection that did not open inventory.
+Version 0.3.4 fixes the text mismatch confirmed by the diagnostic report: the sheet text omitted the dynamic slot count, while the visible storage option included it. Close the leftover retainer menus, reconnect both PCs and use **Resume / reconcile**. Watch for the storage inventory to open after the greeting. If it pauses again, copy diagnostics before reloading; the report now shows the localized prefix, matching entries and the selected callback index. Post-fix native behavior still needs this live test.
 
 This version uses Allagan Tools caches before attempting discovery logins. Enable Allagan Tools on both PCs. A paused pre-plan discovery resumes with a cache lookup; already-issued transfer plans keep their existing amounts and recovery checkpoints.
 
