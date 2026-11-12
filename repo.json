@@ -3,7 +3,7 @@
     "Author": "Ashe",
     "Name": "Ashe's Trader",
     "InternalName": "AsheTrader",
-    "AssemblyVersion": "0.3.11.0",
+    "AssemblyVersion": "0.3.11.1",
     "Description": "LAN-coordinated transfer jobs with priority recipients, retainer collection and overflow storage, saved progress, character switching, and workshop fuel profiles.",
     "ApplicableVersion": "any",
     "Tags": [
@@ -20,8 +20,8 @@
     "Punchline": "Coordinate character and retainer item transfers across two PCs.",
     "AcceptsFeedback": true,
     "RepoUrl": "https://github.com/maryamaahmed1991/AsheTrader",
-    "DownloadLinkInstall": "https://github.com/maryamaahmed1991/AsheTrader/releases/download/v0.3.11.0/AsheTrader-0.3.11.0.zip",
-    "DownloadLinkUpdate": "https://github.com/maryamaahmed1991/AsheTrader/releases/download/v0.3.11.0/AsheTrader-0.3.11.0.zip",
-    "LastUpdate": 1794524078
+    "DownloadLinkInstall": "https://github.com/maryamaahmed1991/AsheTrader/releases/download/v0.3.11.1/AsheTrader-0.3.11.1.zip",
+    "DownloadLinkUpdate": "https://github.com/maryamaahmed1991/AsheTrader/releases/download/v0.3.11.1/AsheTrader-0.3.11.1.zip",
+    "LastUpdate": 1794525034
   }
 ]
