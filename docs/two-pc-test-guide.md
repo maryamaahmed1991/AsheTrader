@@ -1,6 +1,12 @@
 # Two-PC testing: start here
 
-Test build: **0.3.11.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 5.
+Test build: **0.3.11.1**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 5.
+
+## Test missing-character skips
+
+For a job paused during cached discovery, update both PCs, reconnect, and press **Resume / tally inventories**. Keep the existing job and journals. The missing character should be listed in amber under Activity with its reason, and lookup should continue to the next character. The prior item's deliveries must remain recorded.
+
+Use one unavailable provider and one provider with known stock. Only the usable provider should log in and trade. Missing recipient data should skip that recipient too, including for restock jobs; the remaining recipients keep their priority order. If no providers or recipients remain, that item should be marked skipped and the next item should run. No skipped character should be logged in or scanned, and the finished run must retain its skip notices rather than claim those requests were fulfilled. Refresh the cache and start a later job to include a previously skipped character.
 
 ## Test parallel preparation and post-login travel
 
@@ -14,7 +20,7 @@ Then watch a full recipient deposit: the sender should be able to travel while t
 
 Version 0.3.10.1 fixes the idle-state check that left Resume waiting for a trade window that was already closed. Update both PCs, keep the original characters logged in, reconnect and press **Resume / tally inventories**. The tally should advance automatically and a subsequent trade should send its opening request. Existing settings, pairing and saved progress are retained. If it still waits, Copy diagnostics now includes the raw native state even after a plugin reload.
 
-Update both PCs to 0.3.11.0 and keep the existing settings, pairing key and journals. Reconnect the same coordinator and worker. With the original trade characters logged in, press **Resume / tally inventories**. There are no outcome-confirmation checkboxes. The plugin compares both PCs' current counts, credits a matching completed batch once or retries when both sides show no movement, and continues the remaining job. If counts conflict, Activity explains the discrepancy.
+Update both PCs to 0.3.11.1 and keep the existing settings, pairing key and journals. Reconnect the same coordinator and worker. With the original trade characters logged in, press **Resume / tally inventories**. There are no outcome-confirmation checkboxes. The plugin compares both PCs' current counts, credits a matching completed batch once or retries when both sides show no movement, and continues the remaining job. If counts conflict, Activity explains the discrepancy.
 
 For a small speed test, send five stacks of an inexpensive item, including a partial stack. Offers should follow the game responses with at least 250 ms between item callbacks, without the old pauses after each quantity and filled slot. Verify the exact total on both PCs. Actual speed depends on game/server response time.
 
@@ -56,7 +62,7 @@ The report includes build/dependency versions, operation IDs and elapsed stages,
 
 Version 0.3.4 fixed the storage-label mismatch; the supplied trace confirms a successful ten-retainer scan. The next character's bell attempt occurred immediately after login and received no acknowledgement. Version 0.3.5 guards interaction readiness and retries bell opening a bounded number of times. Actual item movements are not automatically retried by that logic. Close leftover retainer menus, reconnect both PCs and use **Resume / tally inventories**. Report the next failure with **Copy diagnostics** before reloading.
 
-This version uses Allagan Tools caches for all planning, including restock totals. It performs no discovery logins or second full scan after login. Complete empty cache groups are accepted as estimates. Unavailable or malformed cache data pauses with an explanation instead of visiting the character. A paused pre-plan discovery resumes with a cache lookup; already-issued transfer plans keep their existing amounts and recovery checkpoints.
+This version uses Allagan Tools caches for all planning, including restock totals. It performs no discovery logins or second full scan after login. Complete empty cache groups are accepted as estimates. Unavailable or malformed cache data skips that character with a notice instead of visiting them or stopping the remaining work. A paused pre-plan discovery resumes with a cache lookup; already-issued transfer plans keep their existing amounts and recovery checkpoints.
 
 If version 0.3.0 stopped with **AutoRetainer cannot relog from the current game state**, update, reconnect both PCs, and use **Resume / tally inventories** on the coordinator. That message was caused by checking AutoRetainer's title-screen-only login API while already logged in. Version 0.3.1 uses its supported relog command. Keep AutoRetainer multi mode off and Lifestream idle; the character switch must complete before scanning or trading proceeds.
 

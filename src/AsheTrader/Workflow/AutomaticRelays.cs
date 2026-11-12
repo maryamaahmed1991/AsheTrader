@@ -10,9 +10,10 @@ public sealed partial class WorkflowService
     {
         var run = Run ?? throw new InvalidOperationException("No transfer job is active.");
         if (run.Journal != null) throw new InvalidOperationException("An issued transfer plan cannot change its relay routes.");
-        var needed = JobPlanner.RequiredRelaySourcePeers(run.ActiveDefinition, run.Snapshots.Values);
+        var available = AvailablePlanningDefinition();
+        var needed = JobPlanner.RequiredRelaySourcePeers(available, run.Snapshots.Values);
         if (needed.Count == 0) return true;
-        var funding = JobPlanner.PreviewFunding(run.ActiveDefinition, run.Snapshots.Values);
+        var funding = JobPlanner.PreviewFunding(available, run.Snapshots.Values);
         var preferredWorld = PreferredMeetingWorld(funding);
         var pairedPeers = new[] { Settings.PeerId, RemoteRoster?.PeerId ?? Guid.Empty };
         foreach (var sourcePeer in needed)
@@ -21,6 +22,7 @@ public sealed partial class WorkflowService
             if (relayPeer == Guid.Empty)
                 throw new InvalidOperationException("Connect the other account's PC before choosing an automatic relay.");
             if (run.AutomaticRelays.TryGetValue(relayPeer, out var chosen)
+                && !run.SkippedCharacters.ContainsKey(chosen)
                 && Character(chosen).PeerId == relayPeer
                 && run.Snapshots.TryGetValue(chosen, out var verified)
                 && verified.Verification == InventoryVerification.Verified && verified.BagCapacity > 0)
@@ -29,18 +31,27 @@ public sealed partial class WorkflowService
             // Resume may have interrupted the harmless login/inspection. Keep the chosen identity
             // and inspect again; no relay is accepted merely because its cached count was positive.
             if (run.RelayCandidatePeerId != relayPeer || !run.RelayCandidateId.HasValue
-                || run.RejectedRelayCharacters.Contains(run.RelayCandidateId.Value))
+                || run.RejectedRelayCharacters.Contains(run.RelayCandidateId.Value) || run.SkippedCharacters.ContainsKey(run.RelayCandidateId.Value))
             {
                 var requiredQuantity = funding.Allocations
                     .Where(allocation => run.Snapshots[allocation.SourceCharacterId].PeerId == sourcePeer
                         && run.Snapshots[allocation.RecipientCharacterId].PeerId == sourcePeer)
                     .Aggregate(0UL, (sum, allocation) => checked(sum + allocation.Quantity));
-                var candidates = AutomaticRelaySelector.Rank(relayPeer, AllCharacters(), run.RejectedRelayCharacters,
+                var eligibleCharacters = AllCharacters().Where(entry => !run.SkippedCharacters.ContainsKey(entry.Character.ContentId)).ToArray();
+                var candidates = AutomaticRelaySelector.Rank(relayPeer, eligibleCharacters, run.RejectedRelayCharacters,
                     preferredWorld, requiredQuantity, PlanningItemStackSize());
                 var next = candidates.FirstOrDefault();
                 if (next == null)
                 {
-                    var hadKnownCandidates = AutomaticRelaySelector.Rank(relayPeer, AllCharacters()).Count > 0;
+                    var hadKnownCandidates = AutomaticRelaySelector.Rank(relayPeer, eligibleCharacters).Count > 0;
+                    if (!hadKnownCandidates && AutomaticRelaySelector.Rank(relayPeer, AllCharacters())
+                        .Any(character => run.SkippedCharacters.ContainsKey(character.ContentId)))
+                    {
+                        run.ItemSkipReason = "Item skipped: its same-account transfers need a relay, but all known relay candidates on the other PC were skipped because their inventory data is unavailable.";
+                        RecordDiagnostic(run.ItemSkipReason);
+                        CompleteItem();
+                        return false;
+                    }
                     // A later explicit resume must be able to retry alts after the user makes space.
                     run.RejectedRelayCharacters.Clear();
                     SaveRun();
@@ -104,8 +115,8 @@ public sealed partial class WorkflowService
 
     private TransferJobDefinition DefinitionWithAutomaticRelays()
     {
-        var definition = Clone(Run!.ActiveDefinition);
-        definition.RelayCharacters = new(Run.AutomaticRelays);
+        var definition = AvailablePlanningDefinition();
+        definition.RelayCharacters = new(Run!.AutomaticRelays);
         return definition;
     }
 }

@@ -205,10 +205,30 @@ public sealed class MultiItemCoordinatorTests
     {
         var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 10), Sim(2, PeerB));
         Assert.Throws<ArgumentException>(() => service.StartJob(Saved(Job([1], (2, 10)), Job([1], (2, 1)))));
-        var invalid = Other(200, 5); invalid.Sources = [999];
-        Assert.Throws<InvalidOperationException>(() => service.StartJob(Saved(Job([1], (2, 10)), invalid)));
+        var invalid = Other(200, 5); invalid.Sources = [0];
+        Assert.Throws<ArgumentException>(() => service.StartJob(Saved(Job([1], (2, 10)), invalid)));
         Assert.Empty(service.Trace);
         Assert.Null(service.Run);
+    }
+
+    [Fact]
+    public void MissingRosterSourceOnLaterItemSkipsThatItemAndPreservesEarlierDelivery()
+    {
+        var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 10), Sim(2, PeerB));
+        var later = Other(200, 5); later.Sources = [999];
+        service.StartJob(Saved(Job([1], (2, 10)), later));
+        service.RunToTerminal();
+
+        Assert.False(service.Run!.Paused, service.LastError);
+        Assert.Equal(2, service.Run.CompletedItems.Count);
+        Assert.Equal(10UL, Delivered(service.Run.CompletedItems[0]));
+        Assert.Contains(999UL, service.Run.CompletedItems[1].SkippedCharacters.Keys);
+        Assert.False(string.IsNullOrWhiteSpace(service.Run.CompletedItems[1].ItemSkipReason));
+        Assert.Null(service.Run.CompletedItems[1].Journal);
+        Assert.DoesNotContain(service.Trace, command => command.CharacterId == 999);
+        Assert.Equal(10U, Assert.Single(service.Trades).Quantity);
+        Assert.Equal(10UL, service.Characters[2].Total);
+        Assert.True(service.Run.HasSkippedCharacters);
     }
 
     [Theory]

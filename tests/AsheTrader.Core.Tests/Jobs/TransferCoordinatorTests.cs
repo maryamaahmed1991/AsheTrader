@@ -174,15 +174,18 @@ public sealed class TransferCoordinatorTests
     }
 
     [Fact]
-    public void ActualCoordinatorRejectsUnavailableRetainerCache()
+    public void ActualCoordinatorSkipsUnavailableRetainerCacheWithoutGameplay()
     {
         var source = Sim(1, PeerA, 10, 100);
         source.CacheAvailable = false;
         var service = new WorkflowService(PeerA, PeerB, source, Sim(2, PeerB));
         service.StartJob(Saved(Job([1], (2, null))));
         service.RunToTerminal();
-        Assert.True(service.Run!.Paused);
-        Assert.Contains("cache unavailable", service.LastError);
+        Assert.False(service.Run!.Paused, service.LastError);
+        Assert.Contains("No complete cached", service.Run.SkippedCharacters[1]);
+        Assert.Equal(CoordinatorStep.Finished, service.Run.Step);
+        Assert.False(string.IsNullOrWhiteSpace(service.Run.ItemSkipReason));
+        Assert.DoesNotContain(1UL, service.Run.Snapshots.Keys);
         Assert.DoesNotContain(service.Trace, trace => trace.Operation is GameOperationKind.Login or GameOperationKind.ScanRetainers);
         Assert.Empty(service.Trades);
         Assert.Null(service.Run.Journal);
@@ -602,13 +605,19 @@ public sealed class TransferCoordinatorTests
     }
 
     [Fact]
-    public void ActualCoordinatorRejectsInvalidMeetingAndMissingSourceBeforeIssuingCommands()
+    public void ActualCoordinatorRejectsInvalidMeetingButSkipsMissingRosterSourcesWithoutSendingThemCommands()
     {
         var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 10), Sim(2, PeerB));
         var badMeeting = Saved(Job([1], (2, null)));
         badMeeting.Meeting.AetheryteId = 0;
         Assert.Throws<InvalidOperationException>(() => service.StartJob(badMeeting));
-        Assert.Throws<InvalidOperationException>(() => service.StartJob(Saved(Job([999], (2, null)))));
         Assert.Empty(service.Trace);
+        service.StartJob(Saved(Job([999], (2, null))));
+        service.RunToTerminal();
+        Assert.False(service.Run!.Paused, service.LastError);
+        Assert.Contains(999UL, service.Run.SkippedCharacters.Keys);
+        Assert.DoesNotContain(service.Trace, command => command.CharacterId == 999);
+        Assert.All(service.Trace, command => Assert.Equal(GameOperationKind.ReadCachedInventory, command.Operation));
+        Assert.Empty(service.Trades);
     }
 }

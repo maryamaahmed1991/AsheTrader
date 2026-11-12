@@ -27,7 +27,6 @@ public sealed partial class WorkflowService
             // Existing in-flight journals keep their already assigned routes until resolved.
             definition.RelayCharacters = [];
             JobPlanner.ValidateDefinition(definition);
-            foreach (var id in DiscoveryCharacters(definition)) _ = Character(id);
         }
         if (definitions.Select(item => new ItemKey(item.ItemId, item.HighQuality)).Distinct().Count() != definitions.Length)
             throw new ArgumentException("Add each item and quality only once per job; combine its recipient quantities on that item line.", nameof(job));
@@ -65,6 +64,7 @@ public sealed partial class WorkflowService
             {
                 ItemIndex = run.ActiveItemIndex, Definition = Clone(run.ActiveDefinition), DiscoveryOnly = run.DiscoveryOnly,
                 Journal = run.Journal == null ? null : Clone(run.Journal), Snapshots = Clone(run.Snapshots),
+                SkippedCharacters = new(run.SkippedCharacters), ItemSkipReason = run.ItemSkipReason,
                 Withdrawn = new(run.Withdrawn), Deposited = new(run.Deposited), AutomaticRelays = new(run.AutomaticRelays)
             }
         };
@@ -72,7 +72,6 @@ public sealed partial class WorkflowService
         if (nextIndex < run.TotalItemCount)
         {
             var order = DiscoveryCharacters(run.Job.ItemDefinitions.ElementAt(nextIndex));
-            foreach (var id in order) _ = Character(id);
             // One durable checkpoint switches item identity and clears every item-specific counter
             // before any command for the next item can be issued.
             Run = new()
@@ -90,9 +89,13 @@ public sealed partial class WorkflowService
             run.Step = CoordinatorStep.Finished;
             run.Paused = run.HasShortages;
             run.Status = run.DiscoveryOnly
-                ? "Discovery complete. All selected items were read from Allagan Tools caches; no characters were logged in and no items were moved."
+                ? run.HasSkippedCharacters
+                    ? "Discovery complete with skipped characters. Available caches were read; see each item's skip notices. No characters were logged in or items moved."
+                    : "Discovery complete. All selected items were read from Allagan Tools caches; no characters were logged in and no items were moved."
                 : run.HasShortages
-                    ? "All job items processed. Some requested quantities remain short; see each item's unmet targets."
+                    ? "All job items processed. Some requested quantities remain short; see each item's unmet targets and any skip notices."
+                    : run.HasSkippedCharacters
+                        ? "Job finished with skipped characters or items. See each item's skip notices; skipped requests were not fulfilled."
                     : "Transfer job complete: all items' planned final deliveries are verified.";
         }
         SaveRun();
@@ -511,18 +514,33 @@ public sealed partial class WorkflowService
         {
             if (run.DiscoveryIndex >= run.DiscoveryOrder.Count) { SetStep(CoordinatorStep.Plan); return; }
             var id = run.DiscoveryOrder[run.DiscoveryIndex];
+            var entry = AllCharacters().FirstOrDefault(entry => entry.Character.ContentId == id);
+            if (entry.Character == null)
+            {
+                if (run.Pending.Any(pending => pending.Command.Kind != WorkerCommandKind.Game
+                    || pending.Command.Operation.Kind != GameOperationKind.ReadCachedInventory || pending.Command.Operation.CharacterId != id))
+                    throw new InvalidDataException("Unexpected pending operation during cached inventory discovery.");
+                // A cache-only lookup has no game or inventory side effects if a roster was
+                // refreshed while its reply was in flight. Ignore that retired read-only ID.
+                run.Pending.Clear();
+                SkipDiscoveryCharacter(id, $"Character {id}", "The character is absent from both PCs' configured rosters.");
+                run.DiscoveryIndex++;
+                SetStep(CoordinatorStep.DiscoverCache);
+                return;
+            }
             Perform(id, GameOperationKind.ReadCachedInventory, CoordinatorStep.DiscoverCache, result =>
             {
-                var entry = Character(id);
                 if (!result.CachedInventoryAvailable || !result.RetainerRosterKnown || result.CacheRetrievedAt == null
-                    || result.StackSize == 0 || result.Retainers.Any(retainer => retainer.RetainerId == 0)
+                    || result.StackSize == 0 || result.Retainers == null || result.Retainers.Any(retainer => retainer == null || retainer.RetainerId == 0)
                     || result.Retainers.Select(retainer => retainer.RetainerId).Distinct().Count() != result.Retainers.Count)
                 {
                     var reason = string.IsNullOrWhiteSpace(result.Error) ? "The bag or retainer cache is incomplete." : result.Error;
                     var pc = entry.PeerId == Settings.PeerId ? "this PC" : "the paired PC";
-                    run.DiscoveryNotes[id] = $"Allagan Tools cache unavailable for {entry.Character.Name}@{entry.Character.World} on {pc}. {reason}";
-                    throw new InvalidOperationException($"{run.DiscoveryNotes[id]} Enable Allagan Tools and refresh its inventory data on that PC, then Resume. Automatic login and retainer scans are disabled.");
+                    SkipDiscoveryCharacter(id, $"{entry.Character.Name}@{entry.Character.World} on {pc}", reason);
+                    run.DiscoveryIndex++;
+                    return;
                 }
+                run.SkippedCharacters.Remove(id);
                 run.Snapshots[id] = new()
                 {
                     CharacterId = id, PeerId = entry.PeerId, Name = entry.Character.Name, World = entry.Character.World,
@@ -548,6 +566,17 @@ public sealed partial class WorkflowService
             if (run.DiscoveryOnly)
             {
                 CompleteItem(); return;
+            }
+            var available = AvailablePlanningDefinition();
+            if (available.Sources.Count == 0 || available.Recipients.Count == 0)
+            {
+                run.ItemSkipReason = available.Sources.Count == 0 && available.Recipients.Count == 0
+                    ? "Item skipped: no providers or recipients have usable cached inventories."
+                    : available.Sources.Count == 0 ? "Item skipped: no providers have usable cached inventories."
+                    : "Item skipped: no recipients have usable cached inventories.";
+                RecordDiagnostic(run.ItemSkipReason);
+                CompleteItem();
+                return;
             }
             if (!PrepareAutomaticRelays()) return;
             run.Journal = TransferJobLedger.Create(JobPlanner.Plan(DefinitionWithAutomaticRelays(), run.Snapshots.Values)).Journal;
@@ -704,6 +733,25 @@ public sealed partial class WorkflowService
                 ReconcileTrade(ledger, leg);
                 break;
         }
+    }
+
+    private void SkipDiscoveryCharacter(ulong characterId, string label, string reason)
+    {
+        var run = Run!;
+        if (run.Journal != null) throw new InvalidOperationException("Cannot remove a character from an issued transfer plan.");
+        var notice = $"Skipped {label}: {reason} This character will not take part in this item; continuing with the available characters.";
+        run.Snapshots.Remove(characterId);
+        run.SkippedCharacters[characterId] = notice;
+        run.DiscoveryNotes[characterId] = notice;
+        RecordDiagnostic(notice);
+    }
+
+    private TransferJobDefinition AvailablePlanningDefinition()
+    {
+        var definition = Clone(Run!.ActiveDefinition);
+        definition.Sources.RemoveAll(id => Run.SkippedCharacters.ContainsKey(id));
+        definition.Recipients.RemoveAll(rule => Run.SkippedCharacters.ContainsKey(rule.CharacterId));
+        return definition;
     }
 
 

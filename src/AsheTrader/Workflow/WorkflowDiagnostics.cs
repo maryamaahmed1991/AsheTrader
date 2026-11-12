@@ -51,6 +51,9 @@ public sealed partial class WorkflowService
         if (Run is { } run)
         {
             header.Add("Coordinator", $"job={run.Job.Definition.Id}; step={run.Step}; paused={run.Paused}; itemIndex={run.ActiveItemIndex}; discoveryIndex={run.DiscoveryIndex}/{run.DiscoveryOrder.Count}; pending={run.Pending.Count}");
+            header.Add("Discovery", $"skippedCharacters={run.SkippedCharacters.Count}; itemSkipReason={run.ItemSkipReason}");
+            foreach (var skipped in run.SkippedCharacters.Take(4))
+                header.Add("Skipped", $"character={skipped.Key}; reason={skipped.Value}");
             header.Add("Routing", $"meetingWorld={run.EffectiveMeeting?.WorldId ?? 0}; DC={run.MeetingDataCenterName}; pinned={run.MeetingPinned}; collectionStops={run.CollectionRoute?.Count ?? 0}; reason={run.MeetingReason}; relayDelivering={run.RelayFlushCharacterId?.ToString() ?? "none"}");
             if (run.Preparation is { } preparation)
             {

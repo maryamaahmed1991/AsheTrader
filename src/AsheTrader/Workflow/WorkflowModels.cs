@@ -139,10 +139,14 @@ public sealed class CoordinatorRun
     public int TotalItemCount => 1 + Job.AdditionalItems.Count;
     [Newtonsoft.Json.JsonIgnore]
     public bool HasShortages => Journal?.Plan.HasShortage == true || CompletedItems.Any(item => item.Journal?.Plan.HasShortage == true);
+    [Newtonsoft.Json.JsonIgnore]
+    public bool HasSkippedCharacters => SkippedCharacters.Count != 0 || CompletedItems.Any(item => item.SkippedCharacters.Count != 0);
     public Dictionary<ulong, JobCharacterSnapshot> Snapshots { get; set; } = [];
     public List<ulong> DiscoveryOrder { get; set; } = [];
     public int DiscoveryIndex { get; set; }
     public Dictionary<ulong, string> DiscoveryNotes { get; set; } = [];
+    public Dictionary<ulong, string> SkippedCharacters { get; set; } = [];
+    public string ItemSkipReason { get; set; } = "";
     public CoordinatorStep Step { get; set; }
     public TransferJobJournal? Journal { get; set; }
     public Guid AllocationId { get; set; }
@@ -185,6 +189,8 @@ public sealed class CoordinatorItemResult
     public bool DiscoveryOnly { get; set; }
     public TransferJobJournal? Journal { get; set; }
     public Dictionary<ulong, JobCharacterSnapshot> Snapshots { get; set; } = [];
+    public Dictionary<ulong, string> SkippedCharacters { get; set; } = [];
+    public string ItemSkipReason { get; set; } = "";
     public Dictionary<ulong, ulong> Withdrawn { get; set; } = [];
     public Dictionary<ulong, ulong> Deposited { get; set; } = [];
     public Dictionary<Guid, ulong> AutomaticRelays { get; set; } = [];

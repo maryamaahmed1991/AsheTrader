@@ -584,6 +584,7 @@ public sealed class WorkflowPanel(Plugin plugin)
             ImGui.PopID();
         }
         ImGui.TextWrapped("Providers use carried items first, then automatically refill from retainers. Recipients deposit when full and return to continue. A shortage for one item is reported separately while other items continue.");
+        UiTone.Wrapped(UiTone.Warning, "Characters missing from the roster or without usable cached inventories are skipped for that item. Their requests remain unfulfilled; Activity lists the reasons while the available work continues.");
         DrawAutomaticRelayInfo();
         ImGui.TextUnformatted("Meeting location · world chosen automatically");
         DrawLocation(job.Meeting, worldIndependent: true);
@@ -607,7 +608,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         ImGui.TextWrapped("Before running: check required plugins on both PCs, pause AutoRetainer multi mode and let its tasks finish. Close existing trade, retainer and confirmation dialogs.");
         ImGui.Separator();
         UiTone.Wrapped(UiTone.Info, "Inventory lookup reads each PC's Allagan Tools cache. It never changes characters, travels or opens retainers.");
-        ImGui.TextWrapped("Cached counts, including empty slots, are used as reported. If a cache cannot be read, the job pauses with the affected character. Enable or refresh Allagan Tools on that PC, then resume.");
+        ImGui.TextWrapped("Cached counts, including empty slots, are used as reported. A character with missing or incomplete data is skipped for that item, with the reason shown in Activity. The remaining characters continue.");
         ImGui.BeginDisabled(scanBlockers.Count > 0);
         if (ImGui.Button("Check inventories only", new Vector2(230, 34)))
         {
@@ -642,7 +643,7 @@ public sealed class WorkflowPanel(Plugin plugin)
                 plugin.QueueAction(() => Service.RefreshInventoryHints(item, highQuality));
             }
             ImGui.EndDisabled();
-            ImGui.TextWrapped("This quick preview lists known item holders. Jobs use saved character and retainer counts; unavailable cache data pauses planning instead of starting a live scan.");
+            ImGui.TextWrapped("This quick preview lists known item holders. Jobs use saved character and retainer counts; characters with unavailable data are skipped with a notice, without a live scan.");
             DrawHints();
         }
     }
@@ -655,7 +656,6 @@ public sealed class WorkflowPanel(Plugin plugin)
         if (!Service.IsHost || !Service.Connected || Service.RemoteRoster == null) reasons.Add("Connect both PCs with this PC hosting in step 1.");
         if (Service.RemoteRoster is not { ControlEnabled: true }) reasons.Add("Allow coordinator control on the other PC in step 1.");
         var definitions = job.ItemDefinitions.ToArray();
-        var known = Service.AllCharacters().Select(x => x.Character.ContentId).ToHashSet();
         if (definitions.Any(x => x.Id == Guid.Empty) || definitions.Select(x => x.Id).Distinct().Count() != definitions.Length)
             reasons.Add("This saved setup has missing or repeated item identities. Recreate its item lines in a new job before running.");
         for (var index = 0; index < definitions.Length; index++)
@@ -665,8 +665,6 @@ public sealed class WorkflowPanel(Plugin plugin)
             if (definition.Sources.Count == 0) reasons.Add($"{label}: select at least one provider in step 2.");
             if (definition.Recipients.Count == 0) reasons.Add($"{label}: add at least one recipient in step 2.");
             if (HasInvalidAmounts(definition)) reasons.Add($"{label}: fix the highlighted quantity fields; use positive whole numbers.");
-            if (definition.Sources.Concat(definition.Recipients.Select(x => x.CharacterId)).Any(id => !known.Contains(id)))
-                reasons.Add($"{label}: some selected characters are missing. Refresh characters or update this item's selections.");
             var item = Plugin.DataManager.GetExcelSheet<Item>().GetRowOrDefault(definition.ItemId);
             if (item == null || definition.ItemId == 0 || item.Value.IsUntradable) reasons.Add($"{label}: choose a tradable item in step 2.");
             else if (definition.HighQuality && !item.Value.CanBeHq) reasons.Add($"{label}: this item has no HQ version. Turn off high quality.");
@@ -853,7 +851,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         if (run.TotalItemCount > 1 || run.CompletedItems.Count > 0)
         {
             UiTone.Wrapped(UiTone.Info, $"Items completed: {run.CompletedItems.Count} / {run.TotalItemCount}");
-            UiTone.Progress((float)run.CompletedItems.Count / run.TotalItemCount, new Vector2(-1, 18), run.HasShortages);
+            UiTone.Progress((float)run.CompletedItems.Count / run.TotalItemCount, new Vector2(-1, 18), run.HasShortages || run.HasSkippedCharacters);
         }
         UiTone.Status(run.Status);
         if (run.Preparation is { } preparation)
@@ -865,23 +863,29 @@ public sealed class WorkflowPanel(Plugin plugin)
                 ? "Both PCs' interrupted operations are being recovered before new preparation starts."
                 : "Both PCs prepare independently. Trading begins once both characters are ready at the meeting point.");
         }
-        UiTone.Wrapped(run.Paused || run.HasShortages ? UiTone.Warning : run.Step == CoordinatorStep.Finished ? UiTone.Good : UiTone.Info, run.Step == CoordinatorStep.Finished
+        UiTone.Wrapped(run.Paused || run.HasShortages || run.HasSkippedCharacters ? UiTone.Warning : run.Step == CoordinatorStep.Finished ? UiTone.Good : UiTone.Info, run.Step == CoordinatorStep.Finished
             ? run.HasShortages
                 ? "Run ended with unmet targets. Review the shortages below; create a new job for any remaining items."
+                : run.HasSkippedCharacters ? "Run ended with skipped characters or items. Their requests were not fulfilled; see the notices below."
                 : "Run ended — inspect the results below before starting another job."
             : run.Paused ? "Paused — use Resume / tally inventories above when ready." : StageName(run.Step));
         foreach (var completed in run.CompletedItems.Where(x => x.ItemIndex != run.ActiveItemIndex).OrderBy(x => x.ItemIndex))
         {
             var shortfall = completed.Journal?.Plan.HasShortage == true;
+            var skipped = completed.SkippedCharacters.Count != 0 || completed.ItemSkipReason.Length != 0;
             ImGui.PushID($"completedItem{completed.ItemIndex}");
-            UiTone.Wrapped(shortfall ? UiTone.Warning : UiTone.Good,
-                $"Item {completed.ItemIndex + 1}: {ItemLabel(completed.Definition)} · {(completed.DiscoveryOnly ? "scan complete" : shortfall ? "available stock delivered; target remains short" : "delivery complete")}");
-            if (ImGui.CollapsingHeader("View item results", shortfall ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.None))
+            UiTone.Wrapped(shortfall || skipped ? UiTone.Warning : UiTone.Good,
+                $"Item {completed.ItemIndex + 1}: {ItemLabel(completed.Definition)} · {(completed.ItemSkipReason.Length != 0 ? "item skipped" : completed.DiscoveryOnly ? skipped ? "cache lookup complete with skips" : "scan complete" : shortfall ? "available stock delivered; target remains short" : skipped ? "available deliveries complete with skips" : "delivery complete")}");
+            if (ImGui.CollapsingHeader("View item results", shortfall || skipped ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.None))
+            {
+                DrawSkipNotices(completed.SkippedCharacters, completed.ItemSkipReason);
                 DrawItemResults(completed.Journal, completed.Snapshots, completed.Withdrawn, completed.Deposited);
+            }
             ImGui.PopID();
         }
         ImGui.Separator();
         UiTone.Wrapped(UiTone.Info, $"Item {run.ActiveItemIndex + 1} of {run.TotalItemCount}: {ItemLabel(run.ActiveDefinition)} · {ModeName(run.ActiveDefinition.QuantityMode)}");
+        DrawSkipNotices(run.SkippedCharacters, run.ItemSkipReason);
         foreach (var relay in run.AutomaticRelays)
             UiTone.Wrapped(UiTone.Info, $"Automatic relay on {PeerName(relay.Key)}: {CharacterName(relay.Value)} · live capacity checked");
         if (run.EffectiveMeeting != null)
@@ -903,8 +907,8 @@ public sealed class WorkflowPanel(Plugin plugin)
         {
             var scanned = run.DiscoveryOrder.Count(id => run.Snapshots.TryGetValue(id, out var snapshot) && snapshot.IsPlanningReady);
             var cached = run.Snapshots.Values.Count(snapshot => snapshot.IsPlanningReady && !snapshot.IsFullyVerified);
-            ImGui.TextUnformatted($"Inventory lookup: {scanned}/{run.DiscoveryOrder.Count} characters ready · {cached} from cache");
-            UiTone.Progress(run.DiscoveryOrder.Count == 0 ? 0 : (float)scanned / run.DiscoveryOrder.Count, new Vector2(-1, 18));
+            ImGui.TextUnformatted($"Inventory lookup: {run.DiscoveryIndex}/{run.DiscoveryOrder.Count} processed · {scanned} ready · {run.SkippedCharacters.Count} skipped · {cached} from cache");
+            UiTone.Progress(run.DiscoveryOrder.Count == 0 ? 0 : (float)run.DiscoveryIndex / run.DiscoveryOrder.Count, new Vector2(-1, 18), run.SkippedCharacters.Count != 0);
         }
         else
         {
@@ -948,7 +952,7 @@ public sealed class WorkflowPanel(Plugin plugin)
                 var response = pending.Response;
                 var cacheQuery = command.Operation.Kind == GameOperationKind.ReadCachedInventory;
                 UiTone.Wrapped(response == null || cacheQuery ? UiTone.Info : response.Success ? UiTone.Good : UiTone.Error, response == null ? (pending.Ready ? "Receiver armed; awaiting the agreed trade." : "Waiting for the worker's observation.")
-                    : response.Success ? cacheQuery ? response.Observation?.CachedInventoryAvailable == true ? "Cached inventory received; used for planning." : "Cache unavailable; refresh Allagan Tools on this character's PC, then resume." : $"Verified response: {response.Quantity:N0} items." : response.Error);
+                    : response.Success ? cacheQuery ? response.Observation?.CachedInventoryAvailable == true ? "Cached inventory received; used for planning." : "Cache unavailable; this character will be skipped and discovery will continue." : $"Verified response: {response.Quantity:N0} items." : response.Error);
                 if (response?.BeforeQuantity is not null || response?.CurrentQuantity is not null)
                     ImGui.TextUnformatted($"Recorded bag count: {response?.BeforeQuantity?.ToString("N0") ?? "unknown"}; current: {response?.CurrentQuantity?.ToString("N0") ?? "unknown"}");
                 if (command.Kind is WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch)
@@ -959,7 +963,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         {
             ImGui.TextWrapped("Cached estimates and live observations are labeled separately. Delivery progress is tracked independently and remains valid after retainer deposits.");
             foreach (var note in run.DiscoveryNotes)
-                UiTone.Wrapped(UiTone.Info, $"{CharacterName(note.Key)}: {note.Value}");
+                UiTone.Wrapped(run.SkippedCharacters.ContainsKey(note.Key) ? UiTone.Warning : UiTone.Info, $"{CharacterName(note.Key)}: {note.Value}");
             foreach (var snapshot in run.Snapshots.Values)
             {
                 UiTone.Wrapped(snapshot.IsFullyVerified ? UiTone.Good : UiTone.Info,
@@ -972,6 +976,15 @@ public sealed class WorkflowPanel(Plugin plugin)
                     ImGui.TextDisabled($"  {retainer.Name}: {retainer.Quantity:N0} · {retainer.Verification}");
             }
         }
+    }
+
+    private static void DrawSkipNotices(IReadOnlyDictionary<ulong, string> skipped, string itemSkipReason)
+    {
+        if (itemSkipReason.Length != 0) UiTone.Wrapped(UiTone.Warning, itemSkipReason);
+        if (skipped.Count == 0) return;
+        UiTone.Wrapped(UiTone.Warning, $"Skipped characters for this item: {skipped.Count}. Their inventory is unknown and their requests were not fulfilled.");
+        if (ImGui.CollapsingHeader("Why characters were skipped", ImGuiTreeNodeFlags.DefaultOpen))
+            foreach (var notice in skipped.Values) UiTone.Wrapped(UiTone.Warning, notice);
     }
 
     private void DrawItemResults(TransferJobJournal? journal, IReadOnlyDictionary<ulong, JobCharacterSnapshot> snapshots,

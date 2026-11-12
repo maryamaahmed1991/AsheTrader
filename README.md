@@ -16,7 +16,7 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 - Prepare both PCs independently: login, retainer pickups/deposits and meeting travel overlap; trading waits for both characters to arrive.
 - Preserve inn cutscenes and wait for their natural completion before continuing.
 - Read status at a glance: green for ready/success, blue for active information, amber for waiting or attention, and red for blockers/errors. Text labels remain alongside colors.
-- Plan from Allagan Tools' cached inventories without discovery logins or repeat retainer scans, including restock jobs. Unavailable cache data pauses with the affected character.
+- Plan from Allagan Tools' cached inventories without discovery logins or repeat retainer scans, including restock jobs. Characters with unavailable cache or roster data are skipped with a persistent notice while available work continues.
 - Allocate additional quantities, collect all with a final remainder recipient, or restock to a combined bag/retainer total.
 - Trade providers' carried stock first, then repeatedly collect bounded loads from their retainers and return to the meeting point until their assignments are complete.
 - Return a full receiver home, deposit received job items into allowed retainers, then return and continue.
@@ -26,9 +26,11 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 
 ## Runtime requirements
 
+Version 0.3.11.1 skips characters missing from the configured roster or without complete Allagan Tools/AutoRetainer inventory data. Activity shows an amber notice with the character and reason, including results from earlier item lines. Missing inventory is unknown, never a fabricated zero: skipped providers supply nothing and skipped recipients receive nothing, including restock targets. An item with no usable providers, recipients, or required relay after these exclusions is marked skipped and the next item continues. Original job settings and already-issued journals are preserved.
+
 Version 0.3.11.0 prepares both participants concurrently. One PC can travel while the other logs in or collects/deposits items, with one native operation per PC and a shared arrival barrier before trading. Activity shows each character's current action. Post-login teleport requests wait for game readiness and use bounded retries only when Lifestream has rejected the request; accepted requests are not repeated. Existing trade idle-state fixes remain in place.
 
-Both PCs need the same Ashe's Trader build, Dalamud API 15, AutoRetainer configured for their own account's characters, Lifestream, vnavmesh, and Allagan Tools. Planning uses the cached counts returned by Allagan Tools. Unavailable or malformed cache data pauses planning; it does not start character visits.
+Both PCs need the same Ashe's Trader build, Dalamud API 15, AutoRetainer configured for their own account's characters, Lifestream, vnavmesh, and Allagan Tools. Planning uses the cached counts returned by Allagan Tools. Unavailable or malformed character data produces a skip notice; it does not start character visits. Connection, journal and issued-operation failures still pause for recovery.
 
 The accounts must be able to meet on the selected world. Use an outdoor meeting point in the same territory as its main aetheryte. Default retainer access uses Lifestream's home-world inn shortcut; a per-character home-world bell location can be captured instead. Characters must have the required travel unlocks and resources.
 
@@ -46,7 +48,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.11.0.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.11.1.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
@@ -66,7 +68,7 @@ If no coordinator appears, check that both PCs use the same home network and the
 
 Under **Transfers**, connect the PCs and refresh both character lists, then create a job in **2. Set up** on the coordinator. Each character must belong to only one PC's roster. Account labels are descriptive; peer identity and character content ID determine execution ownership. New jobs default to an additional delivery amount, with ten items for each new recipient; existing saved job quantities are preserved.
 
-**3. Review & run** summarizes the intended transfer and explains missing setup. **Check inventories only** reads each PC's Allagan Tools cache without changing characters, traveling or opening retainers. Missing inventory or retainer ownership data pauses with the character and PC that need attention. The meeting point is needed for transfers, not cache lookup. **4. Activity** labels cached estimates and live observations separately and keeps verified pickups, deposits and final deliveries separate.
+**3. Review & run** summarizes the intended transfer and explains missing setup. **Check inventories only** reads each PC's Allagan Tools cache without changing characters, traveling or opening retainers. Missing inventory or retainer ownership data skips the character and records the reason and owning PC. The meeting point is needed for transfers, not cache lookup. **4. Activity** labels cached estimates and live observations separately and keeps verified pickups, deposits and final deliveries separate.
 
 Add each requested item under the same saved job. Each item line has its own providers, ordered recipients and quantity mode. Lines run in order, with a new cache lookup and separate delivery accounting for each. The same item and quality may appear once per job; combine its recipient rules on that line. Existing single-item jobs remain usable.
 
@@ -96,7 +98,7 @@ Version 0.3.7 makes retainer withdrawals readiness-driven, following the approac
 
 Version 0.3.6 adds relay collection/delivery phases, funded-character selection, source/relay cost ranking and automatic meeting-world choice. Saved relay cargo and pending trades are reconciled before scheduling new work. Inn cutscenes pause gameplay and deadlines until they finish naturally. Before relog, Ashe's Trader checks AutoRetainer's independent inn-skip setting. If it would skip, set **AutoRetainer → Advanced → Expert Settings → Skip Inn Login Cutscene → Never**, then resume. External plugin settings are not changed automatically.
 
-Version 0.3.5 removes automatic discovery visits and full scans after login, including recipient restock scans. Complete empty groups returned by Allagan Tools are accepted as cached zero estimates; absent or malformed groups still pause. Actual stock and receiving capacity are checked when moving items. Bell opening now waits for interaction readiness and uses bounded retries if the first attempt receives no acknowledgement. Copied diagnostics keep the newest trace within a paste-friendly size.
+Version 0.3.5 removes automatic discovery visits and full scans after login, including recipient restock scans. Complete empty groups returned by Allagan Tools are accepted as cached zero estimates; version 0.3.11.1 skips characters whose groups are absent or malformed. Actual stock and receiving capacity are checked when moving items. Bell opening now waits for interaction readiness and uses bounded retries if the first attempt receives no acknowledgement. Copied diagnostics keep the newest trace within a paste-friendly size.
 
 Version 0.3.4 fixed the confirmed retainer-menu stall: the game inserts a slot count into the storage option, so comparing it with the unformatted sheet text never matched. Storage selection uses the first localized text payload and requires one unique matching option. Quit still requires an exact match. User diagnostics confirm that all ten retainers on one character opened and closed successfully.
 
