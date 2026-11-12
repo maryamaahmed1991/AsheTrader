@@ -1,5 +1,17 @@
 # Development build validation
 
+## 0.4.0 validation — 12 November 2026
+
+- Full `scripts/Build.ps1`: **538 tests passed**, zero failures/skips; plugin Release build completed with zero warnings/errors, targeting Dalamud API 15 and .NET 10.
+- Recipient-assignment tests cover independent item lists, canonical definition reuse, HQ separation, provider/mode preservation, recipient priority, remainder-last rules, item reordering, empty setup handling and saved-format round trips.
+- Character-visit simulations cover collecting multiple items before travel, five-slot mixed offers, different recipients, shared physical inventory space, full relays, local overflow deposits, missing caches, lost pickup/trade replies, restart and migration of an existing item journal without repeating completed trades.
+- Exact-vector evidence tests reject equal-total but wrong-item distributions, partial mixed transfers, stale tally rounds, changed second-item counts, missing/duplicate/HQ-mismatched evidence and scalar success for a mixed command. Empty TradeItems preserves legacy command fingerprints.
+- Actual native ImGui 1.88 style/components were rendered offline at wide, narrow and 125% scale with fixture data. This validates theme/component appearance, not the complete live plugin window or game interaction.
+- The supplied 0.3.11.1 report identifies immediate failure when `vnavmesh.Nav.IsReady` is false. Meeting and bell approach now wait in the same operation with 500ms polling and a five-minute bounded startup deadline. No navigation command is dispatched until readiness; cutscene deadlines remain suspended.
+- No live trades, retainer movements or navigation were performed by the development agent. Use the updated two-PC guide for in-game validation.
+
+## Historical validation notes
+
 Build: 0.3.9.0, 12 November 2026. Target: Dalamud API 15, .NET 10, Windows.
 
 ## Completed checks

@@ -6,6 +6,10 @@ public static class JobPlanner
     public static TransferPlan Plan(TransferJobDefinition definition, IEnumerable<JobCharacterSnapshot> snapshots)
         => BuildPlan(definition, snapshots, true);
 
+    /// <summary>Multi-item visits check the selected relay's live capacity during shared preparation, before any trade.</summary>
+    public static TransferPlan PlanForVisits(TransferJobDefinition definition, IEnumerable<JobCharacterSnapshot> snapshots)
+        => BuildPlan(definition, snapshots, true, true);
+
     /// <summary>
     /// Determines which accounts actually need an opposite-account relay after applying stock,
     /// protected recipient totals and priority. It does not reserve stock or create executable routes.
@@ -32,7 +36,7 @@ public static class JobPlanner
         return BuildPlan(candidates, snapshots, false);
     }
 
-    private static TransferPlan BuildPlan(TransferJobDefinition definition, IEnumerable<JobCharacterSnapshot> snapshots, bool createRoutes)
+    private static TransferPlan BuildPlan(TransferJobDefinition definition, IEnumerable<JobCharacterSnapshot> snapshots, bool createRoutes, bool deferRelayCapacity = false)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(snapshots);
@@ -54,7 +58,7 @@ public static class JobPlanner
                 throw new InvalidOperationException($"Character {characterId} has an invalid retainer collection.");
             if (stockOwners.Contains(characterId) && !snapshot.IsPlanningReady)
                 throw new InvalidOperationException($"Character {characterId} needs complete cached or verified bag and retainer inventories before planning.");
-            if (!stockOwners.Contains(characterId) && snapshot.Verification != InventoryVerification.Verified)
+            if (!stockOwners.Contains(characterId) && snapshot.Verification != InventoryVerification.Verified && !deferRelayCapacity)
                 throw new InvalidOperationException($"Relay character {characterId}'s carried inventory must be verified before planning.");
             if (snapshot.Retainers.Any(retainer => retainer.RetainerId == 0)
                 || snapshot.Retainers.Select(retainer => retainer.RetainerId).Distinct().Count() != snapshot.Retainers.Count)

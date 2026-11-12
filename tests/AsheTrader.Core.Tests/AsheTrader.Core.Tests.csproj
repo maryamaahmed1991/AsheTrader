@@ -28,7 +28,13 @@
     <Compile Include="../../src/AsheTrader/Workflow/RelayBatchScheduling.cs" Link="Production/RelayBatchScheduling.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/MeetingRouting.cs" Link="Production/MeetingRouting.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/WorkflowModels.cs" Link="Production/WorkflowModels.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/RecipientAssignments.cs" Link="Production/RecipientAssignments.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/TradeReconciliationEvidence.cs" Link="Production/TradeReconciliationEvidence.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/MultiItemTradeEvidence.cs" Link="Production/MultiItemTradeEvidence.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/VisitModels.cs" Link="Production/VisitModels.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/CharacterVisits.cs" Link="Production/CharacterVisits.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/VisitPlanning.cs" Link="Production/VisitPlanning.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/VisitTrades.cs" Link="Production/VisitTrades.cs" />
     <Compile Include="../../src/AsheTrader/Trading/TradeOpeningGate.cs" Link="Production/TradeOpeningGate.cs" />
     <Compile Include="../../src/AsheTrader/Trading/TradePacing.cs" Link="Production/TradePacing.cs" />
     <Compile Include="../../src/AsheTrader/Trading/TradeActivityState.cs" Link="Production/TradeActivityState.cs" />

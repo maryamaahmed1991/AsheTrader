@@ -41,6 +41,8 @@ public sealed class GameOperationResult
     // Live position only; zero for cache-only observations or older workers.
     public uint CurrentWorldId { get; set; }
     public uint BagCapacity { get; set; }
+    // Shared physical empty slots, used to avoid counting the same space once per item.
+    public uint? FreeBagSlots { get; set; }
     public uint StackSize { get; set; }
     public uint MovedQuantity { get; set; }
     public bool MovementUncertain { get; set; }

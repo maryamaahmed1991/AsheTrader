@@ -84,6 +84,12 @@ public sealed partial class WorkflowService
                 var counts = run.Pending.Select(pending =>
                 {
                     var tally = recovery.Tallies[pending.Command.Id];
+                    if (pending.Command.TradeItems.Count != 0)
+                        return $"{pending.Command.Kind}: " + string.Join(", ", pending.Command.TradeItems.Select(item =>
+                        {
+                            var evidence = tally.TradeItems.FirstOrDefault(value => value.ItemId == item.ItemId && value.HighQuality == item.HighQuality);
+                            return $"item {item.ItemId}{(item.HighQuality ? " HQ" : "")}: {evidence?.BeforeQuantity?.ToString() ?? "unknown"} → {evidence?.CurrentQuantity?.ToString() ?? "unknown"}, expected {item.Quantity}";
+                        }));
                     return $"{pending.Command.Kind}: {tally.BeforeQuantity?.ToString() ?? "unknown"} → {tally.CurrentQuantity?.ToString() ?? "unknown"}, expected {pending.Command.Operation.Quantity}";
                 });
                 throw new InvalidOperationException($"Both inventories do not prove the same zero-or-full trade outcome ({string.Join("; ", counts)}). Check for manual inventory changes and keep the original characters logged in. Resume / tally inventories will re-read them; no further items have been moved.");
@@ -106,7 +112,7 @@ public sealed partial class WorkflowService
                     continue;
                 }
                 var resolution = new AutomaticTradeResolution(pending.Command.Id, recovery.RoundId, recovery.Transferred!.Value,
-                    tally.BeforeQuantity, tally.CurrentQuantity);
+                    tally.BeforeQuantity, tally.CurrentQuantity) { ExpectedItems = Clone(tally.TradeItems) };
                 if (pending.PeerId == Settings.PeerId) HandleAutomaticTradeResolution(resolution, pending.PeerId);
                 else Send("trade-settle", resolution);
                 if (run.Paused) return;
@@ -116,6 +122,16 @@ public sealed partial class WorkflowService
         foreach (var pending in run.Pending) pending.Response = Clone(recovery.Acknowledgements[pending.Command.Id]);
         SaveRun();
         var transferred = recovery.Transferred!.Value;
+        if (run.VisitMode && run.VisitBatch != null)
+        {
+            run.TradeRecovery = null;
+            if (!transferred) run.ConsecutiveEmptyTrades++;
+            ReconcileVisitBatch();
+            if (!transferred && run.ConsecutiveEmptyTrades >= MaximumEmptyTrades)
+                Pause("Three consecutive mixed trades moved no items. Check both characters can interact, then resume. All item outcomes remain saved.");
+            SaveRun();
+            return;
+        }
         var ledger = new TransferJobLedger(run.Journal!);
         var assignment = run.Journal!.Plan.Allocations.Single(allocation => allocation.Id == run.AllocationId);
         var alreadyCancelled = run.Journal.Operations.Single(operation => operation.Id == run.TradeOperationId).State == TransferOperationState.Cancelled;

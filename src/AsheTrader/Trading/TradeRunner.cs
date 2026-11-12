@@ -43,6 +43,7 @@ public sealed class TradeRunner : IDisposable
     public Action<string>? Diagnostic { get; set; }
     public bool Succeeded { get; private set; }
     public uint VerifiedQuantity { get; private set; }
+    public IReadOnlyList<TradeLine> VerifiedItems { get; private set; } = [];
     public bool ReceiverReady => stage == Stage.ReceiverIdle && IsReceiver;
     /// <summary>Read on the framework thread before tallying an interrupted trade.</summary>
     public bool IsInventoryTallyReady => !IsRunning && native.IsInventoryTallyReady;
@@ -63,6 +64,9 @@ public sealed class TradeRunner : IDisposable
     public void SendBatch(TradeLine line, IPlayerCharacter target) => Queue(false, [line], target, true);
     public void ReceiveBatch(TradeLine line, IPlayerCharacter target) => Queue(true, [line], target, true);
     public TradeBatch PreviewBatch(TradeLine line) => TradePlanner.Plan([line], native.ReadInventory());
+    public void SendBatch(IEnumerable<TradeLine> lines, IPlayerCharacter target) => Queue(false, lines, target, true);
+    public void ReceiveBatch(IEnumerable<TradeLine> lines, IPlayerCharacter target) => Queue(true, lines, target, true);
+    public TradeBatch PreviewBatch(IEnumerable<TradeLine> lines) => TradePlanner.Plan(lines, native.ReadInventory());
 
     private void Queue(bool receive, IEnumerable<TradeLine> lines, IPlayerCharacter target, bool oneBatch = false)
     {
@@ -75,6 +79,7 @@ public sealed class TradeRunner : IDisposable
             requested = new(receive, new(target.EntityId, target.Name.TextValue, target.HomeWorld.RowId), copied, oneBatch);
             Succeeded = false;
             VerifiedQuantity = 0;
+            VerifiedItems = [];
             startPending = true;
             Status = receive ? "Arming receiver…" : "Preparing transfer…";
         }
@@ -348,6 +353,12 @@ public sealed class TradeRunner : IDisposable
         if (!IsReceiver && !progress!.TryCommit(batch!, TradeOutcome.Completed, before, after, out var error))
             throw new InvalidOperationException(error);
         inventory = current;
+        var verified = VerifiedItems.ToDictionary(line => new ItemKey(line.ItemId, line.HighQuality), line => line.Quantity);
+        var committed = IsReceiver
+            ? incoming.GroupBy(item => item.Key).ToDictionary(group => group.Key, group => checked((uint)group.Aggregate(0UL, (sum, item) => sum + item.Quantity)))
+            : batch!.Entries.GroupBy(item => item.Key).ToDictionary(group => group.Key, group => checked((uint)group.Aggregate(0UL, (sum, item) => sum + item.Quantity)));
+        foreach (var (key, quantity) in committed) verified[key] = checked(verified.GetValueOrDefault(key) + quantity);
+        VerifiedItems = verified.Select(pair => new TradeLine { ItemId = pair.Key.ItemId, HighQuality = pair.Key.HighQuality, Quantity = pair.Value }).ToArray();
         VerifiedQuantity = checked(VerifiedQuantity + (uint)(IsReceiver
             ? incoming.Aggregate(0UL, (sum, item) => sum + item.Quantity) : batch!.TotalQuantity));
         Trace($"settlement verified; receiver={IsReceiver}; verifiedQuantity={VerifiedQuantity}; exactInventoryDeltas=True");

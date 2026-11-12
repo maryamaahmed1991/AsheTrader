@@ -234,7 +234,8 @@ public sealed class GameWorkflowExecutor
                 Trace($"cutscene ended; no skip input sent; pausedMs={pausedFor.Value}; resuming observed game state");
             }
             if (now - operationStarted > 1_200_000) throw new TimeoutException("The operation exceeded twenty minutes.");
-            var allowance = stage is Stage.WaitLogin or Stage.WaitWorld or Stage.WaitTerritory or Stage.WaitInn ? 300_000 : 90_000;
+            var allowance = stage is Stage.WaitLogin or Stage.WaitWorld or Stage.WaitTerritory or Stage.WaitInn
+                or Stage.StartPosition or Stage.ApproachBell ? 300_000 : 90_000;
             if (now - stageStarted > allowance) throw new TimeoutException(TimeoutDescription());
             if (now < actionAfter) return;
             if (stage != Stage.Begin && stage != Stage.WaitLogin)
@@ -571,7 +572,7 @@ public sealed class GameWorkflowExecutor
     {
         if (!PlayerReady || CurrentWorld != travel!.WorldId || Plugin.ClientState.TerritoryType != travel.TerritoryId) return;
         if (DistanceTo(travel.Position) <= PositionArrivalRadius) { Arrived(); return; }
-        StartNavigation(travel.Position);
+        if (!StartNavigation(travel.Position)) return;
         Transition(Stage.WaitPosition, "Walking to the configured point…", 500);
     }
 
@@ -603,7 +604,7 @@ public sealed class GameWorkflowExecutor
         var bell = NativeRetainers.FindBell() ?? throw new InvalidOperationException("No summoning bell was found at the storage destination.");
         if (DistanceTo(bell.Position) > 3.5f)
         {
-            StartNavigation(bell.Position);
+            if (!StartNavigation(bell.Position)) return;
             Transition(Stage.WaitBellWalk, "Walking to the summoning bell…", 500);
             return;
         }
@@ -772,6 +773,7 @@ public sealed class GameWorkflowExecutor
             {
                 var inventory = NativeRetainers.ReadBags(op.ItemId, op.HighQuality);
                 result.BagQuantity = inventory.Quantity; result.BagCapacity = inventory.Capacity; result.StackSize = inventory.StackSize;
+                result.FreeBagSlots = inventory.FreeSlots;
             }
             catch (Exception ex) { result.Success = false; result.RetainerRosterVerified = false; result.Error = $"Could not verify final carried inventory: {ex.Message}"; }
         }
@@ -824,14 +826,19 @@ public sealed class GameWorkflowExecutor
         return true;
     }
 
-    private void StartNavigation(Vector3 position)
+    private bool StartNavigation(Vector3 position)
     {
         if (!Plugin.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.Nav.IsReady").InvokeFunc())
-            throw new InvalidOperationException("vnavmesh is not ready for this territory. Wait for its mesh to load, then resume.");
+        {
+            Status = "Waiting for vnavmesh to load this territory; walking will continue automatically…";
+            actionAfter = Environment.TickCount64 + 500;
+            return false;
+        }
         if (NavigationBusy()) throw new InvalidOperationException("Another navigation operation is running.");
         if (!Plugin.PluginInterface.GetIpcSubscriber<Vector3, bool, bool>("vnavmesh.SimpleMove.PathfindAndMoveTo").InvokeFunc(position, false))
             throw new InvalidOperationException("vnavmesh could not start a route to the destination.");
         ownsNavigation = true;
+        return true;
     }
 
     private static bool NavigationBusy() => Plugin.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.SimpleMove.PathfindInProgress").InvokeFunc()

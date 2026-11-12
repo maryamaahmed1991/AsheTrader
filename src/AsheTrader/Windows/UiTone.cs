@@ -6,10 +6,10 @@ namespace AsheTrader.Windows;
 /// <summary>Colors supplement explicit status labels; ordinary instructions keep the theme's text color.</summary>
 internal static class UiTone
 {
-    internal static readonly Vector4 Good = new(.50f, .84f, .63f, 1);
-    internal static readonly Vector4 Warning = new(1f, .78f, .38f, 1);
-    internal static readonly Vector4 Error = new(1f, .50f, .50f, 1);
-    internal static readonly Vector4 Info = new(.52f, .76f, 1f, 1);
+    internal static readonly Vector4 Good = TraderStyle.Accent;
+    internal static readonly Vector4 Warning = TraderStyle.Gold;
+    internal static readonly Vector4 Error = TraderStyle.Danger;
+    internal static readonly Vector4 Info = new(.59f, .76f, .94f, 1);
     private static readonly string[] ErrorWords = ["failed", "error", "invalid", "unavailable", "could not", "cannot", "mismatch", "blocked", "missing"];
     private static readonly string[] WarningWords = ["paused", "unknown", "uncertain", "waiting", "needs attention", "not ready", "not been checked", "unmet", "short", "incomplete", "unverified", "not verified", "not complete", "disabled"];
     private static readonly string[] GoodWords = ["complete", "verified", "ready", "available and idle", "refreshed"];

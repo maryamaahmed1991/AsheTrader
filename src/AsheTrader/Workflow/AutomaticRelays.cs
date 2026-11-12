@@ -9,6 +9,7 @@ public sealed partial class WorkflowService
     private bool PrepareAutomaticRelays()
     {
         var run = Run ?? throw new InvalidOperationException("No transfer job is active.");
+        if (run.VisitMode) return PrepareVisitRelays();
         if (run.Journal != null) throw new InvalidOperationException("An issued transfer plan cannot change its relay routes.");
         var available = AvailablePlanningDefinition();
         var needed = JobPlanner.RequiredRelaySourcePeers(available, run.Snapshots.Values);

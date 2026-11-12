@@ -44,13 +44,21 @@ public sealed partial class WorkflowService
         executor.CaptureDiagnosticSnapshot("User requested diagnostic report");
         plugin.Trader.CaptureDiagnosticSnapshot("User requested diagnostic report");
         var header = new WorkflowTrace(40, 2000);
-        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 5; timestamps UTC; this PC only");
+        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 6; timestamps UTC; this PC only");
         header.Add("Session", $"Role={(IsHost ? "coordinator" : "worker")}; connected={Connected}; paired={HasAcceptedConnection}; remoteControl={Settings.AllowRemoteControl}; journalHealthy={journalHealthy}");
         header.Add("Game", $"loggedIn={Plugin.ClientState.IsLoggedIn}; characterId={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; language={Plugin.ClientState.ClientLanguage}");
         header.Add("Status", Status);
         if (Run is { } run)
         {
             header.Add("Coordinator", $"job={run.Job.Definition.Id}; step={run.Step}; paused={run.Paused}; itemIndex={run.ActiveItemIndex}; discoveryIndex={run.DiscoveryIndex}/{run.DiscoveryOrder.Count}; pending={run.Pending.Count}");
+            if (run.VisitMode)
+                header.Add("Visits", $"planningComplete={run.VisitPlanningComplete}; itemPlans={run.VisitItems.Count}; completedItems={run.CompletedItems.Count}; mixedBatchItems={run.VisitBatch?.Lines.Count ?? 0}");
+            if (run.Visit is { } visit)
+            {
+                header.Add("Visit", $"id={visit.Id}; sender={visit.SenderId}; receiver={visit.ReceiverId}; world={visit.Meeting.WorldId}; recovering={visit.Recovering}; replanRequested={visit.ReplanRequested}; senderStage={visit.Sender.Stage}/{visit.Sender.LineIndex}; receiverStage={visit.Receiver.Stage}/{visit.Receiver.LineIndex}");
+                foreach (var line in visit.Lines.Take(8))
+                    header.Add("VisitItem", $"index={line.ItemIndex}; allocation={line.AllocationId}; leg={line.LegIndex}; remaining={line.MaximumQuantity}; senderBags={line.SenderBagQuantity}; receiverCapacity={line.ReceiverBagCapacity}; receiverFreeSlots={line.ReceiverFreeBagSlots}");
+            }
             header.Add("Discovery", $"skippedCharacters={run.SkippedCharacters.Count}; itemSkipReason={run.ItemSkipReason}");
             foreach (var skipped in run.SkippedCharacters.Take(4))
                 header.Add("Skipped", $"character={skipped.Key}; reason={skipped.Value}");
@@ -66,6 +74,11 @@ public sealed partial class WorkflowService
             foreach (var pending in run.Pending.Take(4))
             {
                 header.Add("Pending", $"command={pending.Command.Id}; kind={pending.Command.Kind}/{pending.Command.Operation.Kind}; character={pending.Command.Operation.CharacterId}; item={pending.Command.Operation.ItemId}; HQ={pending.Command.Operation.HighQuality}; quantity={pending.Command.Operation.Quantity}; response={pending.Response?.Success.ToString() ?? "waiting"}; error={pending.Response?.Error ?? ""}");
+                foreach (var item in pending.Command.TradeItems.Take(5))
+                {
+                    var evidence = pending.Response?.TradeItems.FirstOrDefault(value => value.ItemId == item.ItemId && value.HighQuality == item.HighQuality);
+                    header.Add("TradeItem", $"command={pending.Command.Id}; item={item.ItemId}; HQ={item.HighQuality}; expected={item.Quantity}; verified={evidence?.Quantity}; before={evidence?.BeforeQuantity}; current={evidence?.CurrentQuantity}");
+                }
                 if (StorageReconciliation.IsStorage(pending.Command))
                     header.Add("StorageRecovery", $"command={pending.Command.Id}; responsePresent={pending.Response != null}; ambiguous={pending.Response?.Ambiguous}; operatorReviewed={pending.Response?.OperatorReviewed}; observationPresent={pending.Response?.Observation != null}; confirmedMoved={pending.Response?.Observation?.MovedQuantity}; bagAtStop={pending.Response?.Observation?.BagQuantity}; movementUncertain={pending.Response?.Observation?.MovementUncertain}; accountingApplied={pending.InventoryAdjustmentApplied}; reviewAccepted={StorageReconciliation.IsReviewed(pending.Response)}");
                 if (pending.Command.Kind is WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch)

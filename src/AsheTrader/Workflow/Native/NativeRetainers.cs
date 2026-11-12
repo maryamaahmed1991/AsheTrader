@@ -18,7 +18,10 @@ namespace AsheTrader.Workflow.Native;
 
 internal sealed record RetainerIdentity(ulong Id, string Name, bool Available);
 internal sealed record NativeBagSlot(InventoryType Container, int Slot, uint ItemId, bool HighQuality, uint Quantity, uint StackSize, bool Movable);
-internal sealed record ItemInventory(uint Quantity, uint Capacity, uint StackSize, Dictionary<ItemKey, ulong> AllItems, IReadOnlyList<NativeBagSlot> Slots);
+internal sealed record ItemInventory(uint Quantity, uint Capacity, uint StackSize, Dictionary<ItemKey, ulong> AllItems, IReadOnlyList<NativeBagSlot> Slots)
+{
+    public uint FreeSlots { get; init; }
+}
 
 /// <summary>Version-sensitive native actions. Each caller must run on the framework thread.</summary>
 internal static unsafe class NativeRetainers
@@ -195,6 +198,7 @@ internal static unsafe class NativeRetainers
         var counts = new Dictionary<ItemKey, ulong>();
         var slots = new List<NativeBagSlot>();
         ulong capacity = 0, quantity = 0;
+        uint freeSlots = 0;
         foreach (var type in containers)
         {
             var container = manager->GetInventoryContainer(type);
@@ -204,7 +208,7 @@ internal static unsafe class NativeRetainers
             {
                 var slot = container->GetInventorySlot(index);
                 if (slot == null) throw new InvalidOperationException("Inventory slot is unavailable.");
-                if (slot->ItemId == 0) { capacity += stackSize; continue; }
+                if (slot->ItemId == 0) { capacity += stackSize; freeSlots++; continue; }
                 if (slot->Quantity < 0) throw new InvalidDataException("Inventory quantity is invalid.");
                 var key = new ItemKey(slot->ItemId, slot->IsHighQuality());
                 counts[key] = checked(counts.GetValueOrDefault(key) + (uint)slot->Quantity);
@@ -216,7 +220,7 @@ internal static unsafe class NativeRetainers
                 if (movable && slot->Quantity <= stackSize) capacity += stackSize - (uint)slot->Quantity;
             }
         }
-        return new(checked((uint)quantity), (uint)Math.Min(uint.MaxValue, capacity), stackSize, counts, slots);
+        return new(checked((uint)quantity), (uint)Math.Min(uint.MaxValue, capacity), stackSize, counts, slots) { FreeSlots = freeSlots };
     }
 
     public static IReadOnlyList<RetainerIdentity> ReadRoster()

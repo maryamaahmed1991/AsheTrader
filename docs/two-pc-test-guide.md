@@ -1,5 +1,18 @@
 # Two-PC testing: start here
 
+## Test the 0.4.0 workspace and grouped-item workflow
+
+1. Update both PCs to **0.4.0.0**, reconnect on **Connection**, and leave AutoRetainer multi mode paused. Protocol 6 requires both PCs to update.
+2. In **Jobs**, choose one recipient and add Fuel and Coke. Choose another recipient and add only Fuel. Set small amounts, choose their providers, and check the exact assignments on **Review & run**. Old saved setups retain their per-item recipients and amounts.
+3. Start with one provider holding both items on retainers and enough bag space. It should collect both assigned types before travelling. Compatible quantities should share the trade window (maximum five occupied trade slots), with no second complete roster pass for the next item.
+4. Add a second provider and test a relay. The relay should collect mixed cargo until full or the currently eligible collection work is complete, then unload on the recipient's home world. Its carried cargo must not be deposited to its own retainers.
+5. Use a recipient with limited space. It should deposit delivered job items and continue. Per-item delivery totals must remain accurate after deposits and relays.
+6. Pause between actions and use **Resume / tally inventories**. Existing scalar jobs upgrade at an idle scheduling boundary after their pending outcomes are resolved; completed quantities must not repeat. An interrupted mixed trade is credited only when both PCs agree on every item/quality quantity.
+7. Watch a world/territory arrival while vnavmesh loads. Status should say it is waiting and then continue without Resume. Only persistent loading beyond five minutes or a real route failure should pause.
+
+For any unexpected behavior, use **Activity → Copy diagnostics** on both PCs before reloading. The new report includes the current character visit, each item budget and mixed-trade evidence. Native UI, navigation and actual trade callbacks still require this live validation; automated tests use simulated game operations.
+
+
 Test build: **0.3.11.1**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 5.
 
 ## Test missing-character skips
@@ -42,7 +55,7 @@ For the reported partial-stack case, use a permitted retainer with all 175 slots
 
 After updating both PCs, use one provider with empty carried stock and several full stacks of the chosen item on its retainers. Request enough to collect those stacks plus part of another stack, while leaving sufficient bag space. For Ceruleum Tanks, for example, put three full 999 stacks on a retainer and request 2,100. Confirm two full stacks and exactly 102 from the third are withdrawn, leaving 897 behind; then let the job trade the 2,100. If multiple providers are selected, ensure this test provider is the one allocated that quantity.
 
-Full stacks should advance promptly after the game acknowledges them; only the partial stack should need a quantity dialog. The single minimum interval is 350 ms; network/server delay can take longer. Watch one transition between retainers too. Inn cutscenes must still play normally. If it stalls or a quantity is unexpected, pause and use **Transfers → 4. Activity → Copy diagnostics** on the affected PC before reloading. The trace now includes `withdrawal confirmed`, quantities and elapsed milliseconds per stack. Do not retry an uncertain movement without reconciling the inventories.
+Full stacks should advance promptly after the game acknowledges them; only the partial stack should need a quantity dialog. The single minimum interval is 350 ms; network/server delay can take longer. Watch one transition between retainers too. Inn cutscenes must still play normally. If it stalls or a quantity is unexpected, pause and use **Activity → Copy diagnostics** on the affected PC before reloading. The trace now includes `withdrawal confirmed`, quantities and elapsed milliseconds per stack. Do not retry an uncertain movement without reconciling the inventories.
 
 ## Test relay collection and cutscenes
 
@@ -50,13 +63,13 @@ For a small new test, select three providers on one account with 100 items each 
 
 Add a zero-stock provider and an extra provider that the final allocations do not need. Neither should log in. A recipient with no funded quantity should also stay offline. Activity shows the selected relay, collecting/delivering phase, cargo, itinerary and active meeting world. The captured world is ignored. Existing pending commands retain their destination until reconciled; subsequent scheduling uses the new itinerary without changing allocations.
 
-If a relay fills before all providers finish, it should deliver its cargo, then resume collection. It must not deposit relay cargo onto retainers. Preserve recipient priority: the higher-priority recipient finishes before collecting for the next. Item lines still run one at a time.
+If a relay fills before all providers finish, it should deliver its cargo, then resume collection. It must not deposit relay cargo onto retainers. Preserve recipient priority: the higher-priority recipient finishes before collecting for the next. Compatible items share character visits and mixed trade windows; recipient priority remains per item.
 
 For an inn login, watch the cutscene complete naturally. Set **AutoRetainer → Advanced → Expert Settings → Skip Inn Login Cutscene → Never** on each PC. Ashe's Trader will pause before relog if AutoRetainer is configured to skip; it does not edit that setting itself. During a cutscene the workflow should show a waiting status, send no progression input, and resume afterward without using up its gameplay timeout.
 
 ## Reporting a stuck retainer menu
 
-Detailed logging is automatic in 0.3.3. Reproduce the problem once. On the PC whose character is stuck, leave the game menu open and select **Transfers → 4. Activity → Copy diagnostics**. The copy button is at the top of Activity and works while a job is running. Paste the report into your bug report, then pause the workflow. If both PCs were involved, copy each PC separately and label them coordinator/worker. If the job has already timed out, copy before reloading the plugin; the last failure snapshot remains in the trace.
+Detailed logging is automatic in 0.3.3. Reproduce the problem once. On the PC whose character is stuck, leave the game menu open and select **Activity → Copy diagnostics**. The copy button is at the top of Activity and works while a job is running. Paste the report into your bug report, then pause the workflow. If both PCs were involved, copy each PC separately and label them coordinator/worker. If the job has already timed out, copy before reloading the plugin; the last failure snapshot remains in the trace.
 
 The report includes build/dependency versions, operation IDs and elapsed stages, expected/active retainer identity, addon visibility/readiness, expected menu text and visible menu entries, selection attempts, and inventory-page load state. It excludes pairing keys, configuration dumps, chat and dialogue bodies, but includes character/retainer identifiers and menu labels. The latest 500 bounded entries are retained for this plugin session; copied reports select the newest complete entries within a 28,000-character trace budget so the failure is preserved when pasted. Detailed entries also appear in Dalamud's log under `[WorkflowTrace]`. Repeated unchanged waits are sampled every five seconds.
 
@@ -103,7 +116,7 @@ Leave the default inn storage route for this first test. No relay is needed when
 
 ### 4. Check cached inventories first
 
-Open **3. Review & run**, resolve the listed setup issues, then choose **Check inventories only**.
+Open **Review & run**, resolve the listed setup issues, then choose **Check inventories only**.
 
 Expected: no character switching, travel or retainer windows. Activity should show **3 carried + 17 stored** for the provider, marked **Cached**, plus recipient counts. Compare the totals with Allagan Tools. Cached retrieval times must not be labeled as live observation times. If a character or retainer lacks usable data, Activity names the character and PC; refresh Allagan Tools there, then resume. No automatic live scan or item movement occurs during this check.
 
@@ -111,7 +124,7 @@ If scanning stops, report the character, home/current world, visible menu, and e
 
 ### 5. Run and check the refill
 
-Choose **Start transfer** from **3. Review & run**. The job reads the caches again, then logs in the characters needed for the transfer, checks carried stock and space, and travels. **Restock to total** also uses cached totals without a full recipient scan. If those totals are stale, the final stock can differ from the target; confirmed delivery counts remain based on actual trades.
+Choose **Start transfer** from **Review & run**. The job reads the caches again, then logs in the characters needed for the transfer, checks carried stock and space, and travels. **Restock to total** also uses cached totals without a full recipient scan. If those totals are stale, the final stock can differ from the target; confirmed delivery counts remain based on actual trades.
 
 Expected sequence:
 

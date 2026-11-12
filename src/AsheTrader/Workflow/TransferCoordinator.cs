@@ -34,7 +34,7 @@ public sealed partial class WorkflowService
             throw new ArgumentException("Each job item needs its own stable ID. Remove and re-add the duplicate item line.", nameof(job));
         if (!discoveryOnly && (job.Meeting.TerritoryId == 0 || job.Meeting.AetheryteId == 0))
             throw new InvalidOperationException("Capture an outdoor meeting point and choose its main aetheryte before starting.");
-        Run = new() { Job = saved, DiscoveryOnly = discoveryOnly, DiscoveryOrder = DiscoveryCharacters(saved.Definition), Step = CoordinatorStep.DiscoverCache,
+        Run = new() { Job = saved, VisitMode = !discoveryOnly && definitions.Length > 1, DiscoveryOnly = discoveryOnly, DiscoveryOrder = DiscoveryCharacters(saved.Definition), Step = CoordinatorStep.DiscoverCache,
             Status = "Reading Allagan Tools inventories from both PCs…" };
         error = "";
         SaveRun();
@@ -46,6 +46,7 @@ public sealed partial class WorkflowService
     private void CompleteItem()
     {
         var run = Run!;
+        if (run.VisitMode && !run.VisitPlanningComplete) { AdvanceVisitPlanning(); return; }
         if (run.Pending.Count != 0 || run.TradeOperationId.HasValue)
             throw new InvalidOperationException("Resolve the current item's pending operation before proceeding to another item.");
         if (run.Journal != null)
@@ -77,6 +78,7 @@ public sealed partial class WorkflowService
             Run = new()
             {
                 Job = run.Job, DiscoveryOnly = run.DiscoveryOnly, ActiveItemIndex = nextIndex,
+                PreserveLegacyItemOrder = run.PreserveLegacyItemOrder,
                 ObservedWorlds = new(run.ObservedWorlds),
                 CompletedItems = completed, DiscoveryOrder = order, Step = CoordinatorStep.DiscoverCache,
                 Status = $"Item {nextIndex + 1}/{run.TotalItemCount}: reading cached inventories before continuing…"
@@ -109,6 +111,11 @@ public sealed partial class WorkflowService
             throw new InvalidOperationException("Wait for the local operation to stop before resuming.");
         if (Run is not { Paused: true, Step: not CoordinatorStep.Finished }) return;
         error = "";
+        if (Run.VisitMode && Run.VisitPlanningComplete)
+        {
+            ResumeVisitWorkflow();
+            return;
+        }
         if (Run.Step == CoordinatorStep.PrepareParticipants)
         {
             ResumePreparation();
@@ -194,6 +201,7 @@ public sealed partial class WorkflowService
     {
         if (Run is not { Paused: true }) return;
         if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning) throw new InvalidOperationException("Wait until local work stops.");
+        if (Run.VisitMode && Run.VisitPlanningComplete) { EndPausedVisitJob(); return; }
         if (Run.Preparation != null && Run.Pending.Any(pending => pending.Response == null))
             RefuseToEndPausedJob("Use Resume / tally inventories to finish stopping and recovering both PCs before ending the job.");
         var unresolvedStorage = Run.Pending.FirstOrDefault(pending => StorageReconciliation.IsStorage(pending.Command)
@@ -406,7 +414,16 @@ public sealed partial class WorkflowService
             if (result.CharacterId != characterId || result.MovedQuantity > pending.Command.Operation.Quantity)
                 throw new InvalidDataException(pickup ? "Invalid provider pickup observation." : "Invalid deposit observation.");
             Dictionary<ulong, ulong> quantities;
-            if (pending.InventoryItemIndex is { } itemIndex)
+            if (Run!.VisitMode && pending.InventoryItemIndex is { } visitItemIndex)
+            {
+                var item = Run.VisitItems[visitItemIndex];
+                if (pending.Command.Operation.ItemId != item.Definition.ItemId || pending.Command.Operation.HighQuality != item.Definition.HighQuality || item.Journal == null)
+                    throw new InvalidDataException("Retainer movement does not match its visit-item ledger.");
+                if (!pickup && additional > DepositAllowance(item.Journal, item.Deposited, characterId))
+                    throw new InvalidDataException("A visit deposit exceeds the received-item allowance.");
+                quantities = pickup ? item.Withdrawn : item.Deposited;
+            }
+            else if (pending.InventoryItemIndex is { } itemIndex)
             {
                 var previous = Run!.CompletedItems.Single(item => item.ItemIndex == itemIndex);
                 if (pickup || pending.Command.Operation.ItemId != previous.Definition.ItemId
@@ -504,11 +521,22 @@ public sealed partial class WorkflowService
             foreach (var pending in run.Pending.Where(x => x.Response == null).ToArray())
             {
                 // A trade is queried after interruption; ordinary commands are idempotent by command ID.
-                if (run.Step == CoordinatorStep.AwaitTrade || run.Preparation is { Recovering: true }) Query(pending);
+                if (run.Step == CoordinatorStep.AwaitTrade || run.Preparation is { Recovering: true } || run.Visit is { Recovering: true }) Query(pending);
                 else Dispatch(pending.PeerId, pending.Command);
             }
         }
         if (run.Paused) return;
+        if (!run.VisitMode && !run.PreserveLegacyItemOrder && !run.DiscoveryOnly && run.TotalItemCount > 1
+            && run.Step == CoordinatorStep.SelectLeg && run.Pending.Count == 0 && !run.TradeOperationId.HasValue)
+        {
+            UpgradeLegacyItemRun();
+            return;
+        }
+        if (run.VisitMode && run.VisitPlanningComplete)
+        {
+            AdvanceVisitWorkflow();
+            return;
+        }
         if (AdvanceAutomaticRelayPreparation()) return;
         if (run.Step == CoordinatorStep.DiscoverCache)
         {
@@ -579,8 +607,11 @@ public sealed partial class WorkflowService
                 return;
             }
             if (!PrepareAutomaticRelays()) return;
-            run.Journal = TransferJobLedger.Create(JobPlanner.Plan(DefinitionWithAutomaticRelays(), run.Snapshots.Values)).Journal;
+            run.Journal = TransferJobLedger.Create(run.VisitMode
+                ? JobPlanner.PlanForVisits(DefinitionWithAutomaticRelays(), run.Snapshots.Values)
+                : JobPlanner.Plan(DefinitionWithAutomaticRelays(), run.Snapshots.Values)).Journal;
             ChooseMeetingWorld(run.Journal.Plan);
+            if (run.VisitMode) { AdvanceVisitPlanning(); return; }
             SetStep(CoordinatorStep.SelectLeg);
             return;
         }

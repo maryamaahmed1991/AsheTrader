@@ -40,7 +40,7 @@ public sealed class MultiItemCoordinatorTests
         var second = Other(200, 7, true);
         second.QuantityMode = JobQuantityMode.RestockToTotal;
         var service = new WorkflowService(PeerA, PeerB, provider, recipient);
-        service.StartJob(Saved(Job([1], (2, 10)), second));
+        service.StartLegacyJob(Saved(Job([1], (2, 10)), second));
         service.RunToTerminal();
 
         Assert.False(service.Run!.Paused, service.LastError);
@@ -88,7 +88,7 @@ public sealed class MultiItemCoordinatorTests
         var provider = Sim(1, PeerA, 3, 17);
         provider.Inventory(200).Retainers[1001] = 6;
         var service = new WorkflowService(PeerA, PeerB, provider, Sim(2, PeerB));
-        service.StartJob(Saved(Job([1], (2, 10)), Other(200, 6)));
+        service.StartLegacyJob(Saved(Job([1], (2, 10)), Other(200, 6)));
         service.RunUntil(run => run.ActiveItemIndex == 1);
 
         Assert.Single(service.Run!.CompletedItems);
@@ -116,7 +116,7 @@ public sealed class MultiItemCoordinatorTests
         provider.Inventory(200).Retainers[1001] = 20;
         var service = new WorkflowService(PeerA, PeerB, provider, Sim(2, PeerB));
         service.SuppressInitialResponse = command => command.Operation.ItemId == 200 && command.Operation.Kind == GameOperationKind.Withdraw;
-        service.StartJob(Saved(Job([1], (2, 10)), Other(200, 6)));
+        service.StartLegacyJob(Saved(Job([1], (2, 10)), Other(200, 6)));
         service.RunUntil(run => run.ActiveItemIndex == 1 && run.Pending.Any(pending => pending.Command.Operation.Kind == GameOperationKind.Withdraw));
         var commandId = Assert.Single(service.Run!.Pending, pending => pending.Command.Operation.Kind == GameOperationKind.Withdraw).Command.Id;
         Assert.Equal(6U, provider.Inventory(200).Bags);
@@ -142,7 +142,7 @@ public sealed class MultiItemCoordinatorTests
         provider.Inventory(200, true).Bags = 6;
         var service = new WorkflowService(PeerA, PeerB, provider, Sim(2, PeerB));
         service.SuppressInitialResponse = command => command.Operation.ItemId == 200 && command.Kind == WorkerCommandKind.SendBatch;
-        service.StartJob(Saved(Job([1], (2, 10)), Other(200, 6, true)));
+        service.StartLegacyJob(Saved(Job([1], (2, 10)), Other(200, 6, true)));
         service.RunUntil(run => run.ActiveItemIndex == 1 && run.Step == CoordinatorStep.AwaitTrade && run.Pending.Any(command => command.Response == null));
         Assert.Equal(2, service.Trades.Count);
         var tradeId = service.Run!.TradeOperationId;
@@ -165,7 +165,7 @@ public sealed class MultiItemCoordinatorTests
         var provider = Sim(1, PeerA, 3);
         provider.Inventory(200).Bags = 6;
         var service = new WorkflowService(PeerA, PeerB, provider, Sim(2, PeerB));
-        service.StartJob(Saved(Job([1], (2, 10)), Other(200, 6)));
+        service.StartLegacyJob(Saved(Job([1], (2, 10)), Other(200, 6)));
         service.RunToTerminal();
 
         Assert.Equal(CoordinatorStep.Finished, service.Run!.Step);
@@ -186,7 +186,7 @@ public sealed class MultiItemCoordinatorTests
         provider.Inventory(200).Bags = 20;
         var recipient = Sim(2, PeerB, capacity: 15);
         var service = new WorkflowService(PeerA, PeerB, provider, recipient);
-        service.StartJob(Saved(Job([1], (2, 10)), Other(200, 20)));
+        service.StartLegacyJob(Saved(Job([1], (2, 10)), Other(200, 20)));
         service.RunToTerminal();
 
         Assert.False(service.Run!.Paused, service.LastError);
@@ -204,9 +204,9 @@ public sealed class MultiItemCoordinatorTests
     public void InvalidLaterItemAndDuplicateItemQualityFailBeforeAnyGameCommand()
     {
         var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 10), Sim(2, PeerB));
-        Assert.Throws<ArgumentException>(() => service.StartJob(Saved(Job([1], (2, 10)), Job([1], (2, 1)))));
+        Assert.Throws<ArgumentException>(() => service.StartLegacyJob(Saved(Job([1], (2, 10)), Job([1], (2, 1)))));
         var invalid = Other(200, 5); invalid.Sources = [0];
-        Assert.Throws<ArgumentException>(() => service.StartJob(Saved(Job([1], (2, 10)), invalid)));
+        Assert.Throws<ArgumentException>(() => service.StartLegacyJob(Saved(Job([1], (2, 10)), invalid)));
         Assert.Empty(service.Trace);
         Assert.Null(service.Run);
     }
@@ -216,7 +216,7 @@ public sealed class MultiItemCoordinatorTests
     {
         var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 10), Sim(2, PeerB));
         var later = Other(200, 5); later.Sources = [999];
-        service.StartJob(Saved(Job([1], (2, 10)), later));
+        service.StartLegacyJob(Saved(Job([1], (2, 10)), later));
         service.RunToTerminal();
 
         Assert.False(service.Run!.Paused, service.LastError);
@@ -242,7 +242,7 @@ public sealed class MultiItemCoordinatorTests
         var service = new WorkflowService(PeerA, PeerB, provider, recipient);
         if (interruption == "lost response")
             service.SuppressInitialResponse = command => command.Operation.ItemId == 10155 && command.Operation.Kind == GameOperationKind.Deposit;
-        service.StartJob(Saved(Job([1], (2, 10)), Other(200, 6)));
+        service.StartLegacyJob(Saved(Job([1], (2, 10)), Other(200, 6)));
         if (interruption != "none")
         {
             service.RunUntil(run => run.ActiveItemIndex == 1 && run.Pending.Any(pending => pending.Command.Operation.Kind == GameOperationKind.Deposit && pending.InventoryItemIndex == 0));
@@ -287,7 +287,7 @@ public sealed class MultiItemCoordinatorTests
             }
             return result;
         };
-        service.StartJob(Saved(Job([1], (2, 10)), Other(200, 6)));
+        service.StartLegacyJob(Saved(Job([1], (2, 10)), Other(200, 6)));
         service.RunToTerminal();
         Assert.True(service.Run!.Paused);
         Assert.Equal(4UL, service.Run.CompletedItems[0].Deposited[2]);
@@ -319,7 +319,7 @@ public sealed class MultiItemCoordinatorTests
             }
             return result;
         };
-        service.StartJob(Saved(Job([1], (2, 10)), Other(200, 6)));
+        service.StartLegacyJob(Saved(Job([1], (2, 10)), Other(200, 6)));
         service.RunToTerminal();
         var original = Assert.Single(service.Run!.Pending, pending => pending.Command.Operation.Kind == GameOperationKind.Deposit).Command.Id;
         for (var attempt = 0; attempt < 2; attempt++)
@@ -346,7 +346,7 @@ public sealed class MultiItemCoordinatorTests
         var second = Sim(2, PeerB, capacity: 10); second.Inventory(200).Retainers[1002] = 6;
         var next = Job([2], (1, 6)); next.ItemId = 200;
         var service = new WorkflowService(PeerA, PeerB, first, second);
-        service.StartJob(Saved(Job([1], (2, 10)), next));
+        service.StartLegacyJob(Saved(Job([1], (2, 10)), next));
         service.RunToTerminal();
 
         Assert.False(service.Run!.Paused, service.LastError);
@@ -365,7 +365,7 @@ public sealed class MultiItemCoordinatorTests
         var provider = Sim(1, PeerA, 5); provider.Inventory(200).Bags = 5;
         var recipient = Sim(2, PeerB, bags: 5, capacity: 10);
         var service = new WorkflowService(PeerA, PeerB, provider, recipient);
-        service.StartJob(Saved(Job([1], (2, 5)), Other(200, 5)));
+        service.StartLegacyJob(Saved(Job([1], (2, 5)), Other(200, 5)));
         service.RunToTerminal();
         Assert.False(service.Run!.Paused, service.LastError);
         Assert.Equal(5U, Assert.Single(service.Trace, command => command.Operation == GameOperationKind.Deposit).Quantity);
@@ -384,7 +384,7 @@ public sealed class MultiItemCoordinatorTests
         {
             SuppressInitialResponse = command => command.Operation.Kind == GameOperationKind.Withdraw
         };
-        service.StartJob(Saved(Job([1], (2, 10))));
+        service.StartLegacyJob(Saved(Job([1], (2, 10))));
         service.RunUntil(run => run.Pending.Any(pending => pending.Command.Operation.Kind == GameOperationKind.Withdraw));
         var originalPickup = Assert.Single(service.Run!.Pending, pending => pending.Command.Operation.Kind == GameOperationKind.Withdraw);
         var originalCommandId = originalPickup.Command.Id;

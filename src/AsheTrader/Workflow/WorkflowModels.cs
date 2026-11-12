@@ -41,6 +41,8 @@ public enum WorkerCommandKind { Game, PreviewBatch, ReceiveBatch, SendBatch }
 
 public sealed class WorkerCommand
 {
+    public List<TradeLine> TradeItems { get; set; } = [];
+    public bool ShouldSerializeTradeItems() => TradeItems.Count != 0;
     public Guid Id { get; set; }
     public Guid JobId { get; set; }
     public WorkerCommandKind Kind { get; set; }
@@ -50,6 +52,7 @@ public sealed class WorkerCommand
 
 public sealed class WorkerResponse
 {
+    public List<TradeItemObservation> TradeItems { get; set; } = [];
     public Guid CommandId { get; set; }
     public bool Success { get; set; }
     public bool Ready { get; set; }
@@ -67,6 +70,8 @@ public sealed class WorkerResponse
 
 public sealed class WorkerRecord
 {
+    public List<TradeItemObservation> TradeBaselines { get; set; } = [];
+    public List<TradeItemObservation> TradeTallyItems { get; set; } = [];
     public string Fingerprint { get; set; } = "";
     public WorkerCommand Command { get; set; } = new();
     public uint? BeforeQuantity { get; set; }
@@ -121,6 +126,15 @@ public sealed class TransferPreparation
 
 public sealed class CoordinatorRun
 {
+    // Legacy journals leave this false and finish through their original recovery path.
+    public bool VisitMode { get; set; }
+    public bool PreserveLegacyItemOrder { get; set; }
+    public bool VisitPlanningComplete { get; set; }
+    public Dictionary<int, VisitItemState> VisitItems { get; set; } = [];
+    public PreparedVisit? Visit { get; set; }
+    public VisitTradeBatch? VisitBatch { get; set; }
+    public ulong LastVisitSenderId { get; set; }
+    public ulong LastVisitReceiverId { get; set; }
     public bool DiscoveryOnly { get; set; }
     public SavedTransferJob Job { get; set; } = new();
     public int ActiveItemIndex { get; set; }
@@ -138,9 +152,12 @@ public sealed class CoordinatorRun
     [Newtonsoft.Json.JsonIgnore]
     public int TotalItemCount => 1 + Job.AdditionalItems.Count;
     [Newtonsoft.Json.JsonIgnore]
-    public bool HasShortages => Journal?.Plan.HasShortage == true || CompletedItems.Any(item => item.Journal?.Plan.HasShortage == true);
+    public bool HasShortages => Journal?.Plan.HasShortage == true || CompletedItems.Any(item => item.Journal?.Plan.HasShortage == true)
+        || VisitItems.Values.Any(item => item.Journal?.Plan.HasShortage == true);
     [Newtonsoft.Json.JsonIgnore]
-    public bool HasSkippedCharacters => SkippedCharacters.Count != 0 || CompletedItems.Any(item => item.SkippedCharacters.Count != 0);
+    public bool HasSkippedCharacters => SkippedCharacters.Count != 0 || ItemSkipReason.Length != 0
+        || CompletedItems.Any(item => item.SkippedCharacters.Count != 0 || item.ItemSkipReason.Length != 0)
+        || VisitItems.Values.Any(item => item.SkippedCharacters.Count != 0 || item.ItemSkipReason.Length != 0);
     public Dictionary<ulong, JobCharacterSnapshot> Snapshots { get; set; } = [];
     public List<ulong> DiscoveryOrder { get; set; } = [];
     public int DiscoveryIndex { get; set; }
@@ -200,7 +217,19 @@ public sealed record ManualResolution(Guid CommandId, bool Transferred, bool Sto
 
 public sealed record TradeTallyRequest(Guid CommandId, Guid RoundId);
 public sealed record TradeTallyReply(Guid CommandId, Guid RoundId, bool Ready, bool Retryable, WorkerResponse? Result, string Error = "");
-public sealed record AutomaticTradeResolution(Guid CommandId, Guid RoundId, bool Transferred, uint? ExpectedBefore, uint? ExpectedCurrent);
+public sealed record AutomaticTradeResolution(Guid CommandId, Guid RoundId, bool Transferred, uint? ExpectedBefore, uint? ExpectedCurrent)
+{
+    public List<TradeItemObservation> ExpectedItems { get; init; } = [];
+}
+
+public sealed class TradeItemObservation
+{
+    public uint ItemId { get; set; }
+    public bool HighQuality { get; set; }
+    public uint? BeforeQuantity { get; set; }
+    public uint? CurrentQuantity { get; set; }
+    public uint Quantity { get; set; }
+}
 public sealed record TradeResolutionReply(Guid CommandId, Guid RoundId, WorkerResponse? Result, string Error = "");
 
 public sealed class TradeRecoveryState

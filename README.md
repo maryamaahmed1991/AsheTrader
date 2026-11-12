@@ -6,11 +6,11 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 
 ## Features
 
-- Follow four guided steps: Connect PCs, Set up, Review & run, and Activity. The worker has its own connected-and-ready view; only the coordinator configures jobs.
+- Use a redesigned dark workspace with sidebar navigation, teal actions, gold headings, readable cards, searchable characters, responsive recipient editing and persistent stop controls. Only the coordinator configures jobs.
 - Pair one coordinator PC and one worker PC using an authenticated, encrypted LAN connection.
 - Find nearby coordinators by PC label without copying IP addresses. Hosting chooses a local network adapter automatically; manual connection remains available.
 - Import each PC's AutoRetainer roster and plan from Allagan Tools' cached character and retainer inventories.
-- Save multiple item lines in one job, each with providers, ordered recipients, quantities and quality, sharing one meeting point.
+- Assign an individual item list to each recipient: one alt can receive Coke and Fuel, another only Fuel, and a third Hardened Sap. Each item keeps its providers, recipient priority, quantity rule and quality.
 - Choose providers and relays using funded quantities, direct routes, home worlds and estimated relay loads. Only assigned providers, recipients and needed relays log in.
 - Fill relays across multiple providers before delivering, then drain the collected load before gathering again.
 - Prepare both PCs independently: login, retainer pickups/deposits and meeting travel overlap; trading waits for both characters to arrive.
@@ -23,6 +23,14 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 - Pace trade offers at a minimum of 250 ms, advancing on observed game readiness instead of stacked delays.
 - Persist worker results and coordinator progress. Resume tallies both PCs' current inventories and reconciles interrupted transfers automatically.
 - Preserve the local trade-list mode, workshop fuel purchasing, and Lifestream house import.
+
+## Version 0.4.0
+
+Multi-item jobs plan all item budgets first, then group work around character visits. A provider prepares the compatible items for its current recipient or relay before travelling. Trades combine exact item/quality lines within the game's five-slot limit and shared receiving inventory capacity. Each item retains its own journal, recipient priority and quantity target. Full relays collect and deliver across item types; final-delivery stock can be deposited to make room, while relay cargo stays carried.
+
+Interrupted mixed trades tally every item on both PCs before continuing. Existing saved jobs upgrade at an idle scheduling boundary after their pending operations are resolved, preserving allocations, completed deliveries and relay cargo. Both PCs must update to this build (protocol 6).
+
+Temporary vnavmesh loading now waits and continues automatically for both meeting-point and bell approaches. Actual route failures or a mesh that still has not loaded after five minutes remain visible pauses.
 
 ## Runtime requirements
 
@@ -48,7 +56,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.11.1.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.4.0.0.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
@@ -58,7 +66,7 @@ The plugin does not open a network listener or resume gameplay merely by loading
 
 ## Pair without entering an IP address
 
-Open **Transfers → 1. Connect PCs**. On the coordinator, choose **This PC controls transfers** and press **Host for my other PC**; an empty pairing key is generated automatically. The plugin selects an active home-network adapter, with an override under Advanced. On the worker, choose **This PC receives instructions**, enter the same key once, press **Find my coordinator**, and click **Connect to this PC** beside the coordinator's label. Enable **Allow the coordinator to run jobs on this PC**. Both PCs remember the key and authenticated peer identity, so later sessions need only Host, Find, and Connect. Update both PCs to the same build before pairing; version 0.3.0 exchanges the AutoRetainer slot metadata required for automatic relays and rejects older peers before exchanging commands.
+Open **Connection**. On the coordinator, choose **Coordinator · I create jobs here** and press **Host for my other PC**; an empty pairing key is generated automatically. The plugin selects an active home-network adapter, with an override under Advanced. On the worker, choose **Worker · follow my other PC**, enter the same key once, press **Find my coordinator**, and click **Connect to this PC** beside the coordinator's label. Enable **Allow the coordinator to run jobs on this PC**. Both PCs remember the key and authenticated peer identity, so later sessions need only Host, Find, and Connect. Update both PCs to the same build before pairing; version 0.3.0 exchanges the AutoRetainer slot metadata required for automatic relays and rejects older peers before exchanging commands.
 
 Discovery uses small UDP queries and replies on port 45875 within the local subnet. It shares the host's label, peer ID, and TCP port; no pairing key, inventory, or commands are sent over discovery. The existing authenticated, encrypted TCP connection still verifies the selected peer before exchanging rosters or running jobs. Results expire when a coordinator stops responding, and discovery never starts gameplay or resumes a paused job.
 
@@ -66,19 +74,19 @@ If no coordinator appears, check that both PCs use the same home network and the
 
 ## Job setup
 
-Under **Transfers**, connect the PCs and refresh both character lists, then create a job in **2. Set up** on the coordinator. Each character must belong to only one PC's roster. Account labels are descriptive; peer identity and character content ID determine execution ownership. New jobs default to an additional delivery amount, with ten items for each new recipient; existing saved job quantities are preserved.
+On **Connection**, connect the PCs and refresh both character lists, then create a job in **Jobs** on the coordinator. Each character must belong to only one PC's roster. Account labels are descriptive; peer identity and character content ID determine execution ownership. New jobs default to an additional delivery amount, with ten items for each new recipient; existing saved job quantities are preserved.
 
-**3. Review & run** summarizes the intended transfer and explains missing setup. **Check inventories only** reads each PC's Allagan Tools cache without changing characters, traveling or opening retainers. Missing inventory or retainer ownership data skips the character and records the reason and owning PC. The meeting point is needed for transfers, not cache lookup. **4. Activity** labels cached estimates and live observations separately and keeps verified pickups, deposits and final deliveries separate.
+**Review & run** summarizes the intended transfer and explains missing setup. **Check cached inventories only** reads each PC's Allagan Tools cache without changing characters, traveling or opening retainers. Missing inventory or retainer ownership data skips the character and records the reason and owning PC. The meeting point is needed for transfers, not cache lookup. **Activity** labels cached estimates and live observations separately and keeps verified pickups, deposits and final deliveries separate.
 
-Add each requested item under the same saved job. Each item line has its own providers, ordered recipients and quantity mode. Lines run in order, with a new cache lookup and separate delivery accounting for each. The same item and quality may appear once per job; combine its recipient rules on that line. Existing single-item jobs remain usable.
+Select a character under **Jobs**, search for an item and add it to that character, then set its amount. Repeat for other recipients. Adding Fuel to a second recipient reuses the canonical Fuel definition without assigning that recipient every other item. New items inherit the first item's provider list; choose or adjust providers in the provider card. Quantity mode is shared by all recipients of an item and is labeled explicitly. Items share visits, while their budgets and priority rules remain separate. The Review page lists only the actual recipient/item assignments.
 
 Recipients are ordered within each item. A finite amount means additional delivery in Move all/Deliver amount modes and final stock in Restock to total mode. Only the final recipient may take an unlimited remainder, and Restock to total requires explicit finite targets. A shortage on one item is recorded while the remaining items continue. An interrupted operation pauses the job before moving to another item. If an earlier line's received items fill the current provider or recipient's bags, the job can store those received items in retainers to make room; that movement stays charged to the earlier item and never changes its delivered total.
 
 Provider selection prefers direct cross-account routes, matching home worlds, reuse of already assigned providers, then larger available quantities. Recipient priority is preserved. Zero-stock providers, unused providers and recipients with no funded allocation do not log in. Relays are chosen only for funded same-account routes: estimated loads from cached free slots come first, then home-world locality and capacity. Only the selected relay is inspected. Unexpected fullness pauses with its name instead of logging through other alts. Known zero-slot candidates may still have mergeable stacks; unknown counts are not treated as verified zero.
 
-The relay collects from multiple providers for the current priority recipient until full or until those providers have contributed their assigned quantities. It then travels to the final recipient's home world and drains the collected load there before collecting more. The recipient can make repeated retainer deposits without world/DC travel, while the relay waits. Relay cargo is never sent to its retainers to make space. Each source allocation retains its own trade accounting, even when cargo shares a physical stack; final delivery may therefore use several trade batches without switching characters. Item lines still run sequentially. Allocations and relay identities remain fixed for recovery; each active travel/trade leg has one pinned meeting destination. A full relay with cargo delivers it; a full relay without cargo pauses for space.
+The relay collects from multiple providers for the current priority recipient until full or until those providers have contributed their assigned quantities. It then travels to the final recipient's home world and drains the collected load there before collecting more. The recipient can make repeated retainer deposits without world/DC travel, while the relay waits. Relay cargo is never sent to its retainers to make space. Each source allocation retains its own trade accounting, even when cargo shares a physical stack; final delivery may therefore use several trade batches without switching characters. Compatible item lines share visits and trade windows. Allocations and relay identities remain fixed for recovery; each active travel/trade leg has one pinned meeting destination. A full relay with cargo delivers it; a full relay without cargo pauses for space.
 
-The saved meeting point is a reusable territory, position and arrival aetheryte; its captured world does not constrain travel. For provider pickups, recipients and relays visit provider home worlds so providers can refill from retainers locally. The funded itinerary groups each collector's providers by DC, then world, beginning in the collector's observed DC where possible. Activity shows the itinerary and active meeting world. Recipient priority and item order remain strict; a full relay's delivery detour, storage trips or later recipients/items can require DC revisits. This is a practical grouping policy, not a global travel optimum. Lifestream must permit the necessary DC travel and the game's destination restrictions still apply. Existing journals adopt the itinerary at a safe scheduling boundary after pending outcomes are reconciled, retaining all allocations and delivered counts.
+The saved meeting point is a reusable territory, position and arrival aetheryte; its captured world does not constrain travel. For provider pickups, recipients and relays visit provider home worlds so providers can refill from retainers locally. The funded itinerary groups each collector's providers by DC, then world, beginning in the collector's observed DC where possible. Activity shows the itinerary and active meeting world. Recipient priority within each item remains strict; a full relay's delivery detour, storage trips or later recipients/items can require DC revisits. This is a practical grouping policy, not a global travel optimum. Lifestream must permit the necessary DC travel and the game's destination restrictions still apply. Existing journals adopt the itinerary at a safe scheduling boundary after pending outcomes are reconciled, retaining all allocations and delivered counts.
 
 Capture the rendezvous while standing at an accessible outdoor point. Verify the aetheryte belongs to that territory. Capture a custom storage bell only on that character's home world; leaving it unset uses an inn. Retainer allowlists govern destination deposits; an empty allowlist means all available retainers.
 

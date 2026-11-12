@@ -5,6 +5,8 @@ internal static class TradeReconciliationEvidence
 {
     public static WorkerResponse Capture(WorkerCommand command, WorkerResponse? previous, uint before, uint current)
     {
+        if (MultiItemTradeEvidence.IsVector(command))
+            throw new InvalidOperationException("A multi-item trade requires a starting and current tally for every item.");
         if (command.Kind is not (WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch))
             throw new ArgumentException("Inventory reconciliation evidence requires a trade command.", nameof(command));
         if (previous != null && previous.CommandId != command.Id)
@@ -26,6 +28,7 @@ internal static class TradeReconciliationEvidence
 
     public static TradeTallyOutcome Classify(WorkerCommand command, WorkerResponse response)
     {
+        if (MultiItemTradeEvidence.IsVector(command)) return MultiItemTradeEvidence.Classify(command, response);
         if (response.CommandId != command.Id || command.Operation.Quantity == 0) return TradeTallyOutcome.Conflicting;
         if (!response.Ambiguous && response.Success)
             return response.Quantity == command.Operation.Quantity ? TradeTallyOutcome.Transferred : TradeTallyOutcome.Conflicting;
@@ -42,6 +45,8 @@ internal static class TradeReconciliationEvidence
 
     public static WorkerResponse Settle(WorkerRecord record, AutomaticTradeResolution resolution, uint current)
     {
+        if (MultiItemTradeEvidence.IsVector(record.Command))
+            throw new InvalidOperationException("A multi-item trade cannot be settled from one item's count.");
         var previous = record.Response;
         if (record.Command.Id != resolution.CommandId) throw new InvalidOperationException("The reconciliation command does not match its saved worker record.");
         if (previous is { Success: true } or { AutoReconciled: true } or { OperatorReviewed: true } or { NeverStarted: true })

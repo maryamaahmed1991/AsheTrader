@@ -319,6 +319,9 @@ public sealed partial class WorkflowService : IDisposable
             || command.Operation.CharacterId == 0
             || command.Operation.Kind == GameOperationKind.ReadCachedInventory && command.Kind != WorkerCommandKind.Game)
             throw new InvalidDataException("Invalid worker command.");
+        if (command.Kind == WorkerCommandKind.Game && MultiItemTradeEvidence.IsVector(command))
+            throw new InvalidDataException("Native storage/travel commands cannot contain a trade item batch.");
+        if (command.Kind != WorkerCommandKind.Game) _ = MultiItemTradeEvidence.Lines(command);
         var fingerprint = JsonConvert.SerializeObject(command);
         if (workerRecords.TryGetValue(command.Id, out var previous))
         {
@@ -341,8 +344,7 @@ public sealed partial class WorkflowService : IDisposable
         command = Clone(command);
         command.Operation.CharacterName = character.Name;
         command.Operation.World = character.World;
-        if (command.Operation.ItemId == 0 || command.Operation.ItemId == 1) throw new InvalidOperationException("Select a tradable inventory item.");
-        if (command.Kind != WorkerCommandKind.Game && command.Operation.Quantity == 0) throw new InvalidOperationException("Empty trade batch.");
+        if (!MultiItemTradeEvidence.IsVector(command) && command.Operation.ItemId <= 1) throw new InvalidOperationException("Select a tradable inventory item.");
         var ar = plugin.AutoRetainer.GetStatus();
         if (command.Operation.Kind != GameOperationKind.ReadCachedInventory && ar.Ready && (ar.Busy != false || ar.MultiModeEnabled != false))
         { Reply(caller, new() { CommandId = command.Id, Error = "AutoRetainer must be idle with multi-mode paused." }); return; }
@@ -374,19 +376,33 @@ public sealed partial class WorkflowService : IDisposable
                 return;
             }
             if (Plugin.PlayerState.ContentId != character.ContentId) throw new InvalidOperationException("The wrong local character is logged in.");
-            var line = new TradeLine { ItemId = command.Operation.ItemId, HighQuality = command.Operation.HighQuality, Quantity = command.Operation.Quantity };
+            var lines = MultiItemTradeEvidence.Lines(command);
             if (command.Kind == WorkerCommandKind.PreviewBatch)
             {
-                var preview = plugin.Trader.PreviewBatch(line);
+                var preview = plugin.Trader.PreviewBatch(lines);
                 if (preview.HasShortage || !preview.HasItems) throw new InvalidOperationException("Source stock changed; this batch cannot be prepared.");
-                CompleteWorker(new() { CommandId = command.Id, Success = true, Quantity = checked((uint)preview.TotalQuantity) });
+                var response = new WorkerResponse { CommandId = command.Id, Success = true, Quantity = checked((uint)preview.TotalQuantity) };
+                if (MultiItemTradeEvidence.IsVector(command))
+                    response.TradeItems = preview.Entries.GroupBy(entry => entry.Key).Select(group => new TradeItemObservation
+                    {
+                        ItemId = group.Key.ItemId, HighQuality = group.Key.HighQuality,
+                        Quantity = checked((uint)group.Aggregate(0UL, (sum, entry) => sum + entry.Quantity)),
+                    }).ToList();
+                CompleteWorker(response);
                 return;
             }
+            if (lines.Count > TradePlanner.MaxItemSlots) throw new InvalidOperationException("An agreed trade can contain at most five distinct item/quality lines.");
             var target = FindPartner(command.Partner ?? throw new InvalidDataException("Trade partner missing."));
-            activeWorker.BeforeQuantity = ReadQuantity(line.ItemId, line.HighQuality);
+            var startingCounts = ReadBatchItemCounts(command);
+            activeWorker.TradeBaselines = lines.Select(line => new TradeItemObservation
+            {
+                ItemId = line.ItemId, HighQuality = line.HighQuality,
+                BeforeQuantity = startingCounts[new(line.ItemId, line.HighQuality)], Quantity = line.Quantity,
+            }).ToList();
+            activeWorker.BeforeQuantity = lines.Count == 1 ? activeWorker.TradeBaselines[0].BeforeQuantity : null;
             SaveWorkers();
-            if (command.Kind == WorkerCommandKind.ReceiveBatch) plugin.Trader.ReceiveBatch(line, target);
-            else plugin.Trader.SendBatch(line, target);
+            if (command.Kind == WorkerCommandKind.ReceiveBatch) plugin.Trader.ReceiveBatch(lines, target);
+            else plugin.Trader.SendBatch(lines, target);
             activeWorker.TradeStarted = true;
             SaveWorkers();
         }
@@ -410,8 +426,7 @@ public sealed partial class WorkflowService : IDisposable
             Reply(activeReplyPeer, new() { CommandId = activeWorker.Command.Id, Ready = true });
         }
         if (plugin.Trader.IsRunning) return;
-        CompleteWorker(new() { CommandId = activeWorker.Command.Id, Success = plugin.Trader.Succeeded,
-            Ambiguous = !plugin.Trader.Succeeded, Quantity = plugin.Trader.VerifiedQuantity, Error = plugin.Trader.Succeeded ? "" : plugin.Trader.Status });
+        CompleteWorker(CompletedBatchResponse(activeWorker));
     }
 
     private void CompleteWorker(WorkerResponse response)
@@ -444,6 +459,12 @@ public sealed partial class WorkflowService : IDisposable
         {
             var notStarted = new WorkerResponse { CommandId = id, NeverStarted = true, Unchanged = true, Error = "No trade action was started for this operation." };
             record.Response = notStarted; SaveWorkers(); Reply(caller, notStarted); return;
+        }
+        if (record.Command.Kind is WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch
+            && MultiItemTradeEvidence.IsVector(record.Command) && Plugin.PlayerState.ContentId == record.Command.Operation.CharacterId)
+        {
+            var outcome = MultiItemTradeEvidence.Capture(record.Command, record.Response, record.TradeBaselines, ReadBatchItemCounts(record.Command));
+            record.Response = outcome; SaveWorkers(); Reply(caller, outcome); return;
         }
         // Inventory deltas after interruption are evidence for the operator, not proof that a trade succeeded.
         if (record.Command.Kind is WorkerCommandKind.ReceiveBatch or WorkerCommandKind.SendBatch
@@ -508,6 +529,7 @@ public sealed partial class WorkflowService : IDisposable
             else if (TradeTallyReadiness(record) is { } waiting)
             {
                 tradeTallySamples.Remove(request.CommandId);
+                batchTallySamples.Remove(request.CommandId);
                 reply = new(request.CommandId, request.RoundId, false, true, null, waiting);
             }
             else if (!record.TradeStarted)
@@ -516,6 +538,8 @@ public sealed partial class WorkflowService : IDisposable
                 SaveWorkers();
                 reply = new(request.CommandId, request.RoundId, true, false, Clone(record.Response));
             }
+            else if (MultiItemTradeEvidence.IsVector(record.Command))
+                reply = CaptureBatchTally(record, request);
             else if (record.BeforeQuantity is not { } before)
                 throw new InvalidOperationException("This older trade has no saved starting inventory count. Its outcome cannot be tallied automatically; preserve diagnostics and the current bags.");
             else
@@ -555,9 +579,14 @@ public sealed partial class WorkflowService : IDisposable
                 throw new InvalidOperationException("The trade worker record is unavailable during automatic reconciliation.");
             var settled = record.Response is { Success: true } or { AutoReconciled: true } or { OperatorReviewed: true } or { NeverStarted: true };
             if (!settled && TradeTallyReadiness(record) is { } waiting) throw new InvalidOperationException(waiting);
-            var current = settled ? record.Response!.CurrentQuantity.GetValueOrDefault()
-                : ReadQuantity(record.Command.Operation.ItemId, record.Command.Operation.HighQuality);
-            record.Response = TradeReconciliationEvidence.Settle(record, resolution, current);
+            if (MultiItemTradeEvidence.IsVector(record.Command))
+                record.Response = MultiItemTradeEvidence.Settle(record, resolution, settled ? new Dictionary<ItemKey, uint>() : ReadBatchItemCounts(record.Command));
+            else
+            {
+                var current = settled ? record.Response!.CurrentQuantity.GetValueOrDefault()
+                    : ReadQuantity(record.Command.Operation.ItemId, record.Command.Operation.HighQuality);
+                record.Response = TradeReconciliationEvidence.Settle(record, resolution, current);
+            }
             SaveWorkers();
             error = "";
             RecordDiagnostic($"Automatic trade outcome saved; command={resolution.CommandId}; round={resolution.RoundId}; transferred={resolution.Transferred}; quantity={record.Response.Quantity}");
@@ -621,6 +650,8 @@ public sealed partial class WorkflowService : IDisposable
             || !record.BeforeQuantity.HasValue || Plugin.PlayerState.ContentId != record.Command.Operation.CharacterId)
             throw new InvalidOperationException("Log in the original trade character before reconciliation.");
         if (record.Response is { Success: true }) { Reply(caller, record.Response); return; }
+        if (MultiItemTradeEvidence.IsVector(record.Command))
+            throw new InvalidOperationException("Use the automatic paired item tally to reconcile this multi-item trade.");
         var current = ReadQuantity(record.Command.Operation.ItemId, record.Command.Operation.HighQuality);
         var before = record.BeforeQuantity.Value;
         var wanted = record.Command.Operation.Quantity;
