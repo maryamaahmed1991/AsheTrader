@@ -121,7 +121,7 @@ Run these as separate, supervised tests. Each one checks a different behavior:
 
 Only after those pass, test interruption while a trade or storage movement is pending, and then between completed item lines. Missing or conflicting evidence should pause for reconciliation. Saved completed results should recover without repeating the movement or rerunning a completed item. Never confirm a reconciliation choice merely to dismiss an error.
 
-For an uncertain retainer pickup or deposit, inspect the original character's bags and retainers. Preserve the journals and report the stop. Do not repeatedly resume an uncertain storage movement. When the plugin permits ending the paused job, create a new, freshly scanned job for the remaining quantities.
+For an uncertain retainer pickup or deposit, inspect the original character's bags and retainers. Preserve the journals and report the stop. Do not repeatedly resume an uncertain storage movement. Use the recorded-count review described above only when its confirmation is true and the current bag count matches. Other uncertain outcomes remain paused for investigation; do not clear a journal that still tracks relay cargo.
 
 ## What to send back
 
