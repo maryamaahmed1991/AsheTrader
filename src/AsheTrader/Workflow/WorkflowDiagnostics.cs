@@ -44,7 +44,7 @@ public sealed partial class WorkflowService
         executor.CaptureDiagnosticSnapshot("User requested diagnostic report");
         plugin.Trader.CaptureDiagnosticSnapshot("User requested diagnostic report");
         var header = new WorkflowTrace(40, 2000);
-        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 4; timestamps UTC; this PC only");
+        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 5; timestamps UTC; this PC only");
         header.Add("Session", $"Role={(IsHost ? "coordinator" : "worker")}; connected={Connected}; paired={HasAcceptedConnection}; remoteControl={Settings.AllowRemoteControl}; journalHealthy={journalHealthy}");
         header.Add("Game", $"loggedIn={Plugin.ClientState.IsLoggedIn}; characterId={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; language={Plugin.ClientState.ClientLanguage}");
         header.Add("Status", Status);
@@ -52,6 +52,12 @@ public sealed partial class WorkflowService
         {
             header.Add("Coordinator", $"job={run.Job.Definition.Id}; step={run.Step}; paused={run.Paused}; itemIndex={run.ActiveItemIndex}; discoveryIndex={run.DiscoveryIndex}/{run.DiscoveryOrder.Count}; pending={run.Pending.Count}");
             header.Add("Routing", $"meetingWorld={run.EffectiveMeeting?.WorldId ?? 0}; DC={run.MeetingDataCenterName}; pinned={run.MeetingPinned}; collectionStops={run.CollectionRoute?.Count ?? 0}; reason={run.MeetingReason}; relayDelivering={run.RelayFlushCharacterId?.ToString() ?? "none"}");
+            if (run.Preparation is { } preparation)
+            {
+                header.Add("Preparation", $"recovering={preparation.Recovering}; replanRequested={preparation.ReplanRequested}");
+                foreach (var participant in new[] { preparation.Sender, preparation.Receiver })
+                    header.Add("Participant", $"character={participant.CharacterId}; peer={participant.PeerId}; stage={participant.Stage}; storageQuantity={participant.StorageQuantity}; storageItemIndex={participant.InventoryItemIndex?.ToString() ?? "active"}");
+            }
             if (run.TradeRecovery is { } recovery)
                 header.Add("AutomaticTally", $"round={recovery.RoundId}; transferred={recovery.Transferred?.ToString() ?? "undecided"}; tallies={recovery.Tallies.Count}; durableAcknowledgements={recovery.Acknowledgements.Count}; consecutiveEmptyTrades={run.ConsecutiveEmptyTrades}");
             foreach (var pending in run.Pending.Take(4))

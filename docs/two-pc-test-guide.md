@@ -1,12 +1,20 @@
 # Two-PC testing: start here
 
-Test build: **0.3.10.1**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol is now 5, so older peers must also update.
+Test build: **0.3.11.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 5.
+
+## Test parallel preparation and post-login travel
+
+Reconnect and use **Resume / tally inventories** on the existing paused job. For the reported teleport failure, the next preparation should wait until the character can teleport, then proceed without another Resume. Inn cutscenes must play to completion. If a character cannot reach the configured aetheryte, Activity should explain the specific readiness/unlock/teleport failure; capture diagnostics from that PC before reloading.
+
+Watch a provider whose items are on retainers. Its recipient or relay should start its own login/travel while that provider is still preparing. Activity shows a separate action for each PC. The first character to arrive waits; no trade opens until both are at the same meeting point. Each PC's own retainer and travel actions remain sequential.
+
+Then watch a full recipient deposit: the sender should be able to travel while the recipient is storing items. Pause during overlapping preparation and Resume once both PCs have stopped. Completed storage is counted once, interrupted movement is tallied, and both PCs prepare again before trading. Confirm final quantities and that no extra characters log in. If either side stalls, copy diagnostics from **both** PCs.
 
 ## Test faster trades and automatic recovery
 
 Version 0.3.10.1 fixes the idle-state check that left Resume waiting for a trade window that was already closed. Update both PCs, keep the original characters logged in, reconnect and press **Resume / tally inventories**. The tally should advance automatically and a subsequent trade should send its opening request. Existing settings, pairing and saved progress are retained. If it still waits, Copy diagnostics now includes the raw native state even after a plugin reload.
 
-Update both PCs to 0.3.10.1 and keep the existing settings, pairing key and journals. Reconnect the same coordinator and worker. With the original trade characters logged in, press **Resume / tally inventories**. There are no outcome-confirmation checkboxes. The plugin compares both PCs' current counts, credits a matching completed batch once or retries when both sides show no movement, and continues the remaining job. If counts conflict, Activity explains the discrepancy.
+Update both PCs to 0.3.11.0 and keep the existing settings, pairing key and journals. Reconnect the same coordinator and worker. With the original trade characters logged in, press **Resume / tally inventories**. There are no outcome-confirmation checkboxes. The plugin compares both PCs' current counts, credits a matching completed batch once or retries when both sides show no movement, and continues the remaining job. If counts conflict, Activity explains the discrepancy.
 
 For a small speed test, send five stacks of an inexpensive item, including a partial stack. Offers should follow the game responses with at least 250 ms between item callbacks, without the old pauses after each quantity and filled slot. Verify the exact total on both PCs. Actual speed depends on game/server response time.
 

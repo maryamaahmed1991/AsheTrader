@@ -96,7 +96,27 @@ public enum CoordinatorStep
     InspectSender, Withdraw, InspectReceiver, Deposit, TravelSender, TravelReceiver,
     PreviewBatch, ArmReceiver, SendBatch, AwaitTrade, Finished,
     // Append new states so existing numeric journal states keep their meaning.
-    RelayLogin, RelayInspect, DepositPreviousItem, DiscoverCache
+    RelayLogin, RelayInspect, DepositPreviousItem, DiscoverCache, PrepareParticipants
+}
+
+public enum ParticipantPreparationStage { Login, Inspect, Withdraw, Deposit, Travel, Ready }
+
+/// <summary>One sequential stream of native operations on one PC.</summary>
+public sealed class ParticipantPreparation
+{
+    public ulong CharacterId { get; set; }
+    public Guid PeerId { get; set; }
+    public ParticipantPreparationStage Stage { get; set; }
+    public uint StorageQuantity { get; set; }
+    public int? InventoryItemIndex { get; set; }
+}
+
+public sealed class TransferPreparation
+{
+    public ParticipantPreparation Sender { get; set; } = new();
+    public ParticipantPreparation Receiver { get; set; } = new();
+    public bool Recovering { get; set; }
+    public bool ReplanRequested { get; set; }
 }
 
 public sealed class CoordinatorRun
@@ -149,6 +169,7 @@ public sealed class CoordinatorRun
     public Dictionary<ulong, ulong> Withdrawn { get; set; } = [];
     public Dictionary<ulong, ulong> Deposited { get; set; } = [];
     public Guid? TradeOperationId { get; set; }
+    public TransferPreparation? Preparation { get; set; }
     public TradeRecoveryState? TradeRecovery { get; set; }
     public int ConsecutiveEmptyTrades { get; set; }
     public List<PendingCommand> Pending { get; set; } = [];

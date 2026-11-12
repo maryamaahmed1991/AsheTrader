@@ -97,7 +97,8 @@ public sealed class MobileRouteCoordinatorTests
         var service = Service(Sim(1, PeerA, 11, 100), Sim(4, PeerB, 31));
         service.SuppressInitialResponse = command => command.Operation.Kind == GameOperationKind.TravelMeeting && command.Operation.CharacterId == 1;
         service.StartJob(Saved(Job([1], (4, 100))));
-        service.RunUntil(run => run.Step == CoordinatorStep.TravelSender && run.Pending.Count == 1);
+        service.RunUntil(run => run.Pending.Any(pending => pending.Command.Operation.Kind == GameOperationKind.TravelMeeting
+            && pending.Command.Operation.CharacterId == 1 && pending.Response == null));
         Assert.Equal(11U, service.Run!.EffectiveMeeting!.WorldId);
         var route = JsonConvert.SerializeObject(service.Run.CollectionRoute);
         service.SimulateCoordinatorRestart(); service.Resume();

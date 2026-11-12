@@ -106,6 +106,11 @@ public sealed partial class WorkflowService
             throw new InvalidOperationException("Wait for the local operation to stop before resuming.");
         if (Run is not { Paused: true, Step: not CoordinatorStep.Finished }) return;
         error = "";
+        if (Run.Step == CoordinatorStep.PrepareParticipants)
+        {
+            ResumePreparation();
+            return;
+        }
         if (Run.Journal == null)
         {
             // Pre-plan selections have not carried cargo and may be re-ranked after a pause.
@@ -186,11 +191,15 @@ public sealed partial class WorkflowService
     {
         if (Run is not { Paused: true }) return;
         if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning) throw new InvalidOperationException("Wait until local work stops.");
+        if (Run.Preparation != null && Run.Pending.Any(pending => pending.Response == null))
+            RefuseToEndPausedJob("Use Resume / tally inventories to finish stopping and recovering both PCs before ending the job.");
         var unresolvedStorage = Run.Pending.FirstOrDefault(pending => StorageReconciliation.IsStorage(pending.Command)
             && pending.Response?.NeverStarted != true && !StorageReconciliation.IsReviewed(pending.Response)
             && (pending.Response?.Observation == null || pending.Response.Ambiguous));
         if (unresolvedStorage != null)
             RefuseToEndPausedJob("Use Resume / tally inventories to resolve the interrupted retainer movement first, then let the job deliver any remaining relay cargo before ending it. The saved movement and its confirmed progress are preserved.");
+        foreach (var pending in Run.Pending.Where(pending => StorageReconciliation.IsStorage(pending.Command)))
+            AccountStorageMovement(pending, pending.Command.Operation.CharacterId);
         if (Run.Journal != null)
         {
             var ledger = new TransferJobLedger(Run.Journal);
@@ -255,11 +264,13 @@ public sealed partial class WorkflowService
 
     private void Issue(Guid peerId, WorkerCommand command, bool marksTrade = false, int? inventoryItemIndex = null)
     {
+        var awaitingOtherResult = Run!.Pending.Any(pending => pending.Response == null);
         Run!.Pending.Add(new() { PeerId = peerId, Command = command, InventoryItemIndex = inventoryItemIndex });
         if (marksTrade) new TransferJobLedger(Run.Journal!).MarkIssued(Run.TradeOperationId!.Value);
         SaveRun();
         Dispatch(peerId, command);
-        resendAt = Environment.TickCount64 + 5000;
+        var nextQuery = Environment.TickCount64 + 5000;
+        resendAt = awaitingOtherResult ? Math.Min(resendAt, nextQuery) : nextQuery;
     }
 
     private void Dispatch(Guid peerId, WorkerCommand command)
@@ -459,6 +470,7 @@ public sealed partial class WorkflowService
             CoordinatorStep.RelayLogin => "Logging into the automatic relay candidate…",
             CoordinatorStep.RelayInspect => "Checking the automatic relay's live inventory capacity…",
             CoordinatorStep.TravelSender or CoordinatorStep.TravelReceiver => "Bringing both characters to the meeting point…",
+            CoordinatorStep.PrepareParticipants => "Preparing both characters in parallel…",
             CoordinatorStep.AwaitTrade => "Waiting for both clients to verify the agreed trade…",
             _ => $"Transfer job: {step}"
         };
@@ -489,7 +501,7 @@ public sealed partial class WorkflowService
             foreach (var pending in run.Pending.Where(x => x.Response == null).ToArray())
             {
                 // A trade is queried after interruption; ordinary commands are idempotent by command ID.
-                if (run.Step == CoordinatorStep.AwaitTrade) Query(pending);
+                if (run.Step == CoordinatorStep.AwaitTrade || run.Preparation is { Recovering: true }) Query(pending);
                 else Dispatch(pending.PeerId, pending.Command);
             }
         }
@@ -546,13 +558,14 @@ public sealed partial class WorkflowService
         var ledger = new TransferJobLedger(run.Journal ?? throw new InvalidDataException("Job plan is missing."));
         if (run.Step == CoordinatorStep.SelectLeg)
         {
-            if (SelectNextTransferLeg(ledger)) { SetStep(CoordinatorStep.LoginSender); return; }
+            if (SelectNextTransferLeg(ledger)) { BeginPreparation(); return; }
             CompleteItem(); return;
         }
         var assignment = run.Journal.Plan.Allocations.Single(x => x.Id == run.AllocationId);
         var leg = assignment.Legs[run.LegIndex];
         switch (run.Step)
         {
+            case CoordinatorStep.PrepareParticipants: AdvancePreparation(ledger, assignment, leg); break;
             case CoordinatorStep.LoginSender: Perform(leg.SenderId, GameOperationKind.Login, CoordinatorStep.LoginReceiver); break;
             case CoordinatorStep.LoginReceiver: Perform(leg.ReceiverId, GameOperationKind.Login, CoordinatorStep.InspectSender); break;
             case CoordinatorStep.InspectSender:

@@ -117,13 +117,14 @@ public sealed class MultiItemCoordinatorTests
         var service = new WorkflowService(PeerA, PeerB, provider, Sim(2, PeerB));
         service.SuppressInitialResponse = command => command.Operation.ItemId == 200 && command.Operation.Kind == GameOperationKind.Withdraw;
         service.StartJob(Saved(Job([1], (2, 10)), Other(200, 6)));
-        service.RunUntil(run => run.ActiveItemIndex == 1 && run.Step == CoordinatorStep.Withdraw && run.Pending.Count == 1);
-        var commandId = Assert.Single(service.Run!.Pending).Command.Id;
+        service.RunUntil(run => run.ActiveItemIndex == 1 && run.Pending.Any(pending => pending.Command.Operation.Kind == GameOperationKind.Withdraw));
+        var commandId = Assert.Single(service.Run!.Pending, pending => pending.Command.Operation.Kind == GameOperationKind.Withdraw).Command.Id;
         Assert.Equal(6U, provider.Inventory(200).Bags);
         service.SimulateCoordinatorRestart();
         service.Resume();
-        Assert.Equal(commandId, Assert.Single(service.Run.Pending).Command.Id);
-        Assert.Equal(200U, service.Run.Pending[0].Command.Operation.ItemId);
+        var recoveredPickup = Assert.Single(service.Run.Pending, pending => pending.Command.Operation.Kind == GameOperationKind.Withdraw);
+        Assert.Equal(commandId, recoveredPickup.Command.Id);
+        Assert.Equal(200U, recoveredPickup.Command.Operation.ItemId);
         service.SuppressInitialResponse = null;
         service.RunToTerminal();
 
@@ -224,15 +225,16 @@ public sealed class MultiItemCoordinatorTests
         service.StartJob(Saved(Job([1], (2, 10)), Other(200, 6)));
         if (interruption != "none")
         {
-            service.RunUntil(run => run.ActiveItemIndex == 1 && run.Step == CoordinatorStep.DepositPreviousItem && run.Pending.Count == 1);
-            var pending = Assert.Single(service.Run!.Pending);
+            service.RunUntil(run => run.ActiveItemIndex == 1 && run.Pending.Any(pending => pending.Command.Operation.Kind == GameOperationKind.Deposit && pending.InventoryItemIndex == 0));
+            var pending = Assert.Single(service.Run!.Pending, candidate => candidate.Command.Operation.Kind == GameOperationKind.Deposit && candidate.InventoryItemIndex == 0);
             Assert.Equal(0, pending.InventoryItemIndex);
             Assert.Equal(10155U, pending.Command.Operation.ItemId);
             Assert.Equal(10U, recipient.RetainerTotal);
             Assert.Equal(0UL, service.Run.CompletedItems[0].Deposited.GetValueOrDefault(2UL));
             service.SimulateCoordinatorRestart();
             service.Resume();
-            if (interruption == "lost response") Assert.Equal(pending.Command.Id, Assert.Single(service.Run.Pending).Command.Id);
+            if (interruption == "lost response") Assert.Equal(pending.Command.Id,
+                Assert.Single(service.Run.Pending, candidate => candidate.Command.Operation.Kind == GameOperationKind.Deposit).Command.Id);
             service.SuppressInitialResponse = null;
         }
         service.RunToTerminal();
@@ -299,7 +301,7 @@ public sealed class MultiItemCoordinatorTests
         };
         service.StartJob(Saved(Job([1], (2, 10)), Other(200, 6)));
         service.RunToTerminal();
-        var original = Assert.Single(service.Run!.Pending).Command.Id;
+        var original = Assert.Single(service.Run!.Pending, pending => pending.Command.Operation.Kind == GameOperationKind.Deposit).Command.Id;
         for (var attempt = 0; attempt < 2; attempt++)
         {
             Assert.True(service.Run.Paused);
@@ -310,7 +312,7 @@ public sealed class MultiItemCoordinatorTests
             Assert.Single(service.Trace, command => command.Operation == GameOperationKind.Deposit);
             Assert.Equal(0UL, new TransferJobLedger(service.Run.Journal!).DeliveredTo(2));
             service.SimulateCoordinatorRestart(); service.Resume();
-            Assert.Equal(original, Assert.Single(service.Run.Pending).Command.Id);
+            Assert.Equal(original, Assert.Single(service.Run.Pending, pending => pending.Command.Operation.Kind == GameOperationKind.Deposit).Command.Id);
             service.RunToTerminal();
         }
         Assert.True(service.Run.Paused);
@@ -363,14 +365,19 @@ public sealed class MultiItemCoordinatorTests
             SuppressInitialResponse = command => command.Operation.Kind == GameOperationKind.Withdraw
         };
         service.StartJob(Saved(Job([1], (2, 10))));
-        service.RunUntil(run => run.Step == CoordinatorStep.Withdraw && run.Pending.Count == 1);
-        var originalCommandId = Assert.Single(service.Run!.Pending).Command.Id;
-        Assert.Null(service.Run.Pending[0].Response);
+        service.RunUntil(run => run.Pending.Any(pending => pending.Command.Operation.Kind == GameOperationKind.Withdraw));
+        var originalPickup = Assert.Single(service.Run!.Pending, pending => pending.Command.Operation.Kind == GameOperationKind.Withdraw);
+        var originalCommandId = originalPickup.Command.Id;
+        Assert.Null(originalPickup.Response);
         Assert.Equal(10U, provider.Bags); // The worker completed and saved the pickup before its response was lost.
         Assert.Equal(10U, provider.RetainerTotal);
 
         // Model an actual 0.2.2 checkpoint: these multi-item/automatic-relay fields did not exist.
         var legacy = Newtonsoft.Json.Linq.JObject.Parse(service.SavedJson);
+        legacy.Remove("Preparation");
+        legacy["Step"] = (int)CoordinatorStep.Withdraw;
+        legacy["Pending"] = new Newtonsoft.Json.Linq.JArray(legacy["Pending"]!.Cast<Newtonsoft.Json.Linq.JObject>()
+            .Where(pending => pending["Command"]!["Id"]!.ToObject<Guid>() == originalCommandId).Select(pending => pending.DeepClone()));
         foreach (var field in new[] { "ActiveItemIndex", "CompletedItems", "AutomaticRelays", "RejectedRelayCharacters",
                      "RelayCandidateId", "RelayCandidatePeerId", "PreviousItemDepositIndex", "PreviousItemDepositCharacterId" })
             legacy.Remove(field);

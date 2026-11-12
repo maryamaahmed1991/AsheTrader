@@ -32,9 +32,9 @@ public sealed class WorkflowPanel(Plugin plugin)
     private bool EditingLocked => LocalActionRunning || HasUnfinishedJob;
     private bool ReadyConnection => Service.Connected && Service.RemoteRoster != null;
     private bool CoordinatorRole => HasUnfinishedJob || (Service.PairingEnabled ? Service.IsHost : coordinatorRole ?? !Settings.AllowRemoteControl);
-    private PendingCommand? PendingStorage => Service.Run is { Paused: true, TradeOperationId: null } run
-        && run.Pending.Count == 1 && StorageReconciliation.IsStorage(run.Pending[0].Command) ? run.Pending[0] : null;
-    private bool NeedsStorageRecovery => PendingStorage?.Response is { Ambiguous: true };
+    private IEnumerable<PendingCommand> PendingStorage => Service.Run is { Paused: true, TradeOperationId: null } run
+        ? run.Pending.Where(pending => StorageReconciliation.IsStorage(pending.Command)) : [];
+    private bool NeedsStorageRecovery => PendingStorage.Any(pending => pending.Response is { Ambiguous: true });
     private bool NeedsTradeRecovery => Service.Run is { Paused: true, TradeOperationId: not null };
     private SavedTransferJob? SelectedJob => Settings.Jobs.FirstOrDefault(x => x.Definition.Id == selectedJob) ?? Settings.Jobs.FirstOrDefault();
 
@@ -819,18 +819,19 @@ public sealed class WorkflowPanel(Plugin plugin)
 
     private void DrawStorageRecovery()
     {
-        var pending = PendingStorage;
-        if (pending == null) return;
-        UiTone.Wrapped(UiTone.Info, "Interrupted retainer movement — inventory tally");
-        ImGui.TextWrapped($"{CharacterName(pending.Command.Operation.CharacterId)} on {PeerName(pending.PeerId)} · {ItemName(pending.Command.Operation.ItemId)}{(pending.Command.Operation.HighQuality ? " HQ" : "")}");
-        if (pending.Response?.Observation is { } stopped)
+        foreach (var pending in PendingStorage)
         {
-            ImGui.TextWrapped($"Confirmed moved: {stopped.MovedQuantity:N0} of {pending.Command.Operation.Quantity:N0} · bag count at stop: {stopped.BagQuantity:N0}");
-            ImGui.TextWrapped("Resume compares the current count with the saved movement checkpoint, credits what moved and continues the remaining work automatically.");
+            UiTone.Wrapped(UiTone.Info, "Interrupted retainer movement — inventory tally");
+            ImGui.TextWrapped($"{CharacterName(pending.Command.Operation.CharacterId)} on {PeerName(pending.PeerId)} · {ItemName(pending.Command.Operation.ItemId)}{(pending.Command.Operation.HighQuality ? " HQ" : "")}");
+            if (pending.Response?.Observation is { } stopped)
+            {
+                ImGui.TextWrapped($"Confirmed moved: {stopped.MovedQuantity:N0} of {pending.Command.Operation.Quantity:N0} · bag count at stop: {stopped.BagQuantity:N0}");
+                ImGui.TextWrapped("Resume compares the current count with the saved movement checkpoint, credits what moved and continues the remaining work automatically.");
+            }
+            else
+                ImGui.TextWrapped("Resume retrieves this PC's saved movement checkpoint before continuing.");
+            ImGui.Separator();
         }
-        else
-            ImGui.TextWrapped("Resume retrieves this PC's saved movement checkpoint before continuing.");
-        ImGui.Separator();
     }
 
     private void DrawProgress()
@@ -855,6 +856,15 @@ public sealed class WorkflowPanel(Plugin plugin)
             UiTone.Progress((float)run.CompletedItems.Count / run.TotalItemCount, new Vector2(-1, 18), run.HasShortages);
         }
         UiTone.Status(run.Status);
+        if (run.Preparation is { } preparation)
+        {
+            foreach (var participant in new[] { preparation.Sender, preparation.Receiver })
+                UiTone.Wrapped(participant.Stage == ParticipantPreparationStage.Ready ? UiTone.Good : UiTone.Info,
+                    $"{PeerName(participant.PeerId)} · {CharacterName(participant.CharacterId)}: {WorkflowService.PreparationStageLabel(participant.Stage)}");
+            ImGui.TextWrapped(preparation.Recovering
+                ? "Both PCs' interrupted operations are being recovered before new preparation starts."
+                : "Both PCs prepare independently. Trading begins once both characters are ready at the meeting point.");
+        }
         UiTone.Wrapped(run.Paused || run.HasShortages ? UiTone.Warning : run.Step == CoordinatorStep.Finished ? UiTone.Good : UiTone.Info, run.Step == CoordinatorStep.Finished
             ? run.HasShortages
                 ? "Run ended with unmet targets. Review the shortages below; create a new job for any remaining items."
@@ -1017,7 +1027,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         ImGui.Spacing();
         if (!ImGui.CollapsingHeader("Recent activity", ImGuiTreeNodeFlags.DefaultOpen)) return;
         if (ImGui.Button("Copy activity for troubleshooting"))
-            ImGui.SetClipboardText($"Ashe's Trader v0.3.9.0\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
+            ImGui.SetClipboardText($"Ashe's Trader v{typeof(Plugin).Assembly.GetName().Version}\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
         if (plugin.Activity.Count == 0) ImGui.TextWrapped("Actions and outcomes will appear here when a job runs.");
         foreach (var entry in plugin.Activity.Reverse()) UiTone.Status(entry);
         DrawHints();
@@ -1030,6 +1040,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         CoordinatorStep.Plan or CoordinatorStep.SelectLeg => "Planning the next delivery",
         CoordinatorStep.RelayLogin or CoordinatorStep.RelayInspect => "Choosing an automatic relay and checking its live inventory space",
         CoordinatorStep.LoginSender or CoordinatorStep.LoginReceiver => "Logging in the characters for this delivery",
+        CoordinatorStep.PrepareParticipants => "Preparing both PCs in parallel",
         CoordinatorStep.InspectSender or CoordinatorStep.InspectReceiver => "Checking carried items and available inventory space",
         CoordinatorStep.Withdraw => "Provider refill: collecting the next load from retainers",
         CoordinatorStep.Deposit => "Recipient storage: making room in bags before continuing",

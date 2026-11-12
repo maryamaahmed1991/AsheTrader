@@ -22,6 +22,8 @@ public sealed partial class WorkflowService
     private readonly Dictionary<Guid, Guid> commandOwners = [];
     private readonly Dictionary<Guid, uint> tradeBeforeQuantities = [];
     private readonly Dictionary<Guid, (Guid Round, uint Current)> tradeTallies = [];
+    private readonly Dictionary<Guid, WorkerCommand> deferredGameCommands = [];
+    private readonly Dictionary<Guid, Guid> activeCommandsByPeer = [];
     private WorkerCommand? armedReceiver;
     private WorkerCommand? deferredSender;
     private uint armedBefore;
@@ -55,6 +57,23 @@ public sealed partial class WorkflowService
     public Predicate<WorkerCommand>? SuppressInitialResponse { get; set; }
     public Predicate<WorkerCommand>? SuppressAutomaticResolutionReply { get; set; }
     public Action<WorkerCommand>? BeforeAutomaticResolution { get; set; }
+    public Predicate<WorkerCommand>? DeferGameCommand { get; set; }
+    public IReadOnlyCollection<WorkerCommand> DeferredGameCommands => deferredGameCommands.Values.ToArray();
+    public IReadOnlyDictionary<Guid, Guid> ActiveCommandsByPeer => activeCommandsByPeer;
+    public int PeakActivePeerCount { get; private set; }
+
+    public void ReleaseDeferredGameCommand(Guid commandId)
+    {
+        if (!deferredGameCommands.Remove(commandId, out var command))
+            throw new InvalidOperationException("The requested game command is not deferred.");
+        ExecuteGame(command, commandOwners[commandId]);
+    }
+
+    public void ReleaseDeferredGameCommandsForPeer(Guid peerId)
+    {
+        var command = deferredGameCommands.Values.Single(command => commandOwners[command.Id] == peerId);
+        ReleaseDeferredGameCommand(command.Id);
+    }
 
     public void SetCachedFreeSlots(ulong characterId, uint? freeSlots)
     {
@@ -115,6 +134,7 @@ public sealed partial class WorkflowService
                 Unchanged = stock.Bags == armedBefore, BeforeQuantity = armedBefore,
                 CurrentQuantity = stock.Bags, Error = "Receiver interrupted before a verified result.",
             };
+            activeCommandsByPeer.Remove(character.PeerId);
             armedReceiver = null;
         }
         SaveRun();
@@ -151,6 +171,7 @@ public sealed partial class WorkflowService
     {
         foreach (var command in new[] { armedReceiver, deferredSender }.OfType<WorkerCommand>())
         {
+            activeCommandsByPeer.Remove(commandOwners[command.Id]);
             StoppedTradeCommands.Add(command.Id);
             if (!durableResponses.ContainsKey(command.Id))
                 durableResponses[command.Id] = new()
@@ -179,6 +200,10 @@ public sealed partial class WorkflowService
     private void HandleWorker(WorkerCommand command, Guid owner)
     {
         if (receivedCommands.ContainsKey(command.Id)) { HandleQuery(command.Id, owner); return; }
+        if (activeCommandsByPeer.TryGetValue(owner, out var activeId))
+            throw new InvalidOperationException($"Peer {owner} received {command.Operation.Kind}/{command.Id} while {activeId} was still active.");
+        activeCommandsByPeer.Add(owner, command.Id);
+        PeakActivePeerCount = Math.Max(PeakActivePeerCount, activeCommandsByPeer.Count);
         receivedCommands[command.Id] = Clone(command);
         commandOwners[command.Id] = owner;
         var character = characters[command.Operation.CharacterId];
@@ -189,44 +214,8 @@ public sealed partial class WorkflowService
 
         if (command.Kind == WorkerCommandKind.Game)
         {
-            var operation = command.Operation;
-            if (operation.Kind == GameOperationKind.Login) loggedIn[owner] = character.Id;
-            else if (operation.Kind != GameOperationKind.ReadCachedInventory && loggedIn.GetValueOrDefault(owner) != character.Id)
-                throw new InvalidOperationException("Operation ran on the wrong active character.");
-            uint moved = 0;
-            switch (operation.Kind)
-            {
-                case GameOperationKind.ScanRetainers: character.Location = "home"; character.CurrentWorldId = character.HomeWorldId; break;
-                case GameOperationKind.Withdraw:
-                    character.Location = "home";
-                    character.CurrentWorldId = character.HomeWorldId;
-                    moved = Math.Min(operation.Quantity, Math.Min(stock.RetainerTotal, character.BagSpace));
-                    if (WithdrawMovementLimit is { } pickupLimit) moved = Math.Min(moved, pickupLimit);
-                    RemoveStored(stock, moved); stock.Bags += moved;
-                    break;
-                case GameOperationKind.Deposit:
-                    character.Location = "home";
-                    character.CurrentWorldId = character.HomeWorldId;
-                    moved = Math.Min(operation.Quantity, Math.Min(stock.Bags, character.StorageSpace));
-                    if (DepositMovementLimit is { } limit) moved = Math.Min(moved, limit);
-                    stock.Bags -= moved;
-                    var firstRetainer = stock.Retainers.Keys.FirstOrDefault();
-                    if (firstRetainer == 0 && moved != 0) throw new InvalidOperationException("No retainer to deposit into.");
-                    if (moved != 0) stock.Retainers[firstRetainer] += moved;
-                    break;
-                case GameOperationKind.TravelMeeting:
-                    if (operation.Destination == null) throw new InvalidOperationException("Travel destination omitted.");
-                    character.Location = "meeting";
-                    character.CurrentWorldId = operation.Destination.WorldId;
-                    break;
-            }
-            var result = Result(character, operation, moved);
-            if (TransformResult != null) result = TransformResult(command, result);
-            Deliver(owner, new()
-            {
-                CommandId = command.Id, Success = result.Success, Observation = result,
-                Quantity = moved, Error = result.Error, Ambiguous = result.MovementUncertain,
-            });
+            if (DeferGameCommand?.Invoke(command) == true) deferredGameCommands.Add(command.Id, Clone(command));
+            else ExecuteGame(command, owner);
             return;
         }
 
@@ -283,10 +272,55 @@ public sealed partial class WorkflowService
         armedReceiver = null;
     }
 
+    private void ExecuteGame(WorkerCommand command, Guid owner)
+    {
+        var operation = command.Operation;
+        var character = characters[operation.CharacterId];
+        var stock = character.Inventory(operation.ItemId, operation.HighQuality);
+        if (operation.Kind == GameOperationKind.Login) loggedIn[owner] = character.Id;
+        else if (operation.Kind != GameOperationKind.ReadCachedInventory && loggedIn.GetValueOrDefault(owner) != character.Id)
+            throw new InvalidOperationException("Operation ran on the wrong active character.");
+        uint moved = 0;
+        switch (operation.Kind)
+        {
+            case GameOperationKind.ScanRetainers: character.Location = "home"; character.CurrentWorldId = character.HomeWorldId; break;
+            case GameOperationKind.Withdraw:
+                character.Location = "home";
+                character.CurrentWorldId = character.HomeWorldId;
+                moved = Math.Min(operation.Quantity, Math.Min(stock.RetainerTotal, character.BagSpace));
+                if (WithdrawMovementLimit is { } pickupLimit) moved = Math.Min(moved, pickupLimit);
+                RemoveStored(stock, moved); stock.Bags += moved;
+                break;
+            case GameOperationKind.Deposit:
+                character.Location = "home";
+                character.CurrentWorldId = character.HomeWorldId;
+                moved = Math.Min(operation.Quantity, Math.Min(stock.Bags, character.StorageSpace));
+                if (DepositMovementLimit is { } limit) moved = Math.Min(moved, limit);
+                stock.Bags -= moved;
+                var firstRetainer = stock.Retainers.Keys.FirstOrDefault();
+                if (firstRetainer == 0 && moved != 0) throw new InvalidOperationException("No retainer to deposit into.");
+                if (moved != 0) stock.Retainers[firstRetainer] += moved;
+                break;
+            case GameOperationKind.TravelMeeting:
+                if (operation.Destination == null) throw new InvalidOperationException("Travel destination omitted.");
+                character.Location = "meeting";
+                character.CurrentWorldId = operation.Destination.WorldId;
+                break;
+        }
+        var result = Result(character, operation, moved);
+        if (TransformResult != null) result = TransformResult(command, result);
+        Deliver(owner, new()
+        {
+            CommandId = command.Id, Success = result.Success, Observation = result,
+            Quantity = moved, Error = result.Error, Ambiguous = result.MovementUncertain,
+        });
+    }
+
     private void HandleQuery(Guid id, Guid owner)
     {
         if (commandOwners.TryGetValue(id, out var expected) && owner != expected)
             throw new InvalidOperationException("Query sent to the wrong worker.");
+        if (deferredGameCommands.ContainsKey(id)) return;
         if (durableResponses.TryGetValue(id, out var response))
         {
             var command = receivedCommands[id];
@@ -380,6 +414,7 @@ public sealed partial class WorkflowService
 
     private void Deliver(Guid owner, WorkerResponse response)
     {
+        if (activeCommandsByPeer.GetValueOrDefault(owner) == response.CommandId) activeCommandsByPeer.Remove(owner);
         durableResponses[response.CommandId] = Clone(response);
         if (SuppressInitialResponse?.Invoke(receivedCommands[response.CommandId]) == true) return;
         AcceptResponse(owner, response);

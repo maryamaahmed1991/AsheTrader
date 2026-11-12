@@ -34,7 +34,14 @@ public sealed class StorageRecoveryCoordinatorTests
         Assert.True(service.Run!.Paused);
         Assert.Equal(100UL, service.Run.Deposited[2]);
         Assert.Equal(300UL, new TransferJobLedger(service.Run.Journal!).RelayCargo(9));
-        var pending = Assert.Single(service.Run.Pending);
+        var pending = Assert.Single(service.Run.Pending, command => command.Command.Operation.Kind == GameOperationKind.Deposit);
+        Assert.All(service.Run.Pending.Where(command => command.Command.Id != pending.Command.Id), command => Assert.True(command.Response?.Success));
+        // These compatibility cases model the pre-parallel deposit checkpoint. Completed
+        // sibling travel is harmless; only the original interrupted storage command existed.
+        service.Run.Pending = [pending];
+        service.Run.Preparation = null;
+        service.Run.Step = CoordinatorStep.Deposit;
+        service.PauseForTest(service.Run.Status);
         Assert.True(pending.Response!.Ambiguous);
         Assert.Equal(200U, pending.Command.Operation.Quantity);
         Assert.Equal(100U, pending.Response.Observation!.MovedQuantity);

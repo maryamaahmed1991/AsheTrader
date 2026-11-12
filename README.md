@@ -13,6 +13,7 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 - Save multiple item lines in one job, each with providers, ordered recipients, quantities and quality, sharing one meeting point.
 - Choose providers and relays using funded quantities, direct routes, home worlds and estimated relay loads. Only assigned providers, recipients and needed relays log in.
 - Fill relays across multiple providers before delivering, then drain the collected load before gathering again.
+- Prepare both PCs independently: login, retainer pickups/deposits and meeting travel overlap; trading waits for both characters to arrive.
 - Preserve inn cutscenes and wait for their natural completion before continuing.
 - Read status at a glance: green for ready/success, blue for active information, amber for waiting or attention, and red for blockers/errors. Text labels remain alongside colors.
 - Plan from Allagan Tools' cached inventories without discovery logins or repeat retainer scans, including restock jobs. Unavailable cache data pauses with the affected character.
@@ -25,7 +26,7 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 
 ## Runtime requirements
 
-Version 0.3.10.1 fixes Resume waiting for a closed trade and new trades never sending an opening request. The game can report idle state 0 as well as 1; both are now accepted when the trade UI, agent, synchronization and confirmation windows are inactive. Active and unknown states still block. Diagnostics include raw native state even after reloading when no trade partner is selected.
+Version 0.3.11.0 prepares both participants concurrently. One PC can travel while the other logs in or collects/deposits items, with one native operation per PC and a shared arrival barrier before trading. Activity shows each character's current action. Post-login teleport requests wait for game readiness and use bounded retries only when Lifestream has rejected the request; accepted requests are not repeated. Existing trade idle-state fixes remain in place.
 
 Both PCs need the same Ashe's Trader build, Dalamud API 15, AutoRetainer configured for their own account's characters, Lifestream, vnavmesh, and Allagan Tools. Planning uses the cached counts returned by Allagan Tools. Unavailable or malformed cache data pauses planning; it does not start character visits.
 
@@ -45,7 +46,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.10.1.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.11.0.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
@@ -82,6 +83,8 @@ Capture the rendezvous while standing at an accessible outdoor point. Verify the
 Provider bags and retainer stored inventory are included automatically. When a provider runs out of carried stock, it returns home to collect another load, limited by its current bag capacity and the remaining assignment. It trades that load across as many batches as needed before another storage trip. Other storage types, equipped items, retainer sale listings, gil and crystals are outside this build's job scope. Items must be tradeable and match the selected quality.
 
 ## Progress and recovery
+
+Version 0.3.11 runs preparation independently on the two PCs for each funded trade leg. Each PC still performs its own operations sequentially; a character never travels during its own retainer movement. Both participants share one pinned destination, and batch preview/arming cannot start until both are ready there. If either side pauses, Resume recovers both original command IDs and any storage progress before scheduling new work. Legacy pending operations complete through their existing recovery path; the next delivery uses parallel preparation. Item priorities, relay collection and cutscene preservation are unchanged.
 
 Version 0.3.10 uses the offer spacing observed in Dropbox's public source: a single 250 ms minimum between item callbacks, readiness polling for quantities and synchronization, and consecutive matching observations before accepting an incoming offer or settling inventory. The previous stacked item delays and post-trade sleeps are removed. Trade openings retain a three-second minimum between requests across batches, stable partner readiness, distance checks and bounded retries. Game/server latency still determines actual throughput. The implementation uses current Dalamud structures and independently written logic; it does not embed Dropbox's older native offsets.
 

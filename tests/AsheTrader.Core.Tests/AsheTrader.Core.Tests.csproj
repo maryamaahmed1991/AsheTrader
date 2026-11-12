@@ -22,6 +22,7 @@
     <Compile Include="../../src/AsheTrader/Integrations/AutoRetainerRelogRequest.cs" Link="Production/AutoRetainerRelogRequest.cs" />
     <Compile Include="../../src/AsheTrader/Integrations/AllaganInventoryCache.cs" Link="Production/AllaganInventoryCache.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/TransferCoordinator.cs" Link="Production/TransferCoordinator.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/ParallelPreparation.cs" Link="Production/ParallelPreparation.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/AutomaticTradeRecovery.cs" Link="Production/AutomaticTradeRecovery.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/AutomaticRelays.cs" Link="Production/AutomaticRelays.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/RelayBatchScheduling.cs" Link="Production/RelayBatchScheduling.cs" />
@@ -39,5 +40,6 @@
     <Compile Include="../../src/AsheTrader/Workflow/Native/RetainerTransferConfirmation.cs" Link="Production/RetainerTransferConfirmation.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/InnArrivalGate.cs" Link="Production/InnArrivalGate.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/RetainerQuantityDialogPolicy.cs" Link="Production/RetainerQuantityDialogPolicy.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/Native/TeleportRequestGate.cs" Link="Production/TeleportRequestGate.cs" />
   </ItemGroup>
 </Project>

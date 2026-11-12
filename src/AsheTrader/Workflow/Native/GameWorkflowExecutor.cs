@@ -2,6 +2,8 @@ using System.Numerics;
 using AsheTrader.Core;
 using AsheTrader.Integrations;
 using Dalamud.Game.ClientState.Conditions;
+using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using Lumina.Excel.Sheets;
 
 namespace AsheTrader.Workflow.Native;
@@ -53,6 +55,7 @@ public sealed class GameWorkflowExecutor
     private readonly BellInteractionGate bellInteraction = new();
     private readonly CutsceneWait cutsceneWait = new();
     private readonly InnArrivalGate innArrival = new();
+    private readonly TeleportRequestGate teleportRequest = new();
     private string statusBeforeCutscene = string.Empty;
     private bool conditionalInnSkipMode;
 
@@ -91,6 +94,7 @@ public sealed class GameWorkflowExecutor
         bellInteraction.Reset();
         cutsceneWait.Reset();
         innArrival.Reset();
+        teleportRequest.Reset();
         statusBeforeCutscene = string.Empty;
         conditionalInnSkipMode = false;
         operationStarted = Environment.TickCount64;
@@ -223,6 +227,7 @@ public sealed class GameWorkflowExecutor
                 stageStarted += pausedFor.Value;
                 actionAfter += pausedFor.Value;
                 movementConfirmation?.Suspend(pausedFor.Value);
+                teleportRequest.Suspend(pausedFor.Value);
                 if (relogIdleSince.HasValue) relogIdleSince += pausedFor.Value;
                 if (worldTravelIdleSince.HasValue) worldTravelIdleSince += pausedFor.Value;
                 Status = statusBeforeCutscene;
@@ -294,8 +299,7 @@ public sealed class GameWorkflowExecutor
                     break;
                 case Stage.StartTeleport: StartTeleport(); break;
                 case Stage.WaitTerritory:
-                    if (PlayerReady && CurrentWorld == travel!.WorldId && Plugin.ClientState.TerritoryType == travel.TerritoryId && !LifestreamBusy())
-                    { ownsLifestream = false; Transition(Stage.StartPosition, "Approaching the saved destination…", 1000); }
+                    WaitTeleport();
                     break;
                 case Stage.StartPosition: StartPosition(); break;
                 case Stage.WaitPosition:
@@ -481,14 +485,86 @@ public sealed class GameWorkflowExecutor
 
     private void StartTeleport()
     {
-        if (Plugin.ClientState.TerritoryType == travel!.TerritoryId) { Transition(Stage.StartPosition, "Approaching the saved point…"); return; }
+        if (travel == null) throw new InvalidOperationException("The travel destination is missing.");
+        if (PlayerReady && Plugin.ObjectTable.LocalPlayer?.IsTargetable == true
+            && CurrentWorld == travel!.WorldId && Plugin.ClientState.TerritoryType == travel.TerritoryId)
+        { Transition(Stage.StartPosition, "Approaching the saved point…"); return; }
         if (travel.AetheryteId == 0) throw new InvalidOperationException("This destination needs an aetheryte ID before it can be reached from another territory.");
         var aetheryte = Plugin.DataManager.GetExcelSheet<Aetheryte>().GetRowOrDefault(travel.AetheryteId);
         if (!aetheryte.HasValue || !aetheryte.Value.IsAetheryte || aetheryte.Value.Territory.RowId != travel.TerritoryId)
             throw new InvalidOperationException("The configured aetheryte does not lead to the destination territory.");
-        if (!Plugin.PluginInterface.GetIpcSubscriber<uint, byte, bool>("Lifestream.Teleport").InvokeFunc(travel.AetheryteId, 0))
-            throw new InvalidOperationException("Lifestream could not teleport to the configured aetheryte.");
-        ownsLifestream = true; Transition(Stage.WaitTerritory, "Teleporting to the destination territory…", 1500);
+        var readiness = ReadTeleportReadiness();
+        var now = Environment.TickCount64;
+        var decision = teleportRequest.Observe(now, CurrentWorld, Plugin.ClientState.TerritoryType,
+            readiness.Ready, false, readiness.InProgress);
+        if (decision == TeleportRequestDecision.ReadinessTimedOut)
+        {
+            var failure = teleportRequest.Attempts >= TeleportRequestGate.MaximumRejectedRequests
+                ? $"Lifestream declined {teleportRequest.Attempts} requests before dispatch."
+                : $"Teleport did not become usable within {TeleportRequestGate.ReadinessTimeoutMilliseconds / 1000} seconds.";
+            throw new InvalidOperationException($"Cannot teleport to aetheryte {travel.AetheryteId}. {failure} {readiness.BlockedReason} Check that this character has unlocked the destination and that the Teleport action is usable, then resume.");
+        }
+        if (decision != TeleportRequestDecision.Request)
+        {
+            Status = readiness.Ready ? "Waiting for teleport readiness to settle…" : $"Waiting to teleport: {readiness.BlockedReason}";
+            return;
+        }
+        // Lifestream.Teleport returns false before native dispatch when CanTeleport fails
+        // or the destination is not in its loaded list. Only that rejected request may retry.
+        var accepted = Plugin.PluginInterface.GetIpcSubscriber<uint, byte, bool>("Lifestream.Teleport").InvokeFunc(travel.AetheryteId, 0);
+        teleportRequest.RecordRequest(now, accepted);
+        Trace($"teleport request; destination={travel.AetheryteId}; accepted={accepted}; attempt={teleportRequest.Attempts}; {readiness.Detail}");
+        if (!accepted)
+        {
+            Status = "Lifestream declined teleport before dispatch; waiting for fresh readiness…";
+            return;
+        }
+        ownsLifestream = true;
+        Transition(Stage.WaitTerritory, "Teleporting to the destination territory…", 500);
+    }
+
+    private void WaitTeleport()
+    {
+        var readiness = ReadTeleportReadiness();
+        var arrived = PlayerReady && Plugin.ObjectTable.LocalPlayer?.IsTargetable == true
+            && CurrentWorld == travel!.WorldId && Plugin.ClientState.TerritoryType == travel.TerritoryId && !LifestreamBusy();
+        var decision = teleportRequest.Observe(Environment.TickCount64, CurrentWorld, Plugin.ClientState.TerritoryType,
+            readiness.Ready, arrived, readiness.InProgress);
+        if (decision == TeleportRequestDecision.Arrived)
+        { ownsLifestream = false; Transition(Stage.StartPosition, "Approaching the saved destination…", 500); }
+        else if (decision == TeleportRequestDecision.ArrivalTimedOut)
+            throw new InvalidOperationException($"Lifestream accepted teleport to aetheryte {travel!.AetheryteId}, but the character is idle in territory {Plugin.ClientState.TerritoryType} instead of {travel.TerritoryId}. Check the in-game teleport error or gil cost, then resume. An accepted teleport was not sent again automatically.");
+    }
+
+    private sealed record TeleportReadiness(bool Ready, bool InProgress, string BlockedReason, string Detail);
+
+    private unsafe TeleportReadiness ReadTeleportReadiness()
+    {
+        var player = Plugin.ObjectTable.LocalPlayer;
+        var action = ActionManager.Instance();
+        var map = AgentMap.Instance();
+        var actionStatus = action == null ? uint.MaxValue : action->GetActionStatus(ActionType.Action, 5);
+        var animationLock = action == null ? float.PositiveInfinity : action->AnimationLock;
+        var targetable = player?.IsTargetable == true;
+        var casting = player?.IsCasting == true;
+        var moving = map != null && map->IsPlayerMoving;
+        var loading = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51];
+        var busy = LifestreamBusy();
+        var unlockedCount = Plugin.AetheryteList.Length;
+        var unlocked = Plugin.AetheryteList.Any(entry => entry.AetheryteId == travel!.AetheryteId && entry.SubIndex == 0);
+        var blocked = !PlayerReady || loading ? "The character is still loading."
+            : !targetable ? "The character is not interactable yet."
+            : CurrentWorld != travel!.WorldId ? "The character is not on the required world yet."
+            : busy ? "Lifestream is still busy."
+            : casting ? "The current cast has not finished."
+            : moving ? "The character is still moving."
+            : animationLock > 0 ? "The login or action animation has not finished."
+            : actionStatus != 0 ? $"Teleport action is not usable yet (status {actionStatus})."
+            : unlockedCount == 0 ? "The unlocked aetheryte list has not loaded."
+            : !unlocked ? $"Aetheryte {travel.AetheryteId} is absent from this character's unlocked list."
+            : "";
+        return new(blocked.Length == 0, !PlayerReady || !targetable || loading || casting || busy, blocked,
+            $"targetable={targetable}; actionStatus={actionStatus}; animationLock={animationLock:F3}; casting={casting}; moving={moving}; loading={loading}; LifestreamBusy={busy}; unlockedCount={unlockedCount}; destinationUnlocked={unlocked}");
     }
 
     private void StartPosition()
@@ -836,6 +912,8 @@ public sealed class GameWorkflowExecutor
                 Trace($"inventory stability polls={inventoryStableFrames}; lastReadError={inventoryReadFailure}");
             if (stage == Stage.WaitInn)
                 Trace($"inn arrival waiting={innArrival.IsWaitingForArrival}; graceElapsedMs={innArrival.GraceElapsedMilliseconds(now)}; graceLimitMs={InnArrivalGate.GraceMilliseconds}; observedTerritory={innArrival.ObservedTerritory?.ToString() ?? "none"}; currentTerritory={Plugin.ClientState.TerritoryType}; readyAtHome={PlayerReady && CurrentWorld == HomeWorld}; bellReady={NativeRetainers.FindBell() != null}");
+            if (stage is Stage.StartTeleport or Stage.WaitTerritory)
+                Trace($"teleport readiness accepted={teleportRequest.Accepted}; attempts={teleportRequest.Attempts}; destination={travel?.AetheryteId}; {ReadTeleportReadiness().Detail}");
             if (stage is Stage.ApproachBell or Stage.WaitBellWalk or Stage.WaitList)
                 Trace($"bell attempts={bellInteraction.Attempts}; acknowledged={bellInteraction.Acknowledged}; playerTargetable={Plugin.ObjectTable.LocalPlayer?.IsTargetable}; interactionBlocked={NativeRetainers.BellInteractionBlocked}");
         }

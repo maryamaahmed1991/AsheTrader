@@ -21,6 +21,9 @@ public sealed class TransferCoordinatorTests
 
     private static TransferJobLedger Ledger(WorkflowService service) => new(service.Run!.Journal!);
 
+    private static PendingCommand PendingOperation(WorkflowService service, GameOperationKind kind) =>
+        Assert.Single(service.Run!.Pending, pending => pending.Command.Operation.Kind == kind);
+
     [Fact]
     public void ActualCoordinatorDiscoversRetainersFillsPriorityAndHandlesRepeatedOverflowTrips()
     {
@@ -61,12 +64,16 @@ public sealed class TransferCoordinatorTests
     {
         var service = new WorkflowService(PeerA, PeerB,
             Sim(1, PeerA, 3, 17), Sim(2, PeerB));
+        service.DeferGameCommand = command => command.Operation.Kind == GameOperationKind.Withdraw;
         service.StartJob(Saved(Job([1], (2, 10))));
-        service.RunUntil(run => run.Step == CoordinatorStep.Withdraw && run.Pending.Count == 0);
+        service.RunUntil(_ => service.DeferredGameCommands.Any(command => command.Operation.Kind == GameOperationKind.Withdraw));
 
         Assert.Equal(3UL, Ledger(service).DeliveredTo(2));
-        Assert.Contains("Collecting up to 7 items from provider retainers", service.Run!.Status);
+        Assert.Equal(7U, Assert.Single(service.DeferredGameCommands).Operation.Quantity);
+        Assert.Contains("collecting from retainers", service.Run!.Status);
         Assert.Equal(17U, service.Characters[1].RetainerTotal);
+        service.DeferGameCommand = null;
+        service.ReleaseDeferredGameCommand(Assert.Single(service.DeferredGameCommands).Id);
         service.RunToTerminal();
 
         Assert.False(service.Run.Paused, service.LastError);
@@ -249,18 +256,19 @@ public sealed class TransferCoordinatorTests
             Sim(1, PeerA, 3, 17, 7), Sim(2, PeerA, 2, 18, 6), Sim(3, PeerB, bagLimit: 5));
         service.SuppressInitialResponse = command => command.Operation.Kind == GameOperationKind.Withdraw;
         service.StartJob(Saved(Job([1, 2], (3, 40))));
-        service.RunUntil(run => run.Step == CoordinatorStep.Withdraw && run.Pending.Count == 1);
+        service.RunUntil(run => run.Pending.Any(pending => pending.Command.Operation.Kind == GameOperationKind.Withdraw));
 
-        var originalCommand = Assert.Single(service.Run!.Pending).Command.Id;
-        Assert.Null(service.Run.Pending[0].Response);
+        var originalCommand = PendingOperation(service, GameOperationKind.Withdraw).Command.Id;
+        Assert.Null(PendingOperation(service, GameOperationKind.Withdraw).Response);
         Assert.Equal(7U, service.Characters[1].Bags);
         Assert.Equal(3UL, Ledger(service).DeliveredTo(3));
         service.SimulateCoordinatorRestart();
         service.Resume();
 
-        Assert.Equal(CoordinatorStep.Withdraw, service.Run.Step);
-        Assert.Equal(originalCommand, Assert.Single(service.Run.Pending).Command.Id);
-        Assert.Equal(0UL, service.Run.Withdrawn.GetValueOrDefault(1UL));
+        Assert.Equal(CoordinatorStep.PrepareParticipants, service.Run!.Step);
+        Assert.True(service.Run.Preparation!.Recovering);
+        Assert.Equal(originalCommand, PendingOperation(service, GameOperationKind.Withdraw).Command.Id);
+        Assert.Equal(0UL, service.Run!.Withdrawn.GetValueOrDefault(1UL));
         service.SuppressInitialResponse = null;
         service.Tick(); // Recover the original pickup outcome; do not collect a second load.
         Assert.Equal(7UL, service.Run.Withdrawn[1]);
@@ -285,15 +293,15 @@ public sealed class TransferCoordinatorTests
     {
         var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 0, 20), Sim(2, PeerB));
         service.StartJob(Saved(Job([1], (2, 10))));
-        service.RunUntil(run => run.Step == CoordinatorStep.Withdraw
-            && run.Pending.SingleOrDefault()?.Response?.Observation is { MovedQuantity: 10 });
+        service.RunUntil(run => run.Pending.Any(pending => pending.Command.Operation.Kind == GameOperationKind.Withdraw
+            && pending.Response?.Observation is { MovedQuantity: 10 }));
 
-        Assert.False(Assert.Single(service.Run!.Pending).InventoryAdjustmentApplied);
+        Assert.False(PendingOperation(service, GameOperationKind.Withdraw).InventoryAdjustmentApplied);
         Assert.Equal(10U, service.Characters[1].Bags);
-        Assert.Equal(0UL, service.Run.Withdrawn.GetValueOrDefault(1UL));
+        Assert.Equal(0UL, service.Run!.Withdrawn.GetValueOrDefault(1UL));
         service.SimulateCoordinatorRestart();
         service.Resume();
-
+        service.Tick(); // Both saved preparation outcomes are consumed before restarting the leg.
         Assert.Equal(10UL, service.Run.Withdrawn[1]);
         Assert.Equal(CoordinatorStep.SelectLeg, service.Run.Step);
         Assert.Empty(service.Run.Pending);
@@ -363,14 +371,15 @@ public sealed class TransferCoordinatorTests
 
         Assert.True(service.Run!.Paused);
         Assert.Contains("pickup could not be tallied automatically", service.LastError);
-        var originalCommand = Assert.Single(service.Run.Pending).Command.Id;
+        var originalCommand = PendingOperation(service, GameOperationKind.Withdraw).Command.Id;
         Assert.Equal(4UL, service.Run.Withdrawn[1]);
         for (var restart = 0; restart < 2; restart++)
         {
             service.SimulateCoordinatorRestart();
             service.Resume();
-            Assert.Equal(CoordinatorStep.Withdraw, service.Run.Step);
-            Assert.Equal(originalCommand, Assert.Single(service.Run.Pending).Command.Id);
+            Assert.Equal(CoordinatorStep.PrepareParticipants, service.Run.Step);
+            Assert.True(service.Run.Preparation!.Recovering);
+            Assert.Equal(originalCommand, PendingOperation(service, GameOperationKind.Withdraw).Command.Id);
             service.RunToTerminal();
 
             Assert.True(service.Run.Paused);
@@ -444,12 +453,13 @@ public sealed class TransferCoordinatorTests
         Assert.Contains("partial movement", service.LastError);
         Assert.Equal(70U, service.Characters[2].RetainerTotal);
         Assert.Equal(70UL, service.Run.Deposited[2]);
-        Assert.True(Assert.Single(service.Run.Pending).InventoryAdjustmentApplied);
+        Assert.True(PendingOperation(service, GameOperationKind.Deposit).InventoryAdjustmentApplied);
         Assert.Equal(200UL, Ledger(service).DeliveredTo(2));
 
         service.SimulateCoordinatorRestart();
-        Assert.True(Assert.Single(service.Run.Pending).InventoryAdjustmentApplied);
+        Assert.True(PendingOperation(service, GameOperationKind.Deposit).InventoryAdjustmentApplied);
         service.Resume();
+        service.Tick(); // Recover both preparation responses before selecting a fresh leg.
         Assert.Equal(70UL, service.Run.Deposited[2]);
         Assert.Empty(service.Run.Pending);
         service.RunToTerminal();
@@ -467,16 +477,16 @@ public sealed class TransferCoordinatorTests
         var service = new WorkflowService(PeerA, PeerB,
             Sim(1, PeerA, 600), Sim(2, PeerB, 25, 0, 225));
         service.StartJob(Saved(Job([1], (2, 600))));
-        service.RunUntil(run => run.Step == CoordinatorStep.Deposit
-            && run.Pending.SingleOrDefault()?.Response?.Observation is { MovedQuantity: > 0 });
+        service.RunUntil(run => run.Pending.Any(pending => pending.Command.Operation.Kind == GameOperationKind.Deposit
+            && pending.Response?.Observation is { MovedQuantity: > 0 }));
 
-        var savedDeposit = Assert.Single(service.Run!.Pending);
+        var savedDeposit = PendingOperation(service, GameOperationKind.Deposit);
         Assert.False(savedDeposit.InventoryAdjustmentApplied);
         Assert.Equal(200U, service.Characters[2].RetainerTotal);
-        Assert.Equal(0UL, service.Run.Deposited.GetValueOrDefault(2UL));
+        Assert.Equal(0UL, service.Run!.Deposited.GetValueOrDefault(2UL));
         service.SimulateCoordinatorRestart();
         service.Resume();
-
+        service.Tick(); // Drain both saved preparation outcomes before replanning.
         Assert.Equal(200UL, service.Run.Deposited[2]);
         Assert.Equal(CoordinatorStep.SelectLeg, service.Run.Step);
         Assert.Empty(service.Run.Pending);
@@ -496,17 +506,18 @@ public sealed class TransferCoordinatorTests
             Sim(1, PeerA, 600), Sim(2, PeerB, 25, 0, 225));
         service.SuppressInitialResponse = command => command.Operation.Kind == GameOperationKind.Deposit;
         service.StartJob(Saved(Job([1], (2, 600))));
-        service.RunUntil(run => run.Step == CoordinatorStep.Deposit && run.Pending.Count == 1);
+        service.RunUntil(run => run.Pending.Any(pending => pending.Command.Operation.Kind == GameOperationKind.Deposit));
 
-        var interruptedCommandId = Assert.Single(service.Run!.Pending).Command.Id;
-        Assert.Null(service.Run.Pending[0].Response);
+        var interruptedCommandId = PendingOperation(service, GameOperationKind.Deposit).Command.Id;
+        Assert.Null(PendingOperation(service, GameOperationKind.Deposit).Response);
         Assert.Equal(200U, service.Characters[2].RetainerTotal);
         service.SimulateCoordinatorRestart();
         service.Resume();
 
-        Assert.Equal(CoordinatorStep.Deposit, service.Run.Step);
-        Assert.Equal(interruptedCommandId, Assert.Single(service.Run.Pending).Command.Id);
-        Assert.Null(service.Run.Pending[0].Response);
+        Assert.Equal(CoordinatorStep.PrepareParticipants, service.Run!.Step);
+        Assert.True(service.Run.Preparation!.Recovering);
+        Assert.Equal(interruptedCommandId, PendingOperation(service, GameOperationKind.Deposit).Command.Id);
+        Assert.Null(PendingOperation(service, GameOperationKind.Deposit).Response);
         Assert.Equal(0UL, service.Run.Deposited.GetValueOrDefault(2UL));
         service.SuppressInitialResponse = null;
         service.Tick(); // Re-dispatch is deduplicated by the worker, which returns its durable observation.
@@ -568,15 +579,16 @@ public sealed class TransferCoordinatorTests
 
         Assert.True(service.Run!.Paused);
         Assert.Contains("could not be tallied automatically", service.LastError);
-        var originalCommandId = Assert.Single(service.Run.Pending).Command.Id;
+        var originalCommandId = PendingOperation(service, GameOperationKind.Deposit).Command.Id;
         Assert.Equal(50UL, service.Run.Deposited[2]);
         Assert.Equal(70U, service.Characters[2].RetainerTotal);
         for (var restart = 0; restart < 2; restart++)
         {
             service.SimulateCoordinatorRestart();
             service.Resume();
-            Assert.Equal(CoordinatorStep.Deposit, service.Run.Step);
-            Assert.Equal(originalCommandId, Assert.Single(service.Run.Pending).Command.Id);
+            Assert.Equal(CoordinatorStep.PrepareParticipants, service.Run.Step);
+            Assert.True(service.Run.Preparation!.Recovering);
+            Assert.Equal(originalCommandId, PendingOperation(service, GameOperationKind.Deposit).Command.Id);
             service.RunToTerminal();
 
             Assert.True(service.Run.Paused);
