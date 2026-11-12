@@ -56,6 +56,7 @@ public sealed class WorkerResponse
     public bool Unchanged { get; set; }
     public bool Ambiguous { get; set; }
     public bool OperatorReviewed { get; set; }
+    public bool AutoReconciled { get; set; }
     public bool NeverStarted { get; set; }
     public uint? BeforeQuantity { get; set; }
     public uint? CurrentQuantity { get; set; }
@@ -71,11 +72,16 @@ public sealed class WorkerRecord
     public uint? BeforeQuantity { get; set; }
     public WorkerResponse? Response { get; set; }
     public bool TradeStarted { get; set; }
+    public Guid? TradeTallyRound { get; set; }
+    public uint? TradeTallyCurrent { get; set; }
+    public StorageMovementCheckpoint? StorageCheckpoint { get; set; }
 }
 
 public sealed class PendingCommand
 {
     public bool InventoryAdjustmentApplied { get; set; }
+    public uint? AppliedStorageQuantity { get; set; }
+    public bool StorageRecoveryRequested { get; set; }
     // Null means the active item; a value identifies a completed item whose received stock is being stored.
     public int? InventoryItemIndex { get; set; }
     public Guid PeerId { get; set; }
@@ -143,6 +149,8 @@ public sealed class CoordinatorRun
     public Dictionary<ulong, ulong> Withdrawn { get; set; } = [];
     public Dictionary<ulong, ulong> Deposited { get; set; } = [];
     public Guid? TradeOperationId { get; set; }
+    public TradeRecoveryState? TradeRecovery { get; set; }
+    public int ConsecutiveEmptyTrades { get; set; }
     public List<PendingCommand> Pending { get; set; } = [];
     public bool Paused { get; set; }
     public string Status { get; set; } = "";
@@ -162,6 +170,19 @@ public sealed class CoordinatorItemResult
 }
 
 public sealed record ManualResolution(Guid CommandId, bool Transferred, bool StorageVerifiedOnly = false);
+
+public sealed record TradeTallyRequest(Guid CommandId, Guid RoundId);
+public sealed record TradeTallyReply(Guid CommandId, Guid RoundId, bool Ready, bool Retryable, WorkerResponse? Result, string Error = "");
+public sealed record AutomaticTradeResolution(Guid CommandId, Guid RoundId, bool Transferred, uint? ExpectedBefore, uint? ExpectedCurrent);
+public sealed record TradeResolutionReply(Guid CommandId, Guid RoundId, WorkerResponse? Result, string Error = "");
+
+public sealed class TradeRecoveryState
+{
+    public Guid RoundId { get; set; } = Guid.NewGuid();
+    public bool? Transferred { get; set; }
+    public Dictionary<Guid, WorkerResponse> Tallies { get; set; } = [];
+    public Dictionary<Guid, WorkerResponse> Acknowledgements { get; set; } = [];
+}
 
 /// <summary>Records an operator's bounded storage review without inventing a completed movement.</summary>
 internal static class StorageReconciliation

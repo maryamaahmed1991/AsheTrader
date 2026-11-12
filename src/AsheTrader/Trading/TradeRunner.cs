@@ -16,6 +16,7 @@ public sealed class TradeRunner : IDisposable
     private sealed record RunRequest(bool Receive, TradePartner Partner, IReadOnlyList<TradeLine> Lines, bool SingleBatch);
     private readonly NativeTradeAdapter native = new();
     private readonly TradeOpeningGate openingGate = new();
+    private readonly TradePacing pacing = new();
     private readonly object commandGate = new();
     private RunRequest? requested;
     private bool stopRequested;
@@ -32,12 +33,9 @@ public sealed class TradeRunner : IDisposable
     private ushort addonId;
     private int slotIndex;
     private long enteredAt;
-    private long nextActionAt;
     private long refreshAt;
     private int receivedBatches;
     private bool finalConfirmationSent;
-    private string offerFingerprint = string.Empty;
-    private long offerStableSince;
     private bool singleBatch;
     private IReadOnlyList<TradeLine> expectedIncoming = [];
     private long nextDiagnosticAt;
@@ -46,6 +44,8 @@ public sealed class TradeRunner : IDisposable
     public bool Succeeded { get; private set; }
     public uint VerifiedQuantity { get; private set; }
     public bool ReceiverReady => stage == Stage.ReceiverIdle && IsReceiver;
+    /// <summary>Read on the framework thread before tallying an interrupted trade.</summary>
+    public bool IsInventoryTallyReady => !IsRunning && native.IsInventoryTallyReady;
 
     public string Status { get; private set; } = "Idle";
     public bool IsRunning => stage != Stage.Idle || startPending;
@@ -99,7 +99,7 @@ public sealed class TradeRunner : IDisposable
                 stop = stopRequested;
                 stopRequested = false;
             }
-            if (stop) { Halt("Stopped. Review inventory before starting another transfer."); return; }
+            if (stop) { Halt("Stopped. Paired jobs tally inventories before continuing."); return; }
             var now = Environment.TickCount64;
             if (Plugin.ObjectTable.LocalPlayer == null || !Plugin.ClientState.IsLoggedIn)
             {
@@ -126,7 +126,6 @@ public sealed class TradeRunner : IDisposable
             if (now >= nextDiagnosticAt) CaptureDiagnosticSnapshot("periodic wait");
             if (Plugin.PlayerState.ContentId != localContentId || partner == null || native.Resolve(partner) == null)
                 throw new InvalidOperationException("Character or selected trade partner changed.");
-            if (now < nextActionAt) return;
             if (now - enteredAt > (stage == Stage.ReceiverIdle ? 300_000 : 30_000))
                 throw new TimeoutException($"Timed out at trade stage {stage}. Opening requests={openingGate.Requests}; acknowledged={openingGate.Acknowledged}. No item offer or completed batch was retried. Open Activity and copy diagnostics.");
 
@@ -135,6 +134,13 @@ public sealed class TradeRunner : IDisposable
                 throw new InvalidOperationException("A different character opened a trade. This run was stopped.");
             if (addonId != 0 && trade.IsOpen && addonId != trade.AddonId)
                 throw new InvalidOperationException("The trade window was replaced unexpectedly.");
+            // A visible addon that is rebuilding controls is not evidence that a trade closed.
+            if (!trade.IsOpen && native.HasTradeUi && stage is Stage.Fill or Stage.AwaitQuantity
+                or Stage.AwaitSlot or Stage.SenderReady or Stage.ReceiverOffer or Stage.Confirm)
+            {
+                if (stage == Stage.ReceiverOffer) pacing.ObserveIncoming(now, string.Empty, false);
+                return;
+            }
 
             switch (stage)
             {
@@ -150,10 +156,16 @@ public sealed class TradeRunner : IDisposable
                             throw new TimeoutException($"The game did not acknowledge {openingGate.Requests} trade opening requests. {opening.Describe()}. The batch was not repeated.");
                         if (decision == TradeOpeningDecision.Request)
                         {
+                            if (!pacing.CanRequest(now))
+                            {
+                                Status = "Waiting for the previous trade request cooldown…";
+                                break;
+                            }
                             var current = NativeTradeAdapter.Totals(native.ReadInventory());
                             if (before.Keys.Union(current.Keys).Any(key => before.GetValueOrDefault(key) != current.GetValueOrDefault(key)))
                                 throw new InvalidOperationException("Inventory changed before the trade opened. The opening request was not repeated.");
                             openingGate.RecordRequest(now);
+                            pacing.RecordRequest(Environment.TickCount64);
                             Trace($"request dispatch attempt={openingGate.Requests}; partner={partner.EntityId}; {opening.Describe()}");
                             native.RequestTrade(partner);
                             LatchOpeningAcknowledgement(native.ReadOpening(partner));
@@ -173,29 +185,32 @@ public sealed class TradeRunner : IDisposable
                     if (trade.SyncPending) break;
                     if (slotIndex == batch!.Entries.Count)
                     {
-                        Transition(Stage.SenderReady, "Checking the offer before trading…", 500);
+                        Transition(Stage.SenderReady, "Checking the offer before trading…");
                         break;
                     }
                     RequirePartialOffer(trade, slotIndex);
+                    if (!pacing.CanOffer(now)) break;
                     var entry = batch.Entries[slotIndex];
                     Trace($"offer item slot={slotIndex}; item={entry.ItemId}; HQ={entry.HighQuality}; quantity={entry.Quantity}; source={entry.Container}/{entry.Slot}");
+                    pacing.RecordOffer(Environment.TickCount64);
                     var quantityDialog = native.AddItem(entry);
-                    Transition(quantityDialog ? Stage.AwaitQuantity : Stage.AwaitSlot, $"Adding item {slotIndex + 1}/{batch.Entries.Count}…", 250);
+                    Transition(quantityDialog ? Stage.AwaitQuantity : Stage.AwaitSlot, $"Adding item {slotIndex + 1}/{batch.Entries.Count}…");
                     break;
                 case Stage.AwaitQuantity:
                     RequireOpen(trade);
                     if (native.SubmitQuantity(batch!.Entries[slotIndex].Quantity, addonId))
                     {
                         Trace($"quantity submitted slot={slotIndex}; quantity={batch.Entries[slotIndex].Quantity}");
-                        Transition(Stage.AwaitSlot, "Waiting for the game to apply the quantity…", 350);
+                        Transition(Stage.AwaitSlot, "Waiting for the game to apply the quantity…");
                     }
                     break;
                 case Stage.AwaitSlot:
                     RequireOpen(trade);
                     if (trade.SyncPending || native.HasNumeric) break;
                     if (!LocalMatches(trade, slotIndex + 1)) break;
+                    pacing.ConfirmOfferedItem();
                     slotIndex++;
-                    Transition(Stage.Fill, "Continuing the outgoing offer…", 250);
+                    Transition(Stage.Fill, "Continuing the outgoing offer…");
                     break;
                 case Stage.SenderReady:
                     RequireOpen(trade);
@@ -215,15 +230,9 @@ public sealed class TradeRunner : IDisposable
                 case Stage.ReceiverOffer:
                     RequireOpen(trade);
                     RequireNoOutgoing(trade);
-                    if (trade.SyncPending || trade.RemoteItems.Count == 0 || !IsLocked(trade.RemoteState)) break;
-                    var fingerprint = Fingerprint(trade.RemoteItems);
-                    if (fingerprint != offerFingerprint)
-                    {
-                        offerFingerprint = fingerprint;
-                        offerStableSince = now;
-                        break;
-                    }
-                    if (now - offerStableSince < 750) break;
+                    if (!pacing.ObserveIncoming(now, Fingerprint(trade.RemoteItems),
+                            !trade.SyncPending && trade.RemoteItems.Count > 0
+                            && IsLocked(trade.RemoteState) && !native.HasModal)) break;
                     incoming = trade.RemoteItems.ToArray();
                     if (singleBatch && !IncomingMatchesExpected(incoming))
                         throw new InvalidOperationException("Incoming items do not match the coordinator's agreed batch.");
@@ -237,17 +246,19 @@ public sealed class TradeRunner : IDisposable
                     {
                         finalConfirmationSent = true;
                         Trace("final confirmation dispatched; completion still requires closed UI and exact inventory deltas");
-                        Transition(Stage.Completion, "Waiting for trade completion…", 250);
+                        Transition(Stage.Completion, "Waiting for trade completion…");
                     }
                     break;
                 case Stage.Completion:
                     // The server may clear the offer just before the window closes.
                     // We make no more native actions after final confirmation.
-                    if (trade.IsOpen) break;
-                    Transition(Stage.Settlement, "Verifying the inventory changes…", 750);
+                    // Let the previous trade's native state clear before another batch can
+                    // mistake it for acknowledgment of a new opening request.
+                    if (!native.IsInventoryTallyReady) break;
+                    Transition(Stage.Settlement, "Verifying the inventory changes…");
                     break;
                 case Stage.Settlement:
-                    if (trade.IsOpen) throw new InvalidOperationException("Another trade opened before inventory verification completed.");
+                    if (native.HasTradeUi) throw new InvalidOperationException("Another trade opened before inventory verification completed.");
                     Settle();
                     break;
             }
@@ -261,7 +272,7 @@ public sealed class TradeRunner : IDisposable
 
     private void Begin(RunRequest request)
     {
-        if (native.ReadTrade().IsOpen || native.HasModal)
+        if (native.HasTradeUi || native.HasModal)
             throw new InvalidOperationException("Close the current trade and confirmation windows before starting.");
         if (request.Partner.EntityId == Plugin.ObjectTable.LocalPlayer!.EntityId)
             throw new InvalidOperationException("Select the other account's character.");
@@ -274,10 +285,10 @@ public sealed class TradeRunner : IDisposable
         progress = IsReceiver ? null : new TradeProgressTracker(request.Lines);
         receivedBatches = 0;
         openingGate.Reset();
+        pacing.BeginBatch();
         nextDiagnosticAt = 0;
         addonId = 0;
         finalConfirmationSent = false;
-        offerFingerprint = string.Empty;
         Transition(IsReceiver ? Stage.ReceiverIdle : Stage.Prepare,
             IsReceiver ? $"Receiving items only from {partner.Name}. Armed for five minutes." : "Planning the first batch…");
     }
@@ -295,9 +306,10 @@ public sealed class TradeRunner : IDisposable
         addonId = 0;
         slotIndex = 0;
         finalConfirmationSent = false;
-        if (native.HasModal || native.ReadTrade().IsOpen)
+        if (native.HasModal || native.HasTradeUi)
             throw new InvalidOperationException("An unexpected window prevents the next trade.");
         openingGate.Reset();
+        pacing.BeginBatch();
         native.SelectPartner(partner!);
         Trace($"partner selected for a later request; partner={partner!.EntityId}; plannedQuantity={batch.TotalQuantity}; slots={batch.Entries.Count}");
         Transition(Stage.AwaitOpen, "Waiting for the selected partner and game to be ready…");
@@ -322,10 +334,10 @@ public sealed class TradeRunner : IDisposable
                 before.GetValueOrDefault(key) >= after.GetValueOrDefault(key) &&
                 before.GetValueOrDefault(key) - after.GetValueOrDefault(key) == expected.GetValueOrDefault(key));
         }
-        if (!matches)
+        if (!pacing.ObserveSettlement(Environment.TickCount64, matches))
         {
-            if (Environment.TickCount64 - enteredAt < 5000) return;
-            throw new InvalidOperationException("Trade completion could not be reconciled with inventory. Progress was not changed; review the items before restarting.");
+            if (matches || Environment.TickCount64 - enteredAt < 5000) return;
+            throw new InvalidOperationException("Trade completion could not be reconciled with inventory. The paired workflow will tally both characters before continuing.");
         }
         if (!finalConfirmationSent) throw new InvalidOperationException("Trade completion was not initiated by this run.");
         // There is no stable public trade-success event here. Completion evidence is:
@@ -349,10 +361,10 @@ public sealed class TradeRunner : IDisposable
         if (IsReceiver)
         {
             receivedBatches++;
-            offerFingerprint = string.Empty;
-            Transition(Stage.ReceiverIdle, $"Received {receivedBatches} verified batch(es). Waiting for {partner!.Name}…", 1000);
+            pacing.BeginBatch();
+            Transition(Stage.ReceiverIdle, $"Received {receivedBatches} verified batch(es). Waiting for {partner!.Name}…");
         }
-        else Transition(Stage.Prepare, $"Verified batch {progress!.CompletedBatches}. Preparing the next…", 1200);
+        else Transition(Stage.Prepare, $"Verified batch {progress!.CompletedBatches}. Preparing the next…");
     }
 
     private static bool IsLocked(TradeState state) => state is TradeState.LockedIn or TradeState.WaitingForConfirmation or TradeState.Confirmed;
@@ -400,12 +412,11 @@ public sealed class TradeRunner : IDisposable
                 throw new InvalidOperationException("The incoming offer changed after it was locked.");
         }
     }
-    private void Transition(Stage next, string status, int delayMs = 0)
+    private void Transition(Stage next, string status)
     {
         Trace($"stage {stage} -> {next}; previousStageMs={Environment.TickCount64 - enteredAt}; status={status}");
         stage = next;
         enteredAt = Environment.TickCount64;
-        nextActionAt = enteredAt + delayMs;
         Status = status;
     }
     private void Halt(string reason)
@@ -440,7 +451,7 @@ public sealed class TradeRunner : IDisposable
             LatchOpeningAcknowledgement(opening);
             var trade = native.ReadTrade();
             Trace($"snapshot reason={reason}; stage={stage}; receiver={IsReceiver}; elapsedMs={Environment.TickCount64 - enteredAt}; requests={openingGate.Requests}; acknowledged={openingGate.Acknowledged}; slot={slotIndex}; finalConfirmation={finalConfirmationSent}; verifiedQuantity={VerifiedQuantity}; partner={partner.EntityId}; {opening.Describe()}");
-            Trace($"offer snapshot open={trade.IsOpen}; addon={trade.AddonId}; local=[{Fingerprint(trade.LocalItems)}]; remote=[{Fingerprint(trade.RemoteItems)}]; localGil={trade.LocalGil}; remoteGil={trade.RemoteGil}; numeric={native.HasNumeric}");
+            Trace($"offer snapshot open={trade.IsOpen}; uiPresent={native.HasTradeUi}; addon={trade.AddonId}; local=[{Fingerprint(trade.LocalItems)}]; remote=[{Fingerprint(trade.RemoteItems)}]; localGil={trade.LocalGil}; remoteGil={trade.RemoteGil}; numeric={native.HasNumeric}; offerOutstanding={pacing.OfferOutstanding}");
         }
         catch (Exception ex) { Trace($"snapshot unavailable: {ex.GetType().Name}: {ex.Message}"); }
     }

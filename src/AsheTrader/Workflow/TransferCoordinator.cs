@@ -106,18 +106,6 @@ public sealed partial class WorkflowService
             throw new InvalidOperationException("Wait for the local operation to stop before resuming.");
         if (Run is not { Paused: true, Step: not CoordinatorStep.Finished }) return;
         error = "";
-        var knownStorageStop = Run.TradeOperationId == null ? Run.Pending.SingleOrDefault(pending =>
-            StorageReconciliation.IsStorage(pending.Command)
-            && pending.Response is { Ambiguous: true, Observation: not null }) : null;
-        if (knownStorageStop != null)
-        {
-            // A recorded uncertain stop needs an explicit review, not another query of the
-            // same failed result. Keep its evidence visible and do not briefly restart work.
-            error = Run.Status = StorageReviewMessage(knownStorageStop);
-            RecordDiagnostic($"Storage review required before resume; command={knownStorageStop.Command.Id}; confirmed={knownStorageStop.Response!.Observation!.MovedQuantity}; no command resent");
-            SaveRun();
-            return;
-        }
         if (Run.Journal == null)
         {
             // Pre-plan selections have not carried cargo and may be re-ranked after a pause.
@@ -137,9 +125,9 @@ public sealed partial class WorkflowService
             }
             else
             {
-                // Query durable outcomes. Never prepare/reissue an ambiguous game transaction.
-                foreach (var pending in Run.Pending) { pending.Response = null; pending.Ready = false; }
-                Run.Step = CoordinatorStep.AwaitTrade;
+                Run.TradeRecovery = null;
+                BeginAutomaticTradeRecovery("Resuming the interrupted trade with live inventory tallies…");
+                return;
             }
         }
         else
@@ -168,7 +156,9 @@ public sealed partial class WorkflowService
             {
                 // A pickup/deposit may have finished before its result reached this PC.
                 // Recover the original command ID rather than moving another load blindly.
+                RememberAppliedStorageQuantity(storage);
                 storage.Response = null;
+                storage.StorageRecoveryRequested = true;
                 if (storage.InventoryItemIndex.HasValue)
                 {
                     Run.PreviousItemDepositIndex = storage.InventoryItemIndex;
@@ -186,6 +176,7 @@ public sealed partial class WorkflowService
             }
         }
         Run.Paused = false;
+        Run.ConsecutiveEmptyTrades = 0;
         Run.Status = "Resuming from saved progress…";
         resendAt = 0;
         SaveRun();
@@ -199,15 +190,13 @@ public sealed partial class WorkflowService
             && pending.Response?.NeverStarted != true && !StorageReconciliation.IsReviewed(pending.Response)
             && (pending.Response?.Observation == null || pending.Response.Ambiguous));
         if (unresolvedStorage != null)
-            RefuseToEndPausedJob(unresolvedStorage.Response?.Observation != null
-                ? "Review interrupted storage first: inspect bags and retainers, then use Accept recorded storage count only if that recorded amount is all that moved. After the review, use Resume / reconcile to finish any relay deliveries before ending the job."
-                : "Recover the interrupted storage observation with Resume / reconcile before ending the job. Review any uncertain movement first, then resume any remaining relay deliveries.");
+            RefuseToEndPausedJob("Use Resume / tally inventories to resolve the interrupted retainer movement first, then let the job deliver any remaining relay cargo before ending it. The saved movement and its confirmed progress are preserved.");
         if (Run.Journal != null)
         {
             var ledger = new TransferJobLedger(Run.Journal);
-            if (ledger.HasPendingOperation) RefuseToEndPausedJob("Reconcile the pending trade before ending the job.");
+            if (ledger.HasPendingOperation) RefuseToEndPausedJob("Use Resume / tally inventories to resolve the pending trade before ending the job.");
             if (Run.Journal.Plan.Allocations.Where(x => x.Legs.Count == 2).Any(x => ledger.RelayCargo(x.Legs[0].ReceiverId) > 0))
-                RefuseToEndPausedJob("A relay still holds undelivered cargo. After any interrupted storage review is accepted, use Resume / reconcile to finish delivering that cargo before ending this job.");
+                RefuseToEndPausedJob("A relay still holds undelivered cargo. Use Resume / tally inventories to finish delivering it before ending this job.");
             ledger.Pause("Job ended by user before all requested quantities were delivered.");
         }
         Run.Step = CoordinatorStep.Finished;
@@ -227,9 +216,8 @@ public sealed partial class WorkflowService
     private static string StorageReviewMessage(PendingCommand pending)
     {
         var action = pending.Command.Operation.Kind == GameOperationKind.Deposit ? "deposit" : "pickup";
-        return pending.Response?.Observation is { } observation
-            ? $"A retainer {action} has an uncertain outcome after {observation.MovedQuantity:N0} confirmed item(s). Use Review interrupted storage, inspect bags and retainers, then use Accept recorded storage count only if no additional items moved. The job stays paused until that review is accepted."
-            : $"A retainer {action} has an uncertain outcome without a recorded stop observation. Use Resume / reconcile to recover the original worker result; preserve diagnostics if the observation remains unavailable. No item movement will be retried.";
+        return $"A retainer {action} could not be tallied automatically. {pending.Response?.Error} "
+            + "Keep the original character logged in and use Resume / tally inventories after following the inventory or window instructions. The pending movement will not be repeated without matching inventory evidence.";
     }
 
     private void RequirePair()
@@ -297,6 +285,14 @@ public sealed partial class WorkflowService
         if (response.Ready) pending.Ready = true;
         else
         {
+            RememberAppliedStorageQuantity(pending);
+            if (pending.Response is { AutoReconciled: true } resolved)
+            {
+                if (!response.AutoReconciled) return;
+                if (response.Success != resolved.Success || response.Ambiguous || response.Quantity != resolved.Quantity
+                    || response.Observation?.MovedQuantity != resolved.Observation?.MovedQuantity)
+                    throw new InvalidDataException("Conflicting automatically tallied results arrived for the same operation.");
+            }
             // A delayed pre-review reply must not undo a durable, explicit storage decision.
             if (StorageReconciliation.IsStorage(pending.Command) && StorageReconciliation.IsReviewed(pending.Response))
             {
@@ -316,17 +312,15 @@ public sealed partial class WorkflowService
             }
         }
         SaveRun();
-        if (!response.Ready && !response.Success && !response.OperatorReviewed
+        if (!response.Ready && !response.Success && !response.OperatorReviewed && !response.AutoReconciled
             && pending.Command.Kind is WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch)
         {
-            if (Run is { Paused: false })
+            if (Run is { Paused: false, TradeRecovery: null })
             {
-                // A failed side cannot be completed by leaving the other side armed. Stop both
-                // immediately, retaining both command IDs for explicit, inventory-backed review.
-                RecordDiagnostic($"Trade failure received; command={pending.Command.Id}; kind={pending.Command.Kind}; stopping both PCs; error={response.Error}");
-                Pause(TradeFailureMessage());
+                RecordDiagnostic($"Trade failure received; command={pending.Command.Id}; kind={pending.Command.Kind}; stopping both PCs for automatic tally; error={response.Error}");
+                BeginAutomaticTradeRecovery("Trade stopped; tallying both characters before continuing…");
             }
-            else
+            else if (Run!.Paused)
             {
                 // The stopped peer or a later query can reply after the pause. Keep both
                 // explanations visible instead of replacing the original timeout with a stop.
@@ -353,7 +347,24 @@ public sealed partial class WorkflowService
             AccountStorageMovement(pending, characterId);
             if (pending.Response.Ambiguous)
             {
+                if (!pending.StorageRecoveryRequested)
+                {
+                    pending.StorageRecoveryRequested = true;
+                    pending.Response = null;
+                    Run.Status = "Tallying the interrupted retainer movement against its saved starting counts…";
+                    resendAt = 0;
+                    SaveRun();
+                    return false;
+                }
                 throw new InvalidOperationException(StorageReviewMessage(pending));
+            }
+            if (pending.Response.AutoReconciled && !pending.Response.Success)
+            {
+                Run.Pending.Clear();
+                Run.PreviousItemDepositIndex = null;
+                Run.PreviousItemDepositCharacterId = 0;
+                SetStep(CoordinatorStep.SelectLeg);
+                return true;
             }
         }
         if (!pending.Response.Success) throw new InvalidOperationException(pending.Response.Error);
@@ -369,8 +380,14 @@ public sealed partial class WorkflowService
 
     private void AccountStorageMovement(PendingCommand pending, ulong characterId)
     {
-        if (!pending.InventoryAdjustmentApplied && pending.Response?.Observation is { } result)
+        if (pending.Response?.Observation is { } result)
         {
+            RememberAppliedStorageQuantity(pending);
+            var previouslyApplied = pending.AppliedStorageQuantity.GetValueOrDefault();
+            if (result.MovedQuantity < previouslyApplied)
+                throw new InvalidDataException("Recovered storage progress is smaller than already accounted progress.");
+            var additional = result.MovedQuantity - previouslyApplied;
+            if (additional == 0) return;
             var pickup = pending.Command.Operation.Kind == GameOperationKind.Withdraw;
             if (result.CharacterId != characterId || result.MovedQuantity > pending.Command.Operation.Quantity)
                 throw new InvalidDataException(pickup ? "Invalid provider pickup observation." : "Invalid deposit observation.");
@@ -381,15 +398,23 @@ public sealed partial class WorkflowService
                 if (pickup || pending.Command.Operation.ItemId != previous.Definition.ItemId
                     || pending.Command.Operation.HighQuality != previous.Definition.HighQuality || previous.Journal == null)
                     throw new InvalidDataException("The stored item does not match its completed job-item ledger.");
-                if (result.MovedQuantity > DepositAllowance(previous.Journal, previous.Deposited, characterId))
+                if (additional > DepositAllowance(previous.Journal, previous.Deposited, characterId))
                     throw new InvalidDataException("A previous-item deposit exceeded its remaining received-item allowance.");
                 quantities = previous.Deposited;
             }
             else quantities = pickup ? Run!.Withdrawn : Run!.Deposited;
-            quantities[characterId] = checked(quantities.GetValueOrDefault(characterId) + result.MovedQuantity);
+            quantities[characterId] = checked(quantities.GetValueOrDefault(characterId) + additional);
+            pending.AppliedStorageQuantity = result.MovedQuantity;
             pending.InventoryAdjustmentApplied = true;
             SaveRun();
         }
+    }
+
+    private static void RememberAppliedStorageQuantity(PendingCommand pending)
+    {
+        if (StorageReconciliation.IsStorage(pending.Command) && pending.AppliedStorageQuantity == null
+            && pending.InventoryAdjustmentApplied && pending.Response?.Observation is { } previous)
+            pending.AppliedStorageQuantity = previous.MovedQuantity;
     }
 
     private static ulong DepositAllowance(TransferJobJournal journal, Dictionary<ulong, ulong> deposited, ulong characterId)
@@ -449,6 +474,7 @@ public sealed partial class WorkflowService
     {
         if (!host || !Connected || RemoteRoster == null) { Pause("Both paired clients must be connected."); return; }
         var run = Run!;
+        if (run.TradeRecovery != null) { AdvanceAutomaticTradeRecovery(); return; }
         if (run.Journal == null && run.Step is CoordinatorStep.DiscoverLogin or CoordinatorStep.DiscoverScan)
         {
             // Older journals may have stopped in automatic live discovery. These commands
@@ -459,7 +485,7 @@ public sealed partial class WorkflowService
         }
         if (run.Pending.Count > 0 && Environment.TickCount64 >= resendAt)
         {
-            resendAt = Environment.TickCount64 + 5000;
+            resendAt = Environment.TickCount64 + (run.Pending.Any(pending => pending.StorageRecoveryRequested) ? 500 : 5000);
             foreach (var pending in run.Pending.Where(x => x.Response == null).ToArray())
             {
                 // A trade is queried after interruption; ordinary commands are idempotent by command ID.
@@ -658,7 +684,7 @@ public sealed partial class WorkflowService
                     throw new InvalidOperationException(TradeFailureMessage());
                 if (run.Pending.Count == 1) Issue(leg.SenderPeerId, Command(leg.SenderId, GameOperationKind.Inspect, run.DesiredQuantity,
                     workerKind: WorkerCommandKind.SendBatch, partner: leg.ReceiverId), marksTrade: true);
-                if (run.Paused) break;
+                if (run.Paused || run.TradeRecovery != null) break;
                 SetStep(CoordinatorStep.AwaitTrade);
                 break;
             case CoordinatorStep.AwaitTrade:
@@ -674,11 +700,11 @@ public sealed partial class WorkflowService
         if (run.Pending.Count != 2)
         {
             // The coordinator may have stopped after arming but before issuing the sender.
-            if (run.Pending.Count == 1 && (run.Pending[0].Response is { Unchanged: true, OperatorReviewed: true } or { NeverStarted: true }))
+            if (run.Pending.Count == 1 && run.Pending[0].Response is { } receiverOnly && IsVerifiedNoTransfer(receiverOnly))
             {
                 var op = run.Journal!.Operations.Single(x => x.Id == run.TradeOperationId);
-                if (op.State != TransferOperationState.Prepared) throw new InvalidOperationException("Issued trade has an incomplete command journal.");
-                ledger.CancelBeforeIssue(op.Id);
+                if (op.State is not (TransferOperationState.Prepared or TransferOperationState.Cancelled)) throw new InvalidOperationException("Issued trade has an incomplete command journal.");
+                if (op.State != TransferOperationState.Cancelled) ledger.CancelBeforeIssue(op.Id);
                 run.Pending.Clear(); run.TradeOperationId = null; SetStep(CoordinatorStep.SelectLeg);
             }
             else if (run.Pending.Count == 0 || run.Pending.Any(x => x.Response != null))
@@ -692,18 +718,21 @@ public sealed partial class WorkflowService
         if (sender == null || receiver == null) return;
         if (IsVerifiedNoTransfer(sender) && IsVerifiedNoTransfer(receiver))
         {
-            if (!ledger.ResolveNoTransfer(run.TradeOperationId!.Value, Observe(leg.SenderPeerId, leg.SenderId, 0),
+            if (run.Journal!.Operations.Single(operation => operation.Id == run.TradeOperationId).State != TransferOperationState.Cancelled
+                && !ledger.ResolveNoTransfer(run.TradeOperationId!.Value, Observe(leg.SenderPeerId, leg.SenderId, 0),
                 Observe(leg.ReceiverPeerId, leg.ReceiverId, 0), out var failure)) throw new InvalidOperationException(failure);
         }
         else
         {
             if (!sender.Success || !receiver.Success || sender.Quantity != run.DesiredQuantity || receiver.Quantity != run.DesiredQuantity)
                 throw new InvalidOperationException(TradeFailureMessage());
+            var alreadyCommitted = run.Journal!.Operations.Single(operation => operation.Id == run.TradeOperationId).State == TransferOperationState.Committed;
             ledger.RecordObservation(run.TradeOperationId!.Value, ObservationSide.Sender, Observe(leg.SenderPeerId, leg.SenderId, sender.Quantity));
             ledger.RecordObservation(run.TradeOperationId.Value, ObservationSide.Receiver, Observe(leg.ReceiverPeerId, leg.ReceiverId, receiver.Quantity));
             SaveRun();
             if (!ledger.TryCommit(run.TradeOperationId.Value, out var failure)) throw new InvalidOperationException(failure);
-            ObserveCommittedRelayCapacity(leg, sender.Quantity);
+            if (!alreadyCommitted) ObserveCommittedRelayCapacity(leg, sender.Quantity);
+            run.ConsecutiveEmptyTrades = 0;
             SaveRun();
         }
         run.Pending.Clear(); run.TradeOperationId = null;
@@ -715,7 +744,7 @@ public sealed partial class WorkflowService
         var failures = Run!.Pending.Where(pending => pending.Response is { Success: false })
             .Select(pending => $"{(pending.Command.Kind == WorkerCommandKind.SendBatch ? "Sender" : "Receiver")}: {pending.Response!.Error}");
         return $"Trade stopped; both PCs were asked to pause. {string.Join("; ", failures)} "
-            + "No trade will be repeated automatically. Keep the original characters logged in, use Review interrupted trade, then Resume / refresh observations to collect both inventory counts and explicitly review the batch outcome.";
+            + "Keep the original characters logged in and close trade windows. Resume / tally inventories compares both saved starting counts with the live bags before deciding whether anything needs to be traded again.";
     }
 
     private static TransferObservation Observe(Guid peerId, ulong characterId, uint quantity) => new()
@@ -774,5 +803,5 @@ public sealed partial class WorkflowService
         else Send("resolve", resolution);
     }
 
-    private static bool IsVerifiedNoTransfer(WorkerResponse response) => response.NeverStarted || (response.Unchanged && response.OperatorReviewed && !response.Ambiguous);
+    private static bool IsVerifiedNoTransfer(WorkerResponse response) => response.NeverStarted || (response.Unchanged && (response.OperatorReviewed || response.AutoReconciled) && !response.Ambiguous);
 }

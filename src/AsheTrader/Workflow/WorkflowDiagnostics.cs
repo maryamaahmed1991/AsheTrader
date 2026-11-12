@@ -44,7 +44,7 @@ public sealed partial class WorkflowService
         executor.CaptureDiagnosticSnapshot("User requested diagnostic report");
         plugin.Trader.CaptureDiagnosticSnapshot("User requested diagnostic report");
         var header = new WorkflowTrace(40, 2000);
-        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 3; timestamps UTC; this PC only");
+        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 4; timestamps UTC; this PC only");
         header.Add("Session", $"Role={(IsHost ? "coordinator" : "worker")}; connected={Connected}; paired={HasAcceptedConnection}; remoteControl={Settings.AllowRemoteControl}; journalHealthy={journalHealthy}");
         header.Add("Game", $"loggedIn={Plugin.ClientState.IsLoggedIn}; characterId={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; language={Plugin.ClientState.ClientLanguage}");
         header.Add("Status", Status);
@@ -52,17 +52,25 @@ public sealed partial class WorkflowService
         {
             header.Add("Coordinator", $"job={run.Job.Definition.Id}; step={run.Step}; paused={run.Paused}; itemIndex={run.ActiveItemIndex}; discoveryIndex={run.DiscoveryIndex}/{run.DiscoveryOrder.Count}; pending={run.Pending.Count}");
             header.Add("Routing", $"meetingWorld={run.EffectiveMeeting?.WorldId ?? 0}; DC={run.MeetingDataCenterName}; pinned={run.MeetingPinned}; collectionStops={run.CollectionRoute?.Count ?? 0}; reason={run.MeetingReason}; relayDelivering={run.RelayFlushCharacterId?.ToString() ?? "none"}");
+            if (run.TradeRecovery is { } recovery)
+                header.Add("AutomaticTally", $"round={recovery.RoundId}; transferred={recovery.Transferred?.ToString() ?? "undecided"}; tallies={recovery.Tallies.Count}; durableAcknowledgements={recovery.Acknowledgements.Count}; consecutiveEmptyTrades={run.ConsecutiveEmptyTrades}");
             foreach (var pending in run.Pending.Take(4))
             {
                 header.Add("Pending", $"command={pending.Command.Id}; kind={pending.Command.Kind}/{pending.Command.Operation.Kind}; character={pending.Command.Operation.CharacterId}; item={pending.Command.Operation.ItemId}; HQ={pending.Command.Operation.HighQuality}; quantity={pending.Command.Operation.Quantity}; response={pending.Response?.Success.ToString() ?? "waiting"}; error={pending.Response?.Error ?? ""}");
                 if (StorageReconciliation.IsStorage(pending.Command))
                     header.Add("StorageRecovery", $"command={pending.Command.Id}; responsePresent={pending.Response != null}; ambiguous={pending.Response?.Ambiguous}; operatorReviewed={pending.Response?.OperatorReviewed}; observationPresent={pending.Response?.Observation != null}; confirmedMoved={pending.Response?.Observation?.MovedQuantity}; bagAtStop={pending.Response?.Observation?.BagQuantity}; movementUncertain={pending.Response?.Observation?.MovementUncertain}; accountingApplied={pending.InventoryAdjustmentApplied}; reviewAccepted={StorageReconciliation.IsReviewed(pending.Response)}");
                 if (pending.Command.Kind is WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch)
-                    header.Add("TradeRecovery", $"trade={run.TradeOperationId}; command={pending.Command.Id}; peer={pending.PeerId}; side={pending.Command.Kind}; responsePresent={pending.Response != null}; ambiguous={pending.Response?.Ambiguous}; operatorReviewed={pending.Response?.OperatorReviewed}; beforeQuantity={pending.Response?.BeforeQuantity}; currentQuantity={pending.Response?.CurrentQuantity}; expectedQuantity={pending.Command.Operation.Quantity}; neverStarted={pending.Response?.NeverStarted}; unchanged={pending.Response?.Unchanged}");
+                    header.Add("TradeRecovery", $"trade={run.TradeOperationId}; command={pending.Command.Id}; peer={pending.PeerId}; side={pending.Command.Kind}; responsePresent={pending.Response != null}; ambiguous={pending.Response?.Ambiguous}; autoReconciled={pending.Response?.AutoReconciled}; operatorReviewed={pending.Response?.OperatorReviewed}; beforeQuantity={pending.Response?.BeforeQuantity}; currentQuantity={pending.Response?.CurrentQuantity}; expectedQuantity={pending.Command.Operation.Quantity}; neverStarted={pending.Response?.NeverStarted}; unchanged={pending.Response?.Unchanged}");
             }
         }
         if (activeWorker is { } worker)
             header.Add("Worker", $"command={worker.Command.Id}; job={worker.Command.JobId}; kind={worker.Command.Kind}/{worker.Command.Operation.Kind}; character={worker.Command.Operation.CharacterId}; item={worker.Command.Operation.ItemId}; HQ={worker.Command.Operation.HighQuality}; quantity={worker.Command.Operation.Quantity}; tradeStarted={worker.TradeStarted}");
+        foreach (var record in workerRecords.Values.Where(record => record.StorageCheckpoint != null
+                     && (record.Response == null || record.Response.Ambiguous)).Take(3))
+        {
+            var checkpoint = record.StorageCheckpoint!;
+            header.Add("StorageCheckpoint", $"command={record.Command.Id}; character={checkpoint.CharacterId}; item={checkpoint.ItemId}; HQ={checkpoint.HighQuality}; kind={checkpoint.Kind}; retainer={checkpoint.RetainerId}; bagBefore={checkpoint.BagBeforeQuantity}; retainerBefore={checkpoint.RetainerBeforeQuantity}; attempted={checkpoint.AttemptedQuantity}; confirmedBefore={checkpoint.ConfirmedMovedBefore}; recordedAt={checkpoint.RecordedAt:O}");
+        }
         try
         {
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "AsheTrader", "AutoRetainer", "Lifestream", "vnavmesh", "InventoryTools", "AllaganTools" };

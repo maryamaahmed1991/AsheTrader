@@ -44,6 +44,7 @@ public sealed class GameOperationResult
     public uint StackSize { get; set; }
     public uint MovedQuantity { get; set; }
     public bool MovementUncertain { get; set; }
+    public StorageMovementCheckpoint? StorageCheckpoint { get; set; }
     public bool RetainerRosterVerified { get; set; }
     // Cache reads are read-only observations of another character, not live game operations.
     public bool CachedInventoryAvailable { get; set; }

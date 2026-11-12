@@ -19,7 +19,8 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 - Allocate additional quantities, collect all with a final remainder recipient, or restock to a combined bag/retainer total.
 - Trade providers' carried stock first, then repeatedly collect bounded loads from their retainers and return to the meeting point until their assignments are complete.
 - Return a full receiver home, deposit received job items into allowed retainers, then return and continue.
-- Persist both worker results and coordinator progress. Interrupted trades with incomplete evidence require explicit reconciliation.
+- Pace trade offers at a minimum of 250 ms, advancing on observed game readiness instead of stacked delays.
+- Persist worker results and coordinator progress. Resume tallies both PCs' current inventories and reconciles interrupted transfers automatically.
 - Preserve the local trade-list mode, workshop fuel purchasing, and Lifestream house import.
 
 ## Runtime requirements
@@ -42,7 +43,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.9.0.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.10.0.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
@@ -80,9 +81,9 @@ Provider bags and retainer stored inventory are included automatically. When a p
 
 ## Progress and recovery
 
-Version 0.3.9 separates partner selection from the trade request and requires 500 ms of stable readiness. Meeting travel finishes within one unit of the recorded point; the sender also checks the actual distance to its partner before requesting. An opening request with no game acknowledgment can be attempted at most three times, at least three seconds apart. Any observed trade state or window acknowledgment permanently disables opening retries for that batch. Item offers and completed trades are never retried by this gate. Either PC's failure now pauses both PCs promptly, and evidence refresh preserves the original error. **Review interrupted trade** opens a card with both PCs' counts, a refresh action and explicit outcome controls. Trade diagnostics include request attempts, actual distance, target identity, raw states and offers.
+Version 0.3.10 uses the offer spacing observed in Dropbox's public source: a single 250 ms minimum between item callbacks, readiness polling for quantities and synchronization, and consecutive matching observations before accepting an incoming offer or settling inventory. The previous stacked item delays and post-trade sleeps are removed. Trade openings retain a three-second minimum between requests across batches, stable partner readiness, distance checks and bounded retries. Game/server latency still determines actual throughput. The implementation uses current Dalamud structures and independently written logic; it does not embed Dropbox's older native offsets.
 
-Version 0.3.8.1 makes the required recovery step visible: a known uncertain storage result changes the main Resume button to **Review interrupted storage**, opening the review at the top of Activity. Repeated Resume requests retain the recorded evidence and remain paused without resending the command. Review acceptance clears the old error; **Resume / reconcile** then continues. End job explains unresolved storage and relay cargo instead of directing users into a resume/end loop. Diagnostics include recorded movement, bag count and review state after a reload.
+Interrupted work uses **Resume / tally inventories** instead of review checkboxes. Both PCs must run this version (wire protocol 5). Existing configuration and journals remain in place. The tally reads the original characters' live item/quality counts, reconciles a completed or unchanged trade, and continues the remaining assignment. Conflicting evidence or missing historical storage checkpoints remains visible in Activity.
 
 Version 0.3.8 applies the 350 ms acknowledgement-driven movement loop to deposits too. It handles partial-stack quantity dialogs owned by either the retainer inventory or the depositing character's inventory, while checking the pending source slot, retainer identity, dialog ownership and limits. A 175/175 retainer can still accept matching partial-stack space; once item capacity reaches zero, collection proceeds to the next permitted retainer. Inn arrival now allows a fresh loading grace after Lifestream becomes idle, instead of measuring the entire journey against a ten-second missing-bell check. Loading, territory changes and cutscenes restart that grace. The coordinate-only meeting template and DC-grouped collection itinerary replace the earlier single-world meeting policy.
 
@@ -100,11 +101,11 @@ AutoRetainer supplies the offline retainer ownership list; Allagan Tools supplie
 
 Version 0.3.1 fixes character switching from inside the game. AutoRetainer's `CanAutoLogin` check and `Relog` IPC only allow the title screen; the adapter now uses its documented `/autoretainer relog Character Name@World` command, applying title readiness only while logged out. A dispatched command is not treated as a completed switch: the workflow waits for the requested character CID and idle AutoRetainer/Lifestream. If the switch stops without reaching the target, it pauses instead of repeatedly issuing commands.
 
-Only matching two-sided native results commit a trade automatically. Delivery totals do not decrease when recipients store items on their retainers. Relay holdings are pending delivery until the final leg commits.
+Trades commit from matching native results or from a paired recovery round with matching sender/receiver inventory changes and durable worker acknowledgements. Completed transfers are credited once. Delivery totals do not decrease when recipients store items on retainers. Relay holdings remain pending delivery until the final leg commits.
 
-If a client disconnects, a character changes unexpectedly, storage fills, or a native interaction cannot be verified, the job pauses. Reconnect and press Resume. Saved completed results are reconciled; an ambiguous trade is not replayed. If the original outcome was never saved, log in the original characters, inspect both inventories, and use the explicit reconciliation controls only after checking the evidence.
+If a client disconnects or the user pauses, reconnect and press **Resume / tally inventories**. The plugin retrieves saved outcomes and current inventories before issuing more work. Both original trade characters must be logged in for a fresh tally. Matching full transfer deltas credit the batch; unchanged inventories permit a bounded retry. Partial, one-sided or otherwise conflicting trade changes stop with the observed discrepancy instead of asking the user to choose an outcome.
 
-Retainer pickups and deposits recover their original saved result before moving another load. If a crash or interrupted callback leaves the last storage movement uncertain, the job remains paused. Inspect the original character's bags and retainers. If only the recorded confirmed quantity moved, close all storage/trade windows and use Activity's explicit recorded-count review; the worker requires the current item/HQ bag count to match the recorded stop. The job remains paused until Resume. If additional items moved or evidence is missing, preserve diagnostics for investigation. This build does not infer an uncertain storage movement from an aggregate count change.
+Retainer pickups and deposits save a checkpoint before each item callback and after each confirmed movement. Recovery compares the current inventory with that checkpoint, accounts for only the newly observed quantity and continues the remaining work. Old ambiguous records created before these checkpoints may lack enough evidence to recover automatically; preserve their diagnostics. Saved successful outcomes remain recoverable without repeating a movement.
 
 Overflow deposits are limited to received job-owned quantities. If a receiver starts completely full with no received job items to store, free space before resuming. If all permitted retainers are full, the job pauses with the unresolved quantity. When source stock is insufficient, available allocations finish and the result lists unmet targets; it is a terminal partial result, not a claim that the requested totals were reached. Create a new job for the remaining amounts after replenishing sources.
 
@@ -118,7 +119,7 @@ Once a GitHub repository exists:
 
 1. Push this source, preserving the license and notices.
 2. Upload the built `AsheTrader-<version>.zip` as a public release asset.
-3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.9.0`.
+3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.10.0`.
 4. Commit the generated root `repo.json` on `main`. Its raw GitHub URL is the permanent custom-repository feed; update that file for each release.
 
 Source is hosted in [maryamaahmed1991/AsheTrader](https://github.com/maryamaahmed1991/AsheTrader), with installable packages under [Releases](https://github.com/maryamaahmed1991/AsheTrader/releases). Pairing secrets and runtime journals must not be committed or included in release artifacts.

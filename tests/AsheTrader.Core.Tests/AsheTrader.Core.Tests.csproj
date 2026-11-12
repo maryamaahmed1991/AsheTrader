@@ -22,13 +22,16 @@
     <Compile Include="../../src/AsheTrader/Integrations/AutoRetainerRelogRequest.cs" Link="Production/AutoRetainerRelogRequest.cs" />
     <Compile Include="../../src/AsheTrader/Integrations/AllaganInventoryCache.cs" Link="Production/AllaganInventoryCache.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/TransferCoordinator.cs" Link="Production/TransferCoordinator.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/AutomaticTradeRecovery.cs" Link="Production/AutomaticTradeRecovery.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/AutomaticRelays.cs" Link="Production/AutomaticRelays.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/RelayBatchScheduling.cs" Link="Production/RelayBatchScheduling.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/MeetingRouting.cs" Link="Production/MeetingRouting.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/WorkflowModels.cs" Link="Production/WorkflowModels.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/TradeReconciliationEvidence.cs" Link="Production/TradeReconciliationEvidence.cs" />
     <Compile Include="../../src/AsheTrader/Trading/TradeOpeningGate.cs" Link="Production/TradeOpeningGate.cs" />
+    <Compile Include="../../src/AsheTrader/Trading/TradePacing.cs" Link="Production/TradePacing.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/GameOperations.cs" Link="Production/GameOperations.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/Native/StorageMovementCheckpoint.cs" Link="Production/StorageMovementCheckpoint.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/RetainerMenuMatcher.cs" Link="Production/RetainerMenuMatcher.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/BellInteractionGate.cs" Link="Production/BellInteractionGate.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/CutscenePreservation.cs" Link="Production/CutscenePreservation.cs" />

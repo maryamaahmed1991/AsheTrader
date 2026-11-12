@@ -303,7 +303,7 @@ public sealed class MultiItemCoordinatorTests
         for (var attempt = 0; attempt < 2; attempt++)
         {
             Assert.True(service.Run.Paused);
-            Assert.Contains("uncertain outcome", service.LastError);
+            Assert.Contains("could not be tallied automatically", service.LastError);
             Assert.Equal(4UL, service.Run.CompletedItems[0].Deposited[2]);
             Assert.Empty(service.Run.Deposited);
             Assert.Equal(6U, recipient.RetainerTotal);

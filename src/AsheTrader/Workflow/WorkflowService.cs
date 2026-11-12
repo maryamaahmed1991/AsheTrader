@@ -28,6 +28,7 @@ public sealed partial class WorkflowService : IDisposable
     private long peerSeenAt;
     private bool disposed;
     private bool journalHealthy = true;
+    private readonly Dictionary<Guid, (Guid Round, uint Quantity, long Since)> tradeTallySamples = [];
     private string error = "";
     public CoordinatorRun? Run { get; private set; }
     public PeerRoster? RemoteRoster { get; private set; }
@@ -56,6 +57,13 @@ public sealed partial class WorkflowService : IDisposable
         executor.Diagnostic = RecordDiagnostic;
         workerFile = new(Path.Combine(Plugin.PluginInterface.ConfigDirectory.FullName, "worker-journal.json"));
         runFile = new(Path.Combine(Plugin.PluginInterface.ConfigDirectory.FullName, "transfer-job.json"));
+        executor.PersistStorageCheckpoint = checkpoint =>
+        {
+            if (activeWorker?.Command.Id != checkpoint.OperationId)
+                throw new InvalidOperationException("The storage movement has no active durable worker command.");
+            activeWorker.StorageCheckpoint = Clone(checkpoint);
+            SaveWorkers();
+        };
         try
         {
             workerRecords = JsonConvert.DeserializeObject<Dictionary<Guid, WorkerRecord>>(workerFile.Load() ?? "{}") ?? [];
@@ -274,6 +282,18 @@ public sealed partial class WorkflowService : IDisposable
             case "query":
                 if (!host) HandleQuery(Decode<Guid>(message.Payload), acceptedPeerId!.Value);
                 break;
+            case "trade-tally":
+                if (!host && Settings.AllowRemoteControl) HandleTradeTally(Decode<TradeTallyRequest>(message.Payload), acceptedPeerId!.Value);
+                break;
+            case "trade-tally-result":
+                if (host) AcceptTradeTally(acceptedPeerId!.Value, Decode<TradeTallyReply>(message.Payload));
+                break;
+            case "trade-settle":
+                if (!host && Settings.AllowRemoteControl) HandleAutomaticTradeResolution(Decode<AutomaticTradeResolution>(message.Payload), acceptedPeerId!.Value);
+                break;
+            case "trade-settle-result":
+                if (host) AcceptAutomaticTradeResolution(acceptedPeerId!.Value, Decode<TradeResolutionReply>(message.Payload));
+                break;
             case "resolve":
                 if (!host && Settings.AllowRemoteControl) ResolveWorker(Decode<ManualResolution>(message.Payload), acceptedPeerId!.Value);
                 break;
@@ -332,6 +352,7 @@ public sealed partial class WorkflowService : IDisposable
         RecordDiagnostic($"Worker accepted command={command.Id}; job={command.JobId}; kind={command.Kind}/{command.Operation.Kind}; character={character.ContentId}; item={command.Operation.ItemId}; HQ={command.Operation.HighQuality}; quantity={command.Operation.Quantity}");
         workerRecords[command.Id] = activeWorker;
         SaveWorkers(); // Persist intent before any native action.
+        error = "";
         try
         {
             if (command.Kind == WorkerCommandKind.Game)
@@ -413,7 +434,12 @@ public sealed partial class WorkflowService : IDisposable
         { Reply(caller, new() { CommandId = id, NeverStarted = true, Unchanged = true, Error = "This operation has no persisted intent on this worker and was never started." }); return; }
         if (activeWorker?.Command.Id == id)
         { if (plugin.Trader.ReceiverReady) Reply(caller, new() { CommandId = id, Ready = true }); return; }
-        if (record.Response is { Success: true } or { OperatorReviewed: true } or { NeverStarted: true }) { Reply(caller, record.Response); return; }
+        if (record.Response is { Success: true } or { OperatorReviewed: true } or { AutoReconciled: true } or { NeverStarted: true }) { Reply(caller, record.Response); return; }
+        if (StorageReconciliation.IsStorage(record.Command) && (record.Response == null || record.Response.Ambiguous))
+        {
+            if (TryRecoverStorage(record, out var storageRecovery)) Reply(caller, storageRecovery);
+            return;
+        }
         if (record.Command.Kind is WorkerCommandKind.ReceiveBatch or WorkerCommandKind.SendBatch && !record.TradeStarted)
         {
             var notStarted = new WorkerResponse { CommandId = id, NeverStarted = true, Unchanged = true, Error = "No trade action was started for this operation." };
@@ -440,6 +466,106 @@ public sealed partial class WorkflowService : IDisposable
         if (Plugin.Framework.IsInFrameworkUpdateThread && !Plugin.Framework.IsFrameworkUnloading) executor.Stop(reason);
         plugin.Trader.Stop();
         if (notify && Connected) { try { Send("pause", new { }); } catch { } }
+    }
+
+    private void StopTradeForTally()
+    {
+        plugin.Trader.Stop();
+        if (Connected) Send("pause", new { });
+    }
+
+    private string? TradeTallyReadiness(WorkerRecord record)
+    {
+        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || plugin.Fuel.Active)
+            return "Waiting for both characters' active operations to stop…";
+        if (!plugin.Trader.IsInventoryTallyReady)
+            return "Waiting for the game to finish closing the trade before tallying inventory…";
+        if (!Plugin.ClientState.IsLoggedIn || Plugin.PlayerState.ContentId != record.Command.Operation.CharacterId)
+            throw new InvalidOperationException("Log in the original trade character on this PC, then use Resume / tally inventories.");
+        if (NativeRetainers.HasNumeric || NativeRetainers.HasRetainerList || NativeRetainers.HasRetainerMenu
+            || NativeRetainers.HasRetainerInventory || NativeRetainers.HasUnrelatedModal || NativeRetainers.HasActiveCutscene
+            || Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.OccupiedSummoningBell])
+            return "Waiting for trade, retainer and quantity windows to close before tallying inventories…";
+        var ar = plugin.AutoRetainer.GetStatus();
+        if (ar.Ready && (ar.Busy != false || ar.MultiModeEnabled != false))
+            throw new InvalidOperationException("Pause AutoRetainer multi-mode on this PC before tallying the interrupted trade.");
+        return null;
+    }
+
+    private void HandleTradeTally(TradeTallyRequest request, Guid caller)
+    {
+        TradeTallyReply reply;
+        try
+        {
+            if (!journalHealthy || request.RoundId == Guid.Empty) throw new InvalidOperationException("The saved worker journal or tally request is unavailable.");
+            if (!workerRecords.TryGetValue(request.CommandId, out var record))
+                reply = new(request.CommandId, request.RoundId, true, false,
+                    new() { CommandId = request.CommandId, NeverStarted = true, Unchanged = true, Error = "No worker intent exists; this side never started." });
+            else if (record.Command.Kind is not (WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch))
+                throw new InvalidOperationException("The requested command is not a trade.");
+            else if (record.Response is { Success: true } or { AutoReconciled: true } or { OperatorReviewed: true } or { NeverStarted: true })
+                reply = new(request.CommandId, request.RoundId, true, false, Clone(record.Response));
+            else if (TradeTallyReadiness(record) is { } waiting)
+            {
+                tradeTallySamples.Remove(request.CommandId);
+                reply = new(request.CommandId, request.RoundId, false, true, null, waiting);
+            }
+            else if (!record.TradeStarted)
+            {
+                record.Response = new() { CommandId = request.CommandId, NeverStarted = true, Unchanged = true, Error = "No native trade action was started." };
+                SaveWorkers();
+                reply = new(request.CommandId, request.RoundId, true, false, Clone(record.Response));
+            }
+            else if (record.BeforeQuantity is not { } before)
+                throw new InvalidOperationException("This older trade has no saved starting inventory count. Its outcome cannot be tallied automatically; preserve diagnostics and the current bags.");
+            else
+            {
+                var current = ReadQuantity(record.Command.Operation.ItemId, record.Command.Operation.HighQuality);
+                var now = Environment.TickCount64;
+                if (!tradeTallySamples.TryGetValue(request.CommandId, out var sample)
+                    || sample.Round != request.RoundId || sample.Quantity != current)
+                {
+                    tradeTallySamples[request.CommandId] = (request.RoundId, current, now);
+                    reply = new(request.CommandId, request.RoundId, false, true, null, "Checking that the stopped trade's inventory is stable…");
+                }
+                else if (now - sample.Since < 500)
+                    reply = new(request.CommandId, request.RoundId, false, true, null, "Checking that the stopped trade's inventory is stable…");
+                else
+                {
+                    record.TradeTallyRound = request.RoundId;
+                    record.TradeTallyCurrent = current;
+                    record.Response = TradeReconciliationEvidence.Capture(record.Command, record.Response, before, current);
+                    SaveWorkers();
+                    RecordDiagnostic($"Automatic trade tally; command={request.CommandId}; round={request.RoundId}; before={before}; current={current}");
+                    reply = new(request.CommandId, request.RoundId, true, false, Clone(record.Response));
+                }
+            }
+        }
+        catch (Exception exception) { reply = new(request.CommandId, request.RoundId, false, false, null, exception.Message); }
+        if (caller == Settings.PeerId) AcceptTradeTally(caller, reply);
+        else Send("trade-tally-result", reply);
+    }
+
+    private void HandleAutomaticTradeResolution(AutomaticTradeResolution resolution, Guid caller)
+    {
+        TradeResolutionReply reply;
+        try
+        {
+            if (!journalHealthy || !workerRecords.TryGetValue(resolution.CommandId, out var record))
+                throw new InvalidOperationException("The trade worker record is unavailable during automatic reconciliation.");
+            var settled = record.Response is { Success: true } or { AutoReconciled: true } or { OperatorReviewed: true } or { NeverStarted: true };
+            if (!settled && TradeTallyReadiness(record) is { } waiting) throw new InvalidOperationException(waiting);
+            var current = settled ? record.Response!.CurrentQuantity.GetValueOrDefault()
+                : ReadQuantity(record.Command.Operation.ItemId, record.Command.Operation.HighQuality);
+            record.Response = TradeReconciliationEvidence.Settle(record, resolution, current);
+            SaveWorkers();
+            error = "";
+            RecordDiagnostic($"Automatic trade outcome saved; command={resolution.CommandId}; round={resolution.RoundId}; transferred={resolution.Transferred}; quantity={record.Response.Quantity}");
+            reply = new(resolution.CommandId, resolution.RoundId, Clone(record.Response));
+        }
+        catch (Exception exception) { reply = new(resolution.CommandId, resolution.RoundId, null, exception.Message); }
+        if (caller == Settings.PeerId) AcceptAutomaticTradeResolution(caller, reply);
+        else Send("trade-settle-result", reply);
     }
 
     private void SaveWorkers()

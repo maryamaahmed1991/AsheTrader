@@ -362,7 +362,7 @@ public sealed class TransferCoordinatorTests
         service.RunToTerminal();
 
         Assert.True(service.Run!.Paused);
-        Assert.Contains("pickup has an uncertain outcome", service.LastError);
+        Assert.Contains("pickup could not be tallied automatically", service.LastError);
         var originalCommand = Assert.Single(service.Run.Pending).Command.Id;
         Assert.Equal(4UL, service.Run.Withdrawn[1]);
         for (var restart = 0; restart < 2; restart++)
@@ -374,7 +374,7 @@ public sealed class TransferCoordinatorTests
             service.RunToTerminal();
 
             Assert.True(service.Run.Paused);
-            Assert.Contains("pickup has an uncertain outcome", service.LastError);
+            Assert.Contains("pickup could not be tallied automatically", service.LastError);
             Assert.Equal(4UL, service.Run.Withdrawn[1]);
             Assert.Equal(6U, service.Characters[1].Bags);
             Assert.Equal(14U, service.Characters[1].RetainerTotal);
@@ -405,7 +405,7 @@ public sealed class TransferCoordinatorTests
     }
 
     [Fact]
-    public void ActualCoordinatorRequiresExplicitReviewForReceiverOnlyInterruptedBatch()
+    public void ActualCoordinatorAutomaticallyTalliesReceiverOnlyInterruptedBatch()
     {
         var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 100), Sim(2, PeerB));
         service.StartJob(Saved(Job([1], (2, 100))));
@@ -414,13 +414,8 @@ public sealed class TransferCoordinatorTests
         service.SimulateCoordinatorRestart(interruptArmedReceiver: true);
         service.Resume();
         service.RunToTerminal();
-        Assert.True(service.Run!.Paused);
-        Assert.Empty(service.Trades);
-        Assert.Throws<InvalidOperationException>(() => service.ResolvePendingTrade(true));
-        service.ResolvePendingTrade(false);
-        service.RunToTerminal();
-
-        Assert.False(service.Run.Paused, service.LastError);
+        Assert.False(service.Run!.Paused, service.LastError);
+        Assert.Null(service.Run.TradeRecovery);
         Assert.Equal(TransferOperationState.Cancelled, service.Run.Journal!.Operations.Single(operation => operation.Id == interruptedId).State);
         Assert.Equal(100UL, Ledger(service).DeliveredTo(2));
         Assert.Single(service.Trades);
@@ -528,42 +523,27 @@ public sealed class TransferCoordinatorTests
     }
 
     [Fact]
-    public void ActualCoordinatorCombinesNeverStartedSenderWithReviewedUnchangedReceiver()
+    public void ActualCoordinatorCombinesNeverStartedSenderWithAutomaticallyTalliedReceiver()
     {
         var service = new WorkflowService(PeerA, PeerB, Sim(1, PeerA, 100), Sim(2, PeerB))
         { RejectNextSenderBeforeStart = true };
         service.StartJob(Saved(Job([1], (2, 100))));
-        service.RunToTerminal();
-
-        Assert.True(service.Run!.Paused);
-        var interruptedId = service.Run.TradeOperationId!.Value;
-        var sender = Assert.Single(service.Run.Pending, pending => pending.Command.Kind == WorkerCommandKind.SendBatch);
-        var receiver = Assert.Single(service.Run.Pending, pending => pending.Command.Kind == WorkerCommandKind.ReceiveBatch);
-        Assert.True(sender.Response!.NeverStarted);
-        Assert.False(sender.Response.OperatorReviewed);
-        Assert.True(receiver.Response!.Ambiguous);
-        Assert.True(receiver.Response.Unchanged);
-        Assert.False(receiver.Response.OperatorReviewed);
+        service.RunUntil(run => run.TradeRecovery != null);
+        var interruptedId = service.Run!.TradeOperationId!.Value;
         Assert.Empty(service.Trades);
         Assert.Equal(0UL, Ledger(service).DeliveredTo(2));
-        Assert.Throws<InvalidOperationException>(() => service.ResolvePendingTrade(true));
 
-        service.ResolvePendingTrade(false);
-        Assert.True(receiver.Response!.OperatorReviewed);
-        Assert.False(receiver.Response.Ambiguous);
-        service.Tick();
+        service.RunToTerminal();
 
+        Assert.False(service.Run.Paused, service.LastError);
         var cancelled = service.Run.Journal!.Operations.Single(operation => operation.Id == interruptedId);
         Assert.Equal(TransferOperationState.Cancelled, cancelled.State);
         Assert.Equal(0UL, cancelled.SenderObservation!.Quantity);
         Assert.Equal(0UL, cancelled.ReceiverObservation!.Quantity);
-        Assert.Equal(0UL, Ledger(service).DeliveredTo(2));
-        Assert.Empty(service.Trades);
-        service.RunToTerminal();
-        Assert.False(service.Run.Paused, service.LastError);
         Assert.Equal(100UL, Ledger(service).DeliveredTo(2));
         Assert.Single(service.Trades);
         Assert.Equal(100UL, service.Characters[2].Total);
+        Assert.Null(service.Run.TradeRecovery);
     }
 
     [Fact]
@@ -587,7 +567,7 @@ public sealed class TransferCoordinatorTests
         service.RunToTerminal();
 
         Assert.True(service.Run!.Paused);
-        Assert.Contains("uncertain outcome", service.LastError);
+        Assert.Contains("could not be tallied automatically", service.LastError);
         var originalCommandId = Assert.Single(service.Run.Pending).Command.Id;
         Assert.Equal(50UL, service.Run.Deposited[2]);
         Assert.Equal(70U, service.Characters[2].RetainerTotal);
@@ -600,7 +580,7 @@ public sealed class TransferCoordinatorTests
             service.RunToTerminal();
 
             Assert.True(service.Run.Paused);
-            Assert.Contains("uncertain outcome", service.LastError);
+            Assert.Contains("could not be tallied automatically", service.LastError);
             Assert.Equal(50UL, service.Run.Deposited[2]);
             Assert.Equal(70U, service.Characters[2].RetainerTotal);
             Assert.Single(service.Trace, trace => trace.Operation == GameOperationKind.Deposit);

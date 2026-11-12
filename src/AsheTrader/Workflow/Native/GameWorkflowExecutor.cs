@@ -46,6 +46,7 @@ public sealed class GameWorkflowExecutor
     private int inventoryStableFrames;
     private string inventoryFingerprint = string.Empty;
     private RetainerTransferConfirmation? movementConfirmation;
+    private StorageMovementCheckpoint? storageCheckpoint;
     private int shutdown;
     private long nextDiagnosticAt;
     private string lastDiagnosticState = string.Empty;
@@ -59,6 +60,8 @@ public sealed class GameWorkflowExecutor
     public string Status { get; private set; } = "No workflow operation running.";
     public Guid? ActiveOperationId => operation?.Id;
     public Action<string>? Diagnostic { private get; set; }
+    // This callback must durably save or throw. Dispatch may not overtake the journal.
+    public Action<StorageMovementCheckpoint>? PersistStorageCheckpoint { private get; set; }
 
     public bool Execute(GameOperation command)
     {
@@ -79,6 +82,7 @@ public sealed class GameWorkflowExecutor
         };
         roster = []; observed.Clear(); rosterLoaded = false; moved = 0; retainerIndex = 0; movementIssued = false;
         movementConfirmation = null;
+        storageCheckpoint = null;
         pendingMoveSource = null;
         ownsLifestream = ownsNavigation = ownsRelog = restoreArSuppression = false;
         relogIdleSince = null;
@@ -429,6 +433,8 @@ public sealed class GameWorkflowExecutor
         var state = ar.GetStatus();
         if (state.Ready && (state.Busy != false || state.MultiModeEnabled != false)) throw new InvalidOperationException("Pause AutoRetainer and wait for its current tasks to finish.");
         if (operation.Kind == GameOperationKind.Inspect) { Finish(true); return; }
+        if (operation.Kind is GameOperationKind.Withdraw or GameOperationKind.Deposit)
+            SaveStorageCheckpoint(NativeRetainers.ReadBags(operation.ItemId, operation.HighQuality).Quantity, 0, 0);
         if (state.Ready && operation.Kind is GameOperationKind.ScanRetainers or GameOperationKind.Withdraw or GameOperationKind.Deposit)
         {
             var suppressed = Plugin.PluginInterface.GetIpcSubscriber<bool>("AutoRetainer.GetSuppressed").InvokeFunc();
@@ -595,6 +601,7 @@ public sealed class GameWorkflowExecutor
         pendingMoveSource = slot;
         movementConfirmation = new(Environment.TickCount64, bags.AllItems, retainer.AllItems,
             new(op.ItemId, op.HighQuality), moveQuantity, deposit);
+        SaveStorageCheckpoint(bags.Quantity, retainer.Quantity, moveQuantity);
         // Set before invoking native code: a callback can reach the game before managed
         // execution reports an error. A false positive requires inspection, not a retry.
         movementIssued = true;
@@ -616,6 +623,7 @@ public sealed class GameWorkflowExecutor
         // No timeout ever permits redispatching an unconfirmed movement.
         if (!confirmation.Observe(now, bags.AllItems, retainer.AllItems)) return;
         moved = checked(moved + moveQuantity); RecordRetainer(retainer.Quantity);
+        SaveStorageCheckpoint(bags.Quantity, retainer.Quantity, 0);
         var deposit = op.Kind == GameOperationKind.Deposit;
         Trace($"{(deposit ? "deposit" : "withdrawal")} confirmed; quantity={moveQuantity}; totalMoved={moved}; elapsedMs={confirmation.ElapsedMilliseconds(now)}; minimumIntervalMs={RetainerTransferConfirmation.MinimumIntervalMilliseconds}; sourceAndDestinationVerified=True");
         movementConfirmation = null;
@@ -635,6 +643,24 @@ public sealed class GameWorkflowExecutor
         observed.Add(new(CurrentRetainer.Id, CurrentRetainer.Name, quantity, true));
     }
 
+    private void SaveStorageCheckpoint(uint bags, uint retainer, uint attempted)
+    {
+        var op = operation!;
+        var identity = rosterLoaded && retainerIndex < roster.Count ? CurrentRetainer : null;
+        var checkpoint = new StorageMovementCheckpoint
+        {
+            OperationId = op.Id, CharacterId = op.CharacterId, ItemId = op.ItemId, HighQuality = op.HighQuality,
+            Kind = op.Kind, RequestedQuantity = op.Quantity, RetainerId = identity?.Id ?? 0, RetainerName = identity?.Name ?? "",
+            BagBeforeQuantity = bags, RetainerBeforeQuantity = retainer, AttemptedQuantity = attempted,
+            ConfirmedMovedBefore = moved, RecordedAt = DateTimeOffset.UtcNow,
+        };
+        var persist = PersistStorageCheckpoint
+            ?? throw new InvalidOperationException("Storage movement cannot start without its durable inventory checkpoint.");
+        persist(checkpoint);
+        storageCheckpoint = checkpoint;
+        Trace($"storage checkpoint saved; retainer={checkpoint.RetainerId}; bagBefore={bags}; retainerBefore={retainer}; attempted={attempted}; confirmedMoved={moved}");
+    }
+
     private void Finish(bool success, string error = "")
     {
         var op = operation;
@@ -644,7 +670,7 @@ public sealed class GameWorkflowExecutor
         var movementUncertain = !success && (op.Kind is GameOperationKind.Withdraw or GameOperationKind.Deposit)
             && (movementIssued || stage is Stage.WaitNumeric or Stage.WaitMove);
         if (movementUncertain)
-            error += " A retainer movement may already have completed. Inspect and reconcile both inventories before resuming; the pending amount must not be retried automatically.";
+            error += " A retainer movement may already have completed. Resume to tally the current inventory against its saved movement checkpoint before any remaining amount is attempted.";
         StopNavigation();
         if (!success) StopOwnedRelog();
         else ownsRelog = false;
@@ -658,6 +684,7 @@ public sealed class GameWorkflowExecutor
         var result = new GameOperationResult
         {
             Id = op.Id, Success = success, Error = error, CharacterId = op.CharacterId, MovedQuantity = moved, MovementUncertain = movementUncertain,
+            StorageCheckpoint = storageCheckpoint,
             RetainerRosterVerified = success && rosterLoaded && observed.Count == roster.Count && (op.Kind != GameOperationKind.Deposit || op.AllowedRetainerIds.Length == 0),
             Retainers = observed.ToList(), ObservedAt = DateTimeOffset.UtcNow,
         };
@@ -676,6 +703,37 @@ public sealed class GameWorkflowExecutor
         stage = Stage.Idle; operation = null;
         Status = result.Success ? $"{op.Kind} completed." : $"{op.Kind} paused: {result.Error}";
         results.Enqueue(result);
+    }
+
+    internal static bool TryCloseRecoveredStorage(StorageMovementCheckpoint checkpoint, Action<string>? trace)
+    {
+        RequireFramework();
+        if (!PlayerReady || Plugin.PlayerState.ContentId != checkpoint.CharacterId || NativeRetainers.HasActiveCutscene) return false;
+        if (NativeRetainers.HasNumeric || NativeRetainers.HasUnrelatedModal)
+            throw new InvalidOperationException("Close the pending quantity or trade confirmation window, then resume the automatic inventory tally. No item movement was repeated.");
+        var occupied = Plugin.Condition[ConditionFlag.OccupiedSummoningBell];
+        if (!occupied && !NativeRetainers.HasRetainerInventory && !NativeRetainers.HasRetainerList) return true;
+        if (checkpoint.RetainerId == 0)
+            throw new InvalidOperationException("A retainer window was opened after the saved storage checkpoint. Close it, then resume the automatic tally.");
+        if (NativeRetainers.HasRetainerList) { NativeRetainers.CloseList(trace); return false; }
+        NativeRetainers.VerifyRetainer(checkpoint.RetainerId);
+        if (NativeRetainers.HasVisibleRetainerInventory)
+        {
+            if (NativeRetainers.TryCloseTransferProgress(checkpoint.RetainerId, trace))
+                NativeRetainers.HideInventory(checkpoint.RetainerId, trace);
+            return false;
+        }
+        var identity = new RetainerIdentity(checkpoint.RetainerId, checkpoint.RetainerName, true);
+        if (NativeRetainers.HasExpectedRetainerTalk(identity))
+        { NativeRetainers.AdvanceRetainerTalk(identity, trace); return false; }
+        if (NativeRetainers.HasRetainerMenu) NativeRetainers.SelectMenu(2383, checkpoint.RetainerId, trace);
+        return false;
+    }
+
+    internal static unsafe bool HasVisibleStorageProgress()
+    {
+        var progress = (FFXIVClientStructs.FFXIV.Component.GUI.AtkUnitBase*)Plugin.GameGui.GetAddonByName("RetainerItemTransferProgress").Address;
+        return progress != null && progress->IsVisible;
     }
 
     public static bool TryCaptureCurrentLocation(out TravelLocation? location, out string error)

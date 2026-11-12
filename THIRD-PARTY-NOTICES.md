@@ -12,6 +12,8 @@ Ashe's Trader is distributed under GNU AGPL-3.0; see LICENSE.md. The plugin layo
 - NightmareXIV/ECommons (Talk input event sequence): https://github.com/NightmareXIV/ECommons
 - karashiiro/TextToTalk (Talk speaker node reference): https://github.com/karashiiro/TextToTalk
 
+Dropbox's public trade pacing was studied as a behavior reference: kawaii/Dropbox, commit 012f11da49d3e5b1f31599111e84631819a52940, https://github.com/kawaii/Dropbox/tree/012f11da49d3e5b1f31599111e84631819a52940. No Dropbox source text, signatures or hardcoded offsets are incorporated; the pacing and recovery implementation is independently written.
+
 Dalamud and its provided libraries are runtime dependencies supplied by XIVLauncher, not bundled into this plugin package. NuGet dependency versions are recorded in the project files and package lock file. External plugins remain separate installations; Ashe's Trader communicates with their published IPC interfaces.
 
 ## MIT notices for Talk interaction references

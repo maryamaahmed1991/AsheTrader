@@ -146,7 +146,7 @@ public sealed class StorageRecoveryCoordinatorTests
     }
 
     [Fact]
-    public void RepeatedResumeRetainsKnownStorageEvidenceAndGuidesReviewWithoutResending()
+    public void RepeatedResumeQueriesLegacyStorageWithoutRepeatingItsMovement()
     {
         var service = StoppedPartialDeposit();
         var pending = service.Run!.Pending.Single();
@@ -156,15 +156,16 @@ public sealed class StorageRecoveryCoordinatorTests
         for (var attempt = 0; attempt < 3; attempt++)
         {
             service.Resume();
+            Assert.False(service.Run.Paused);
+            Assert.Null(pending.Response);
+            service.RunToTerminal();
             Assert.True(service.Run.Paused);
-            Assert.Same(originalResponse, pending.Response);
             Assert.Equal(originalEvidence, JsonConvert.SerializeObject(pending.Response));
             Assert.Equal(originalActions, service.Trace.Count);
-            Assert.Contains("Review interrupted storage", service.Run.Status);
-            Assert.Contains("Accept recorded storage count", service.LastError);
+            Assert.Contains("could not be tallied automatically", service.Run.Status);
+            Assert.Contains("Resume / tally inventories", service.LastError);
             Assert.Equal(100UL, service.Run.Deposited[2]);
         }
-        Assert.Contains(service.Diagnostics, line => line.Contains("Storage review required before resume"));
         Assert.DoesNotContain(service.Diagnostics, line => line.Contains("Storage review accepted"));
     }
 
@@ -187,18 +188,18 @@ public sealed class StorageRecoveryCoordinatorTests
         Assert.NotNull(service.Run.Pending.Single().Response!.Observation);
         Assert.Equal(originalActions, service.Trace.Count);
         Assert.Equal(100UL, service.Run.Deposited[2]);
-        Assert.Contains("Review interrupted storage", service.LastError);
+        Assert.Contains("could not be tallied automatically", service.LastError);
     }
 
     [Fact]
-    public void EndJobExplainsStorageReviewBeforeTheRemainingRelayDelivery()
+    public void EndJobExplainsAutomaticStorageTallyBeforeTheRemainingRelayDelivery()
     {
         var service = StoppedPartialDeposit();
         var pending = service.Run!.Pending.Single();
         var originalEvidence = JsonConvert.SerializeObject(pending.Response);
         var first = Assert.Throws<InvalidOperationException>(service.EndPausedJob);
-        Assert.Contains("Review interrupted storage first", first.Message);
-        Assert.Contains("finish any relay deliveries", first.Message);
+        Assert.Contains("Resume / tally inventories", first.Message);
+        Assert.Contains("deliver any remaining relay cargo", first.Message);
         Assert.Equal(first.Message, service.Run.Status);
         Assert.Equal(originalEvidence, JsonConvert.SerializeObject(pending.Response));
         service.ResolvePendingStorage(pending.Command.Id);
@@ -214,4 +215,85 @@ public sealed class StorageRecoveryCoordinatorTests
         Assert.False(service.Run.Paused, service.LastError);
         Assert.Equal(600UL, new TransferJobLedger(service.Run.Journal!).DeliveredTo(2));
     }
+
+    [Fact]
+    public void AutomaticPartialTallyMigratesLegacyAppliedFlagAndAddsOnlyTheNewMovement()
+    {
+        var service = StoppedPartialDeposit();
+        var pending = service.Run!.Pending.Single();
+        pending.AppliedStorageQuantity = null; // Saved before cumulative accounting was introduced.
+        Assert.True(pending.InventoryAdjustmentApplied);
+        var actionCount = service.Trace.Count;
+        var recovered = CompleteInterruptedDeposit(service, pending, 50);
+        DeliverSavedResponse(service, pending.PeerId, recovered);
+        DeliverSavedResponse(service, pending.PeerId, recovered);
+
+        Assert.Equal(100U, pending.AppliedStorageQuantity);
+        Assert.Equal(100UL, service.Run.Deposited[2]);
+        service.Resume();
+        Assert.Equal(150UL, service.Run.Deposited[2]);
+        Assert.Equal(150U, pending.AppliedStorageQuantity);
+        Assert.Equal(actionCount, service.Trace.Count);
+        Assert.Empty(service.Run.Pending);
+        service.RunToTerminal();
+
+        Assert.False(service.Run.Paused, service.LastError);
+        Assert.Equal(600UL, service.Characters[2].Total);
+        Assert.Equal((ulong)service.Characters[2].RetainerTotal, service.Run.Deposited[2]);
+        Assert.Equal(0UL, new TransferJobLedger(service.Run.Journal!).RelayCargo(9));
+    }
+
+    [Fact]
+    public void LostAutomaticTallyReplySurvivesCoordinatorRestartWithoutDoubleAccounting()
+    {
+        var service = StoppedPartialDeposit();
+        var pending = service.Run!.Pending.Single();
+        pending.AppliedStorageQuantity = null;
+        service.PauseForTest(); // Persist the legacy boolean and its original 100-item observation.
+        var actionCount = service.Trace.Count;
+        service.SuppressInitialResponse = command => command.Id == pending.Command.Id;
+        var recovered = CompleteInterruptedDeposit(service, pending, 50);
+        DeliverSavedResponse(service, pending.PeerId, recovered);
+        Assert.True(pending.Response!.Ambiguous);
+
+        service.SimulateCoordinatorRestart();
+        service.SuppressInitialResponse = null;
+        service.Resume();
+        service.RunUntil(run => run.Deposited.GetValueOrDefault(2UL) == 150);
+        Assert.Equal(actionCount, service.Trace.Count);
+        Assert.Equal(150UL, service.Run!.Deposited[2]);
+        service.PauseForTest();
+        service.SimulateCoordinatorRestart();
+        service.Resume();
+        service.RunToTerminal();
+
+        Assert.False(service.Run.Paused, service.LastError);
+        Assert.Equal(600UL, service.Characters[2].Total);
+        Assert.Equal((ulong)service.Characters[2].RetainerTotal, service.Run.Deposited[2]);
+        Assert.Equal(600UL, new TransferJobLedger(service.Run.Journal!).DeliveredTo(2));
+    }
+
+    private static WorkerResponse CompleteInterruptedDeposit(WorkflowService service, PendingCommand pending, uint additional)
+    {
+        var character = service.Characters[pending.Command.Operation.CharacterId];
+        character.Bags -= additional;
+        character.Retainers[character.Retainers.Keys.First()] += additional;
+        var recovered = JsonConvert.DeserializeObject<WorkerResponse>(JsonConvert.SerializeObject(pending.Response))!;
+        recovered.Success = false;
+        recovered.Ambiguous = false;
+        recovered.AutoReconciled = true;
+        recovered.OperatorReviewed = false;
+        recovered.Observation!.MovementUncertain = false;
+        recovered.Observation.MovedQuantity += additional;
+        recovered.Observation.BagQuantity = character.Bags;
+        recovered.Observation.BagCapacity = character.BagSpace;
+        recovered.Quantity = recovered.Observation.MovedQuantity;
+        recovered.CurrentQuantity = character.Bags;
+        recovered.Error = recovered.Observation.Error = "Storage tallied automatically from its saved checkpoint.";
+        return recovered;
+    }
+
+    private static void DeliverSavedResponse(WorkflowService service, Guid peerId, WorkerResponse response)
+        => typeof(WorkflowService).GetMethod("Deliver", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(service, [peerId, response]);
 }

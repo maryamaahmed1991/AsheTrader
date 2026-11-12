@@ -21,6 +21,7 @@ public sealed partial class WorkflowService
     private readonly Dictionary<Guid, WorkerCommand> receivedCommands = [];
     private readonly Dictionary<Guid, Guid> commandOwners = [];
     private readonly Dictionary<Guid, uint> tradeBeforeQuantities = [];
+    private readonly Dictionary<Guid, (Guid Round, uint Current)> tradeTallies = [];
     private WorkerCommand? armedReceiver;
     private WorkerCommand? deferredSender;
     private uint armedBefore;
@@ -52,6 +53,8 @@ public sealed partial class WorkflowService
     public bool StorageMenusClosed { get; set; } = true;
     // The worker still persists the result. A subsequent query can recover a lost response.
     public Predicate<WorkerCommand>? SuppressInitialResponse { get; set; }
+    public Predicate<WorkerCommand>? SuppressAutomaticResolutionReply { get; set; }
+    public Action<WorkerCommand>? BeforeAutomaticResolution { get; set; }
 
     public void SetCachedFreeSlots(ulong characterId, uint? freeSlots)
     {
@@ -141,6 +144,11 @@ public sealed partial class WorkflowService
     {
         error = reason;
         if (Run != null) { Run.Paused = true; Run.Status = reason; SaveRun(); }
+        StopTradeForTally();
+    }
+
+    private void StopTradeForTally()
+    {
         foreach (var command in new[] { armedReceiver, deferredSender }.OfType<WorkerCommand>())
         {
             StoppedTradeCommands.Add(command.Id);
@@ -162,6 +170,8 @@ public sealed partial class WorkflowService
             case "command": HandleWorker((WorkerCommand)(object)payload!, peer.RemotePeerId!.Value); break;
             case "query": HandleQuery((Guid)(object)payload!, peer.RemotePeerId!.Value); break;
             case "resolve": ResolveWorker((ManualResolution)(object)payload!, peer.RemotePeerId!.Value); break;
+            case "trade-tally": HandleTradeTally((TradeTallyRequest)(object)payload!, peer.RemotePeerId!.Value); break;
+            case "trade-settle": HandleAutomaticTradeResolution((AutomaticTradeResolution)(object)payload!, peer.RemotePeerId!.Value); break;
             default: throw new InvalidOperationException($"Unexpected coordinator message: {kind}");
         }
     }
@@ -281,7 +291,7 @@ public sealed partial class WorkflowService
         {
             var command = receivedCommands[id];
             if (command.Kind is WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch
-                && response is not ({ Success: true } or { OperatorReviewed: true } or { NeverStarted: true })
+                && response is not ({ Success: true } or { OperatorReviewed: true } or { AutoReconciled: true } or { NeverStarted: true })
                 && tradeBeforeQuantities.TryGetValue(id, out var before)
                 && loggedIn.GetValueOrDefault(owner) == command.Operation.CharacterId)
             {
@@ -320,6 +330,52 @@ public sealed partial class WorkflowService
             Unchanged = !resolution.Transferred, Quantity = resolution.Transferred ? command.Operation.Quantity : 0,
             BeforeQuantity = before, CurrentQuantity = current,
         });
+    }
+
+    private void HandleTradeTally(TradeTallyRequest request, Guid owner)
+    {
+        var command = receivedCommands[request.CommandId];
+        durableResponses.TryGetValue(request.CommandId, out var response);
+        if (response is not ({ Success: true } or { OperatorReviewed: true } or { AutoReconciled: true } or { NeverStarted: true }))
+        {
+            var current = characters[command.Operation.CharacterId].Inventory(command.Operation.ItemId, command.Operation.HighQuality).Bags;
+            if (loggedIn.GetValueOrDefault(owner) != command.Operation.CharacterId)
+            {
+                AcceptTradeTally(owner, new(request.CommandId, request.RoundId, false, false, null, "Original character is not logged in."));
+                return;
+            }
+            if (!tradeBeforeQuantities.TryGetValue(request.CommandId, out var before))
+            {
+                AcceptTradeTally(owner, new(request.CommandId, request.RoundId, false, false, null, "Missing starting inventory count."));
+                return;
+            }
+            tradeTallies[request.CommandId] = (request.RoundId, current);
+            response = TradeReconciliationEvidence.Capture(command, response, before, current);
+            durableResponses[request.CommandId] = Clone(response);
+        }
+        AcceptTradeTally(owner, new(request.CommandId, request.RoundId, true, false, Clone(response)));
+    }
+
+    private void HandleAutomaticTradeResolution(AutomaticTradeResolution resolution, Guid owner)
+    {
+        var command = receivedCommands[resolution.CommandId];
+        BeforeAutomaticResolution?.Invoke(command);
+        var tally = tradeTallies.GetValueOrDefault(resolution.CommandId);
+        var record = new WorkerRecord
+        {
+            Command = command, Response = durableResponses[resolution.CommandId],
+            BeforeQuantity = tradeBeforeQuantities[resolution.CommandId],
+            TradeTallyRound = tally.Round, TradeTallyCurrent = tally.Current,
+        };
+        try
+        {
+            var current = characters[command.Operation.CharacterId].Inventory(command.Operation.ItemId, command.Operation.HighQuality).Bags;
+            var response = TradeReconciliationEvidence.Settle(record, resolution, current);
+            durableResponses[resolution.CommandId] = Clone(response);
+            if (SuppressAutomaticResolutionReply?.Invoke(command) == true) return;
+            AcceptAutomaticTradeResolution(owner, new(resolution.CommandId, resolution.RoundId, response));
+        }
+        catch (Exception exception) { AcceptAutomaticTradeResolution(owner, new(resolution.CommandId, resolution.RoundId, null, exception.Message)); }
     }
 
     private void Deliver(Guid owner, WorkerResponse response)

@@ -107,8 +107,23 @@ internal sealed unsafe class NativeTradeAdapter
         return result;
     }
 
-    public bool HasModal => ReadyAddon("InputNumeric") != null || ReadyAddon("SelectYesno") != null;
-    public bool HasNumeric => ReadyAddon("InputNumeric") != null;
+    // A visible window remains a blocker while its controls are becoming ready or closing.
+    public bool HasModal => HasNumeric || VisibleAddon("SelectYesno") != null;
+    public bool HasNumeric => VisibleAddon("InputNumeric") != null;
+    public bool HasTradeUi => VisibleAddon("Trade") != null || Plugin.Condition[ConditionFlag.TradeOpen];
+    public bool IsInventoryTallyReady
+    {
+        get
+        {
+            if (!Plugin.ClientState.IsLoggedIn || Plugin.ObjectTable.LocalPlayer == null || HasTradeUi || HasModal)
+                return false;
+            var manager = InventoryManager.Instance();
+            var agent = AgentTrade.Instance();
+            return manager != null && agent != null && !agent->IsAgentActive()
+                && !manager->TradeIsSyncPending && manager->TradeLocalState == TradeState.NotTrading
+                && !IsActiveState(manager->TradeRemoteState);
+        }
+    }
 
     public void SelectPartner(TradePartner partner)
     {
@@ -242,8 +257,14 @@ internal sealed unsafe class NativeTradeAdapter
 
     private static AtkUnitBase* ReadyAddon(string name)
     {
+        var addon = VisibleAddon(name);
+        return addon != null && addon->IsReady ? addon : null;
+    }
+
+    private static AtkUnitBase* VisibleAddon(string name)
+    {
         var addon = (AtkUnitBase*)Plugin.GameGui.GetAddonByName(name).Address;
-        return addon != null && addon->IsReady && addon->IsVisible ? addon : null;
+        return addon != null && addon->IsVisible ? addon : null;
     }
 
     private static bool ClickRegisteredButton(AtkUnitBase* addon, AtkComponentButton* button)
