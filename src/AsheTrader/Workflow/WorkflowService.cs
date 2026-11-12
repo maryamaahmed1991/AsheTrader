@@ -478,10 +478,10 @@ public sealed partial class WorkflowService : IDisposable
     {
         if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || plugin.Fuel.Active)
             return "Waiting for both characters' active operations to stop…";
-        if (!plugin.Trader.IsInventoryTallyReady)
-            return "Waiting for the game to finish closing the trade before tallying inventory…";
         if (!Plugin.ClientState.IsLoggedIn || Plugin.PlayerState.ContentId != record.Command.Operation.CharacterId)
             throw new InvalidOperationException("Log in the original trade character on this PC, then use Resume / tally inventories.");
+        if (plugin.Trader.InventoryTallyBlockReason is { Length: > 0 } blocker)
+            return $"Waiting to tally inventory: {blocker}.";
         if (NativeRetainers.HasNumeric || NativeRetainers.HasRetainerList || NativeRetainers.HasRetainerMenu
             || NativeRetainers.HasRetainerInventory || NativeRetainers.HasUnrelatedModal || NativeRetainers.HasActiveCutscene
             || Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.OccupiedSummoningBell])

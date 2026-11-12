@@ -30,6 +30,7 @@
     <Compile Include="../../src/AsheTrader/Workflow/TradeReconciliationEvidence.cs" Link="Production/TradeReconciliationEvidence.cs" />
     <Compile Include="../../src/AsheTrader/Trading/TradeOpeningGate.cs" Link="Production/TradeOpeningGate.cs" />
     <Compile Include="../../src/AsheTrader/Trading/TradePacing.cs" Link="Production/TradePacing.cs" />
+    <Compile Include="../../src/AsheTrader/Trading/TradeActivityState.cs" Link="Production/TradeActivityState.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/GameOperations.cs" Link="Production/GameOperations.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/StorageMovementCheckpoint.cs" Link="Production/StorageMovementCheckpoint.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/RetainerMenuMatcher.cs" Link="Production/RetainerMenuMatcher.cs" />

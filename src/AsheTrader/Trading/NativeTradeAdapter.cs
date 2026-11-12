@@ -111,18 +111,25 @@ internal sealed unsafe class NativeTradeAdapter
     public bool HasModal => HasNumeric || VisibleAddon("SelectYesno") != null;
     public bool HasNumeric => VisibleAddon("InputNumeric") != null;
     public bool HasTradeUi => VisibleAddon("Trade") != null || Plugin.Condition[ConditionFlag.TradeOpen];
-    public bool IsInventoryTallyReady
+    public bool IsInventoryTallyReady => ReadActivity().Ready;
+
+    // Capture even without a selected partner: recovery after reload has no active runner.
+    public TradeActivityState ReadActivity()
     {
-        get
+        var manager = InventoryManager.Instance();
+        var agent = AgentTrade.Instance();
+        var addon = (AtkUnitBase*)Plugin.GameGui.GetAddonByName("Trade").Address;
+        return new()
         {
-            if (!Plugin.ClientState.IsLoggedIn || Plugin.ObjectTable.LocalPlayer == null || HasTradeUi || HasModal)
-                return false;
-            var manager = InventoryManager.Instance();
-            var agent = AgentTrade.Instance();
-            return manager != null && agent != null && !agent->IsAgentActive()
-                && !manager->TradeIsSyncPending && manager->TradeLocalState == TradeState.NotTrading
-                && !IsActiveState(manager->TradeRemoteState);
-        }
+            LoggedIn = Plugin.ClientState.IsLoggedIn, PlayerAvailable = Plugin.ObjectTable.LocalPlayer != null,
+            InventoryAvailable = manager != null, AgentAvailable = agent != null,
+            LocalState = manager == null ? -1 : (int)manager->TradeLocalState,
+            RemoteState = manager == null ? -1 : (int)manager->TradeRemoteState,
+            SyncPending = manager != null && manager->TradeIsSyncPending,
+            AddonVisible = addon != null && addon->IsVisible, AddonReady = addon != null && addon->IsReady,
+            TradeOpenCondition = Plugin.Condition[ConditionFlag.TradeOpen], AgentActive = agent != null && agent->IsAgentActive(),
+            NumericVisible = HasNumeric, ConfirmationVisible = VisibleAddon("SelectYesno") != null,
+        };
     }
 
     public void SelectPartner(TradePartner partner)
@@ -136,16 +143,10 @@ internal sealed unsafe class NativeTradeAdapter
         var manager = InventoryManager.Instance();
         var player = Plugin.ObjectTable.LocalPlayer;
         var target = Resolve(partner);
-        var addon = (AtkUnitBase*)Plugin.GameGui.GetAddonByName("Trade").Address;
-        var agent = AgentTrade.Instance();
-        var local = manager == null ? default : manager->TradeLocalState;
-        var remote = manager == null ? default : manager->TradeRemoteState;
-        var sync = manager != null && manager->TradeIsSyncPending;
-        var visible = addon != null && addon->IsVisible;
-        var openCondition = Plugin.Condition[ConditionFlag.TradeOpen];
-        var agentActive = agent != null && agent->IsAgentActive();
-        var acknowledged = visible || openCondition || agentActive || sync
-            || IsActiveState(local) || IsActiveState(remote);
+        var activity = ReadActivity();
+        var local = (TradeState)activity.LocalState;
+        var remote = (TradeState)activity.RemoteState;
+        var acknowledged = activity.Acknowledged;
         var distance = player == null || target == null ? float.PositiveInfinity : Vector3.Distance(player.Position, target.Position);
         var selected = Plugin.TargetManager.Target?.EntityId ?? 0;
         var busy = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51]
@@ -161,15 +162,15 @@ internal sealed unsafe class NativeTradeAdapter
             : distance > TradeOpeningGate.RequestDistance ? "partner outside request range"
             : selected != partner.EntityId ? "partner target not selected"
             : acknowledged ? "trade request already acknowledged"
-            : local != TradeState.NotTrading ? "unsupported local trade state"
+            : !activity.Ready ? activity.BlockReason
             : busy ? "game busy/loading/cutscene"
             : HasModal || NativeRetainers.HasRetainerList || NativeRetainers.HasRetainerMenu || NativeRetainers.HasRetainerInventory
                 || ReadyAddon("Talk") != null || ReadyAddon("ContextMenu") != null ? "another interaction window is open"
             : ActionManager.Instance() == null || ActionManager.Instance()->AnimationLock > 0 ? "animation lock"
             : "";
         return new(reason.Length == 0, acknowledged, reason, distance, selected,
-            manager == null ? 0 : manager->TradePartnerEntityId, local, remote, sync,
-            visible, addon != null && addon->IsReady, openCondition, agentActive, target?.IsTargetable == true);
+            manager == null ? 0 : manager->TradePartnerEntityId, local, remote, activity.SyncPending,
+            activity.AddonVisible, activity.AddonReady, activity.TradeOpenCondition, activity.AgentActive, target?.IsTargetable == true);
     }
 
     public void RequestTrade(TradePartner partner)
@@ -179,9 +180,6 @@ internal sealed unsafe class NativeTradeAdapter
         if (!opening.Ready) throw new InvalidOperationException($"Trade request is no longer ready: {opening.BlockReason}.");
         InventoryManager.Instance()->SendTradeRequest(partner.EntityId);
     }
-
-    private static bool IsActiveState(TradeState state) => state is TradeState.TradeRequestPending
-        or TradeState.SelectingTradeGoods or TradeState.LockedIn or TradeState.WaitingForConfirmation or TradeState.Confirmed;
 
     public bool AddItem(TradeAllocation entry)
     {
@@ -248,7 +246,7 @@ internal sealed unsafe class NativeTradeAdapter
         if (partner == null) return;
         var manager = InventoryManager.Instance();
         if (manager != null && manager->TradePartnerEntityId == partner.EntityId &&
-            manager->TradeLocalState != TradeState.NotTrading)
+            ReadActivity().Acknowledged)
             manager->RefuseTrade();
     }
 

@@ -1,10 +1,12 @@
 # Two-PC testing: start here
 
-Test build: **0.3.10.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol is now 5, so older peers must also update.
+Test build: **0.3.10.1**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol is now 5, so older peers must also update.
 
 ## Test faster trades and automatic recovery
 
-Update both PCs to 0.3.10.0 and keep the existing settings, pairing key and journals. Reconnect the same coordinator and worker. With the original trade characters logged in, press **Resume / tally inventories**. There are no outcome-confirmation checkboxes. The plugin compares both PCs' current counts, credits a matching completed batch once or retries when both sides show no movement, and continues the remaining job. If counts conflict, Activity explains the discrepancy.
+Version 0.3.10.1 fixes the idle-state check that left Resume waiting for a trade window that was already closed. Update both PCs, keep the original characters logged in, reconnect and press **Resume / tally inventories**. The tally should advance automatically and a subsequent trade should send its opening request. Existing settings, pairing and saved progress are retained. If it still waits, Copy diagnostics now includes the raw native state even after a plugin reload.
+
+Update both PCs to 0.3.10.1 and keep the existing settings, pairing key and journals. Reconnect the same coordinator and worker. With the original trade characters logged in, press **Resume / tally inventories**. There are no outcome-confirmation checkboxes. The plugin compares both PCs' current counts, credits a matching completed batch once or retries when both sides show no movement, and continues the remaining job. If counts conflict, Activity explains the discrepancy.
 
 For a small speed test, send five stacks of an inexpensive item, including a partial stack. Offers should follow the game responses with at least 250 ms between item callbacks, without the old pauses after each quantity and filled slot. Verify the exact total on both PCs. Actual speed depends on game/server response time.
 

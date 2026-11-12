@@ -46,6 +46,7 @@ public sealed class TradeRunner : IDisposable
     public bool ReceiverReady => stage == Stage.ReceiverIdle && IsReceiver;
     /// <summary>Read on the framework thread before tallying an interrupted trade.</summary>
     public bool IsInventoryTallyReady => !IsRunning && native.IsInventoryTallyReady;
+    public string InventoryTallyBlockReason => IsRunning ? "trade automation is still stopping" : native.ReadActivity().BlockReason;
 
     public string Status { get; private set; } = "Idle";
     public bool IsRunning => stage != Stage.Idle || startPending;
@@ -259,6 +260,7 @@ public sealed class TradeRunner : IDisposable
                     break;
                 case Stage.Settlement:
                     if (native.HasTradeUi) throw new InvalidOperationException("Another trade opened before inventory verification completed.");
+                    if (!native.IsInventoryTallyReady) { pacing.ObserveSettlement(now, false); break; }
                     Settle();
                     break;
             }
@@ -446,6 +448,7 @@ public sealed class TradeRunner : IDisposable
         nextDiagnosticAt = Environment.TickCount64 + 5000;
         try
         {
+            Trace($"native activity reason={reason}; stage={stage}; {native.ReadActivity().Describe()}");
             if (partner == null) { Trace($"snapshot reason={reason}; stage={stage}; lastStop=({lastStop})"); return; }
             var opening = native.ReadOpening(partner);
             LatchOpeningAcknowledgement(opening);
