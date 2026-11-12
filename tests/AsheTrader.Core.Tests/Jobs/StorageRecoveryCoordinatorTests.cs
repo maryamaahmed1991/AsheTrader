@@ -51,6 +51,7 @@ public sealed class StorageRecoveryCoordinatorTests
         service.ResolvePendingStorage(originalId);
 
         Assert.True(service.Run.Paused);
+        Assert.Equal("", service.LastError);
         Assert.Equal(actionCount, service.Trace.Count);
         Assert.True(pending.Response!.OperatorReviewed);
         Assert.False(pending.Response.Success);
@@ -97,6 +98,7 @@ public sealed class StorageRecoveryCoordinatorTests
         service.SuppressInitialResponse = command => command.Id == commandId;
         service.ResolvePendingStorage(commandId);
         Assert.True(service.Run.Pending.Single().Response!.Ambiguous);
+        Assert.Equal("", service.LastError);
         service.SimulateCoordinatorRestart();
         service.SuppressInitialResponse = null;
         service.ResolvePendingStorage(commandId);
@@ -104,6 +106,7 @@ public sealed class StorageRecoveryCoordinatorTests
 
         Assert.True(service.Run.Paused);
         Assert.True(service.Run.Pending.Single().Response!.OperatorReviewed);
+        Assert.Equal("", service.LastError);
         Assert.Equal(actionCount, service.Trace.Count);
         Assert.Equal(100UL, service.Run.Deposited[2]);
         service.Resume(); service.RunToTerminal();
@@ -140,5 +143,75 @@ public sealed class StorageRecoveryCoordinatorTests
         Assert.Throws<InvalidOperationException>(() => service.ResolvePendingStorage(pending.Command.Id));
         Assert.True(service.Run.Paused);
         Assert.True(pending.Response.Ambiguous);
+    }
+
+    [Fact]
+    public void RepeatedResumeRetainsKnownStorageEvidenceAndGuidesReviewWithoutResending()
+    {
+        var service = StoppedPartialDeposit();
+        var pending = service.Run!.Pending.Single();
+        var originalResponse = pending.Response;
+        var originalEvidence = JsonConvert.SerializeObject(originalResponse);
+        var originalActions = service.Trace.Count;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            service.Resume();
+            Assert.True(service.Run.Paused);
+            Assert.Same(originalResponse, pending.Response);
+            Assert.Equal(originalEvidence, JsonConvert.SerializeObject(pending.Response));
+            Assert.Equal(originalActions, service.Trace.Count);
+            Assert.Contains("Review interrupted storage", service.Run.Status);
+            Assert.Contains("Accept recorded storage count", service.LastError);
+            Assert.Equal(100UL, service.Run.Deposited[2]);
+        }
+        Assert.Contains(service.Diagnostics, line => line.Contains("Storage review required before resume"));
+        Assert.DoesNotContain(service.Diagnostics, line => line.Contains("Storage review accepted"));
+    }
+
+    [Fact]
+    public void ResumeWithMissingStopObservationStillRecoversTheOriginalWorkerResult()
+    {
+        var service = StoppedPartialDeposit();
+        var pending = service.Run!.Pending.Single();
+        var originalId = pending.Command.Id;
+        var originalActions = service.Trace.Count;
+        pending.Response!.Observation = null;
+        service.Resume();
+        Assert.False(service.Run.Paused);
+        Assert.Equal(originalId, service.Run.Pending.Single().Command.Id);
+        Assert.Null(service.Run.Pending.Single().Response);
+        service.RunToTerminal();
+
+        Assert.True(service.Run.Paused);
+        Assert.Equal(originalId, service.Run.Pending.Single().Command.Id);
+        Assert.NotNull(service.Run.Pending.Single().Response!.Observation);
+        Assert.Equal(originalActions, service.Trace.Count);
+        Assert.Equal(100UL, service.Run.Deposited[2]);
+        Assert.Contains("Review interrupted storage", service.LastError);
+    }
+
+    [Fact]
+    public void EndJobExplainsStorageReviewBeforeTheRemainingRelayDelivery()
+    {
+        var service = StoppedPartialDeposit();
+        var pending = service.Run!.Pending.Single();
+        var originalEvidence = JsonConvert.SerializeObject(pending.Response);
+        var first = Assert.Throws<InvalidOperationException>(service.EndPausedJob);
+        Assert.Contains("Review interrupted storage first", first.Message);
+        Assert.Contains("finish any relay deliveries", first.Message);
+        Assert.Equal(first.Message, service.Run.Status);
+        Assert.Equal(originalEvidence, JsonConvert.SerializeObject(pending.Response));
+        service.ResolvePendingStorage(pending.Command.Id);
+        Assert.Equal("", service.LastError);
+        Assert.Contains(service.Diagnostics, line => line.Contains("Storage review requested"));
+        Assert.Contains(service.Diagnostics, line => line.Contains("Storage review accepted"));
+        var second = Assert.Throws<InvalidOperationException>(service.EndPausedJob);
+        Assert.Contains("relay still holds undelivered cargo", second.Message);
+        Assert.True(service.Run.Paused);
+        Assert.NotEqual(CoordinatorStep.Finished, service.Run.Step);
+        Assert.Equal(100UL, service.Run.Deposited[2]);
+        service.Resume(); service.RunToTerminal();
+        Assert.False(service.Run.Paused, service.LastError);
+        Assert.Equal(600UL, new TransferJobLedger(service.Run.Journal!).DeliveredTo(2));
     }
 }

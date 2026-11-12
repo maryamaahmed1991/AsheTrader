@@ -471,7 +471,12 @@ public sealed partial class WorkflowService : IDisposable
                 || !workerRecords.TryGetValue(resolution.CommandId, out var storageRecord)
                 || !StorageReconciliation.IsStorage(storageRecord.Command))
                 throw new InvalidOperationException("This command cannot be reconciled as a recorded storage-only movement.");
-            if (StorageReconciliation.IsReviewed(storageRecord.Response)) { Reply(caller, storageRecord.Response!); return; }
+            if (StorageReconciliation.IsReviewed(storageRecord.Response))
+            {
+                RecordDiagnostic($"Storage review replay; command={resolution.CommandId}; confirmedMoved={storageRecord.Response!.Observation!.MovedQuantity}");
+                Reply(caller, storageRecord.Response!);
+                return;
+            }
             if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || plugin.Fuel.Active)
                 throw new InvalidOperationException("Stop active work before storage reconciliation.");
             if (!Plugin.ClientState.IsLoggedIn || Plugin.PlayerState.ContentId != storageRecord.Command.Operation.CharacterId)
@@ -484,6 +489,7 @@ public sealed partial class WorkflowService : IDisposable
             var storageResponse = StorageReconciliation.Review(storageRecord.Command, storageRecord.Response, storageCurrent);
             storageRecord.Response = storageResponse;
             SaveWorkers(); // The review is durable before its acknowledgement is sent.
+            RecordDiagnostic($"Storage review saved; command={resolution.CommandId}; confirmedMoved={storageResponse.Observation!.MovedQuantity}; bagAtStop={storageResponse.Observation.BagQuantity}; remainsPaused=True");
             Reply(caller, storageResponse);
             return;
         }

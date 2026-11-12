@@ -1,11 +1,12 @@
 # Development build validation
 
-Build: 0.3.8.0, 12 November 2026. Target: Dalamud API 15, .NET 10, Windows.
+Build: 0.3.8.1, 12 November 2026. Target: Dalamud API 15, .NET 10, Windows.
 
 ## Completed checks
 
 - `scripts/Build.ps1` completed successfully, including restore, tests, Release compilation, and packaging.
-- 366 automated tests passed, with zero failures and zero skipped tests.
+- 369 automated tests passed, with zero failures and zero skipped tests.
+- Three additional recovery regressions cover repeated Resume preserving known uncertain evidence without resending, missing observations recovering the original worker result, and End job explaining storage review before remaining relay deliveries. Existing cases now assert that review requests and accepted replies clear stale errors. The review card is outside collapsible sections at the top of Activity; the main control opens and scrolls to it. Actual in-game UI rendering still requires user validation.
 - Six new deposit-confirmation regressions apply the same single 350 ms minimum interval and exact two-inventory confirmation as withdrawals. Fifteen quantity-dialog cases cover player/retainer ownership, nested inventory ancestry, unrelated or hidden parents, cycles and quantity bounds. The supplied deposit trace confirmed that a partial-stack dialog was rejected after earlier stacks had succeeded; no transfer-progress window was involved. Native submission now verifies the pending source slot and current destination capacity, and records ownership identifiers for further diagnosis.
 - Nine inn-arrival cases cover a fresh 15-second readiness grace after travel becomes idle, loading and territory changes, late bell appearance, cutscenes and eventual timeout. This addresses the reported failure while the previous territory was still visible; the whole inn-travel operation remains bounded.
 - Thirteen collection-route tests and seven production-coordinator simulations cover provider home worlds, DC/world grouping, world-independent coordinates, recipient-home relay unloading, repeated local deposits, full-relay collection interruptions, lost travel/trade replies and legacy journal migration. Each active leg persists its destination before either PC travels. Grouping respects recipient priority and item order; capacity flushes can still cause return visits.

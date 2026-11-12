@@ -42,7 +42,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.8.0.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.3.8.1.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
@@ -80,6 +80,8 @@ Provider bags and retainer stored inventory are included automatically. When a p
 
 ## Progress and recovery
 
+Version 0.3.8.1 makes the required recovery step visible: a known uncertain storage result changes the main Resume button to **Review interrupted storage**, opening the review at the top of Activity. Repeated Resume requests retain the recorded evidence and remain paused without resending the command. Review acceptance clears the old error; **Resume / reconcile** then continues. End job explains unresolved storage and relay cargo instead of directing users into a resume/end loop. Diagnostics include recorded movement, bag count and review state after a reload.
+
 Version 0.3.8 applies the 350 ms acknowledgement-driven movement loop to deposits too. It handles partial-stack quantity dialogs owned by either the retainer inventory or the depositing character's inventory, while checking the pending source slot, retainer identity, dialog ownership and limits. A 175/175 retainer can still accept matching partial-stack space; once item capacity reaches zero, collection proceeds to the next permitted retainer. Inn arrival now allows a fresh loading grace after Lifestream becomes idle, instead of measuring the entire journey against a ten-second missing-bell check. Loading, territory changes and cutscenes restart that grace. The coordinate-only meeting template and DC-grouped collection itinerary replace the earlier single-world meeting policy.
 
 Version 0.3.7 makes retainer withdrawals readiness-driven, following the approach used by AutoRetainer reverse entrust. Full stacks use the native retrieve command; partial stacks use retrieve-quantity and the owned quantity dialog. A single 350 ms minimum dispatch interval replaces accumulated per-stack waits. Each next command still requires two observations of the exact matching changes in both bags and retainer storage, with all other item/HQ totals unchanged. Opening and closing storage advances when the required UI is ready; loaded inventory pages still receive a short stability check. Uncertain movements pause without being retried. Diagnostics include each confirmed withdrawal's elapsed time. Live game latency can lengthen the interval; this is not a measured throughput guarantee.
@@ -114,7 +116,7 @@ Once a GitHub repository exists:
 
 1. Push this source, preserving the license and notices.
 2. Upload the built `AsheTrader-<version>.zip` as a public release asset.
-3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.8.0`.
+3. Run `pwsh ./scripts/New-Repository.ps1 -GitHubRepository OWNER/REPOSITORY -ReleaseTag v0.3.8.1`.
 4. Commit the generated root `repo.json` on `main`. Its raw GitHub URL is the permanent custom-repository feed; update that file for each release.
 
 Source is hosted in [maryamaahmed1991/AsheTrader](https://github.com/maryamaahmed1991/AsheTrader), with installable packages under [Releases](https://github.com/maryamaahmed1991/AsheTrader/releases). Pairing secrets and runtime journals must not be committed or included in release artifacts.

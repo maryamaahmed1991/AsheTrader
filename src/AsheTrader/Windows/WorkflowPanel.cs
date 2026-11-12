@@ -22,6 +22,7 @@ public sealed class WorkflowPanel(Plugin plugin)
     private Guid? reviewedTradeId;
     private Guid? reviewedStorageId;
     private bool confirmedStorageOnly;
+    private bool scrollToStorageReview;
     private string dependencies = "Dependency state has not been checked on this PC.";
     private string dependencySummary = "Required plugins have not been checked on this PC yet.";
     private string notice = string.Empty;
@@ -36,6 +37,9 @@ public sealed class WorkflowPanel(Plugin plugin)
     private bool EditingLocked => LocalActionRunning || HasUnfinishedJob;
     private bool ReadyConnection => Service.Connected && Service.RemoteRoster != null;
     private bool CoordinatorRole => HasUnfinishedJob || (Service.PairingEnabled ? Service.IsHost : coordinatorRole ?? !Settings.AllowRemoteControl);
+    private PendingCommand? PendingStorage => Service.Run is { Paused: true, TradeOperationId: null } run
+        && run.Pending.Count == 1 && StorageReconciliation.IsStorage(run.Pending[0].Command) ? run.Pending[0] : null;
+    private bool NeedsStorageReview => PendingStorage?.Response is { Ambiguous: true, Observation: not null };
     private SavedTransferJob? SelectedJob => Settings.Jobs.FirstOrDefault(x => x.Definition.Id == selectedJob) ?? Settings.Jobs.FirstOrDefault();
 
     public void Draw()
@@ -47,6 +51,8 @@ public sealed class WorkflowPanel(Plugin plugin)
         }
         if (Service.Run is not { Paused: true, TradeOperationId: not null })
         { confirmedOutcome = false; reviewedTradeId = null; }
+        if (reviewedStorageId != PendingStorage?.Command.Id)
+        { reviewedStorageId = PendingStorage?.Command.Id; confirmedStorageOnly = false; }
         ImGui.PushID("AsheWorkflowPanel");
         ImGui.Spacing();
         UiTone.Wrapped(ReadyConnection ? UiTone.Good : UiTone.Warning, ReadyConnection
@@ -67,6 +73,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         if (!CoordinatorRole && page is 1 or 2) page = 0;
         if (ImGui.BeginChild("WorkflowPage", new Vector2(0, 0)))
         {
+            if (scrollToStorageReview) { ImGui.SetScrollY(0); scrollToStorageReview = false; }
             if (notice.Length > 0)
             {
                 UiTone.Status(notice);
@@ -78,7 +85,7 @@ public sealed class WorkflowPanel(Plugin plugin)
                 case 0: DrawPairing(); break;
                 case 1: DrawJobs(); break;
                 case 2: DrawReview(); break;
-                default: DrawDiagnosticsControls(); DrawProgress(); DrawActivityLog(); break;
+                default: DrawStorageRecovery(); DrawDiagnosticsControls(); DrawProgress(); DrawActivityLog(); break;
             }
         }
         ImGui.EndChild();
@@ -94,14 +101,22 @@ public sealed class WorkflowPanel(Plugin plugin)
         }
         if (Service.Run is { Paused: true, Step: not CoordinatorStep.Finished })
         {
-            ImGui.BeginDisabled(!Service.IsHost || !Service.Connected || Service.Busy);
-            if (ImGui.Button("Resume / reconcile", new Vector2(180, 30))) { confirmedOutcome = false; plugin.QueueAction(Service.Resume); }
+            var needsReview = NeedsStorageReview;
+            ImGui.BeginDisabled(needsReview ? LocalActionRunning : !Service.IsHost || !Service.Connected || Service.Busy);
+            if (ImGui.Button(needsReview ? "Review interrupted storage" : "Resume / reconcile", new Vector2(needsReview ? 230 : 180, 30)))
+            {
+                confirmedOutcome = false;
+                if (needsReview) { page = 3; scrollToStorageReview = true; }
+                else plugin.QueueAction(Service.Resume);
+            }
             ImGui.EndDisabled();
             ImGui.SameLine();
-            ImGui.BeginDisabled(LocalActionRunning);
+            ImGui.BeginDisabled(LocalActionRunning || needsReview);
             if (ImGui.Button("End paused job")) plugin.QueueAction(Service.EndPausedJob);
             ImGui.EndDisabled();
-            UiTone.Wrapped(UiTone.Warning, "Resume checks saved outcomes before continuing. Ending is blocked while a trade or relay cargo is unresolved.");
+            UiTone.Wrapped(UiTone.Warning, needsReview
+                ? "Storage review required. Open the review above, confirm the recorded movement, then resume. Ending remains blocked while storage or relay cargo is unresolved."
+                : "Resume checks saved outcomes before continuing. Ending is blocked while storage, a trade or relay cargo is unresolved.");
         }
     }
 
@@ -783,6 +798,38 @@ public sealed class WorkflowPanel(Plugin plugin)
         ImGui.EndDisabled();
     }
 
+    private void DrawStorageRecovery()
+    {
+        var pending = PendingStorage;
+        if (pending == null) return;
+        var commandId = pending.Command.Id;
+        ImGui.PushID("StorageRecovery");
+        if (StorageReconciliation.IsReviewed(pending.Response))
+            UiTone.Wrapped(UiTone.Good, "Storage review accepted. The confirmed count is preserved. Use Resume / reconcile above to continue the remaining work.");
+        else if (pending.Response is { Ambiguous: true, Observation: { } stopped })
+        {
+            UiTone.Wrapped(UiTone.Warning, "Action needed: review interrupted storage");
+            ImGui.TextWrapped($"{CharacterName(pending.Command.Operation.CharacterId)} on {PeerName(pending.PeerId)} · {ItemName(pending.Command.Operation.ItemId)}{(pending.Command.Operation.HighQuality ? " HQ" : "")}");
+            UiTone.Wrapped(UiTone.Info, $"Confirmed moved: {stopped.MovedQuantity:N0} of {pending.Command.Operation.Quantity:N0} requested. Bag count when stopped: {stopped.BagQuantity:N0}.");
+            ImGui.TextWrapped("Keep this character logged in. Inspect bags and retainers, cancel any pending quantity entry, then close all retainer and trade windows. Confirm below only if no additional items moved beyond the recorded amount.");
+            ImGui.Checkbox("Only the recorded confirmed quantity moved", ref confirmedStorageOnly);
+            ImGui.BeginDisabled(!confirmedStorageOnly || !Service.IsHost || !Service.Connected || LocalActionRunning);
+            if (ImGui.Button("Accept recorded storage count"))
+            {
+                confirmedStorageOnly = false;
+                plugin.QueueAction(() => Service.ResolvePendingStorage(commandId));
+            }
+            ImGui.EndDisabled();
+            if (!Service.IsHost || !Service.Connected)
+                UiTone.Wrapped(UiTone.Warning, "Reconnect both PCs with this PC as coordinator before accepting the review.");
+            ImGui.TextWrapped("Accepting checks the current bag count and records your review without moving items. After acceptance, use Resume / reconcile. If additional items moved, leave this unchecked and copy diagnostics.");
+        }
+        else if (pending.Response is { Ambiguous: true })
+            UiTone.Wrapped(UiTone.Warning, "The interrupted storage command has no recorded inventory observation. Resume / reconcile retrieves its saved worker result; if it remains unavailable, preserve diagnostics for investigation.");
+        ImGui.PopID();
+        ImGui.Separator();
+    }
+
     private void DrawProgress()
     {
         ImGui.Spacing();
@@ -809,7 +856,7 @@ public sealed class WorkflowPanel(Plugin plugin)
             ? run.HasShortages
                 ? "Run ended with unmet targets. Review the shortages below; create a new job for any remaining items."
                 : "Run ended — inspect the results below before starting another job."
-            : run.Paused ? "Paused — use Resume / reconcile above when ready." : StageName(run.Step));
+            : run.Paused ? NeedsStorageReview ? "Paused — complete the storage review at the top of Activity." : "Paused — use Resume / reconcile above when ready." : StageName(run.Step));
         foreach (var completed in run.CompletedItems.Where(x => x.ItemIndex != run.ActiveItemIndex).OrderBy(x => x.ItemIndex))
         {
             var shortfall = completed.Journal?.Plan.HasShortage == true;
@@ -907,32 +954,6 @@ public sealed class WorkflowPanel(Plugin plugin)
                 ImGui.TextWrapped("These decisions reconcile the saved journal; they do not perform another trade. Both workers must report counts compatible with your decision.");
             }
             else { reviewedTradeId = null; confirmedOutcome = false; }
-            var storagePending = run.Paused && run.TradeOperationId == null && run.Pending.Count == 1
-                && StorageReconciliation.IsStorage(run.Pending[0].Command) ? run.Pending[0] : null;
-            if (storagePending == null) { reviewedStorageId = null; confirmedStorageOnly = false; }
-            else
-            {
-                var commandId = storagePending.Command.Id;
-                if (reviewedStorageId != commandId) { reviewedStorageId = commandId; confirmedStorageOnly = false; }
-                if (StorageReconciliation.IsReviewed(storagePending.Response))
-                    UiTone.Wrapped(UiTone.Good, "Storage review accepted. The confirmed count is preserved. Use Resume / reconcile when ready to continue the remaining work.");
-                else if (storagePending.Response is { Ambiguous: true, Observation: { } stopped })
-                {
-                    UiTone.Wrapped(UiTone.Warning, $"Storage stopped after {stopped.MovedQuantity:N0} confirmed items out of {storagePending.Command.Operation.Quantity:N0} requested. Recorded bag count at the stop: {stopped.BagQuantity:N0}.");
-                    ImGui.TextWrapped($"On {PeerName(storagePending.PeerId)}, keep {CharacterName(storagePending.Command.Operation.CharacterId)} logged in. Inspect bags and retainers, cancel any pending quantity entry, and close all retainer and trade windows. Accept this review only if no additional items moved beyond the recorded confirmed amount.");
-                    ImGui.Checkbox("I checked bags and retainers; only the recorded confirmed quantity moved", ref confirmedStorageOnly);
-                    ImGui.BeginDisabled(!confirmedStorageOnly || !Service.IsHost || !Service.Connected || Service.Busy);
-                    if (ImGui.Button("Accept recorded storage count"))
-                    {
-                        confirmedStorageOnly = false;
-                        plugin.QueueAction(() => Service.ResolvePendingStorage(commandId));
-                    }
-                    ImGui.EndDisabled();
-                    ImGui.TextWrapped("This checks the current bag count and records your review. It moves no items and leaves the job paused. If any additional items moved, leave this unchecked and preserve diagnostics for reconciliation.");
-                }
-                else if (storagePending.Response is { Ambiguous: true })
-                    UiTone.Wrapped(UiTone.Warning, "This storage interruption has no recorded stop observation. It cannot use the recorded-count review; preserve diagnostics and inspect the inventories.");
-            }
         }
         if (ImGui.CollapsingHeader("Inventory counts and sources"))
         {
@@ -1006,7 +1027,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         ImGui.Spacing();
         if (!ImGui.CollapsingHeader("Recent activity", ImGuiTreeNodeFlags.DefaultOpen)) return;
         if (ImGui.Button("Copy activity for troubleshooting"))
-            ImGui.SetClipboardText($"Ashe's Trader v0.3.8\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
+            ImGui.SetClipboardText($"Ashe's Trader v0.3.8.1\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
         if (plugin.Activity.Count == 0) ImGui.TextWrapped("Actions and outcomes will appear here when a job runs.");
         foreach (var entry in plugin.Activity.Reverse()) UiTone.Status(entry);
         DrawHints();

@@ -1,8 +1,10 @@
 # Two-PC testing: start here
 
-Test build: **0.3.8.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 4.
+Test build: **0.3.8.1**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 4.
 
 ## Test faster deposits, full retainers and travel
+
+For a saved uncertain deposit, click **Review interrupted storage** at the top. It opens the review at the top of Activity. Inspect the original character's bags and retainers, cancel any quantity entry and close storage/trade windows. Check **Only the recorded confirmed quantity moved** only when true, then click **Accept recorded storage count**. Wait for the accepted message, then use **Resume / reconcile**. End job remains unavailable while storage is unresolved; after review, any remaining relay cargo must be delivered before the job can end. Missing observations still use Resume to retrieve the original worker result.
 
 Update both PCs and keep the existing settings and journal. The meeting location now applies on automatically chosen worlds; recording it again is unnecessary if the territory, aetheryte and position are still suitable. Enable the required DC travel in Lifestream on both PCs.
 

@@ -106,6 +106,18 @@ public sealed partial class WorkflowService
             throw new InvalidOperationException("Wait for the local operation to stop before resuming.");
         if (Run is not { Paused: true, Step: not CoordinatorStep.Finished }) return;
         error = "";
+        var knownStorageStop = Run.TradeOperationId == null ? Run.Pending.SingleOrDefault(pending =>
+            StorageReconciliation.IsStorage(pending.Command)
+            && pending.Response is { Ambiguous: true, Observation: not null }) : null;
+        if (knownStorageStop != null)
+        {
+            // A recorded uncertain stop needs an explicit review, not another query of the
+            // same failed result. Keep its evidence visible and do not briefly restart work.
+            error = Run.Status = StorageReviewMessage(knownStorageStop);
+            RecordDiagnostic($"Storage review required before resume; command={knownStorageStop.Command.Id}; confirmed={knownStorageStop.Response!.Observation!.MovedQuantity}; no command resent");
+            SaveRun();
+            return;
+        }
         if (Run.Journal == null)
         {
             // Pre-plan selections have not carried cargo and may be re-ranked after a pause.
@@ -183,18 +195,41 @@ public sealed partial class WorkflowService
     {
         if (Run is not { Paused: true }) return;
         if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning) throw new InvalidOperationException("Wait until local work stops.");
+        var unresolvedStorage = Run.Pending.FirstOrDefault(pending => StorageReconciliation.IsStorage(pending.Command)
+            && pending.Response?.NeverStarted != true && !StorageReconciliation.IsReviewed(pending.Response)
+            && (pending.Response?.Observation == null || pending.Response.Ambiguous));
+        if (unresolvedStorage != null)
+            RefuseToEndPausedJob(unresolvedStorage.Response?.Observation != null
+                ? "Review interrupted storage first: inspect bags and retainers, then use Accept recorded storage count only if that recorded amount is all that moved. After the review, use Resume / reconcile to finish any relay deliveries before ending the job."
+                : "Recover the interrupted storage observation with Resume / reconcile before ending the job. Review any uncertain movement first, then resume any remaining relay deliveries.");
         if (Run.Journal != null)
         {
             var ledger = new TransferJobLedger(Run.Journal);
-            if (ledger.HasPendingOperation) throw new InvalidOperationException("Reconcile the pending trade before ending the job.");
+            if (ledger.HasPendingOperation) RefuseToEndPausedJob("Reconcile the pending trade before ending the job.");
             if (Run.Journal.Plan.Allocations.Where(x => x.Legs.Count == 2).Any(x => ledger.RelayCargo(x.Legs[0].ReceiverId) > 0))
-                throw new InvalidOperationException("A relay still holds undelivered cargo. Resume delivery before ending this job.");
+                RefuseToEndPausedJob("A relay still holds undelivered cargo. After any interrupted storage review is accepted, use Resume / reconcile to finish delivering that cargo before ending this job.");
             ledger.Pause("Job ended by user before all requested quantities were delivered.");
         }
         Run.Step = CoordinatorStep.Finished;
         Run.Status = "Job ended by user. Confirmed progress is preserved in the journal.";
         error = "";
         SaveRun();
+    }
+
+    private void RefuseToEndPausedJob(string reason)
+    {
+        error = Run!.Status = reason;
+        RecordDiagnostic($"End paused job blocked: {reason}");
+        SaveRun();
+        throw new InvalidOperationException(reason);
+    }
+
+    private static string StorageReviewMessage(PendingCommand pending)
+    {
+        var action = pending.Command.Operation.Kind == GameOperationKind.Deposit ? "deposit" : "pickup";
+        return pending.Response?.Observation is { } observation
+            ? $"A retainer {action} has an uncertain outcome after {observation.MovedQuantity:N0} confirmed item(s). Use Review interrupted storage, inspect bags and retainers, then use Accept recorded storage count only if no additional items moved. The job stays paused until that review is accepted."
+            : $"A retainer {action} has an uncertain outcome without a recorded stop observation. Use Resume / reconcile to recover the original worker result; preserve diagnostics if the observation remains unavailable. No item movement will be retried.";
     }
 
     private void RequirePair()
@@ -274,7 +309,11 @@ public sealed partial class WorkflowService
                 throw new InvalidDataException("Conflicting results arrived for the same operation.");
             pending.Response = response;
             if (Run!.Paused && StorageReconciliation.IsStorage(pending.Command) && StorageReconciliation.IsReviewed(response))
+            {
+                error = "";
                 Run.Status = response.Error;
+                RecordDiagnostic($"Storage review accepted; command={pending.Command.Id}; confirmed={response.Observation!.MovedQuantity}; paused=True");
+            }
         }
         SaveRun();
     }
@@ -296,8 +335,7 @@ public sealed partial class WorkflowService
             AccountStorageMovement(pending, characterId);
             if (pending.Response.Ambiguous)
             {
-                var action = kind == GameOperationKind.Deposit ? "deposit" : "pickup";
-                throw new InvalidOperationException($"A retainer {action} has an uncertain outcome. Inspect bags and retainers before ending this job and creating a freshly scanned job for the remaining quantity; the {action} will not be retried.");
+                throw new InvalidOperationException(StorageReviewMessage(pending));
             }
         }
         if (!pending.Response.Success) throw new InvalidOperationException(pending.Response.Error);
@@ -696,7 +734,9 @@ public sealed partial class WorkflowService
         var resolution = new ManualResolution(commandId, false, StorageVerifiedOnly: true);
         // Retain the original evidence while waiting, including after a lost reply. Repeating
         // this explicit review only queries/applies the same durable worker decision.
+        error = "";
         Run.Status = "Waiting for the original character's storage review. The job remains paused.";
+        RecordDiagnostic($"Storage review requested; command={commandId}; confirmed={pending.Response!.Observation!.MovedQuantity}; paused=True");
         SaveRun();
         if (pending.PeerId == Settings.PeerId) ResolveWorker(resolution, pending.PeerId);
         else Send("resolve", resolution);
