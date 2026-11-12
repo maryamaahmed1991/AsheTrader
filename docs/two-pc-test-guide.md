@@ -1,6 +1,12 @@
 # Two-PC testing: start here
 
-Test build: **0.3.8.1**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 4.
+Test build: **0.3.9.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 4.
+
+## Test trade opening after a retainer trip
+
+Update both PCs to 0.3.9.0 and retain the existing journal. For the interrupted batch, open **Review interrupted trade**, then **Resume / refresh observations** with both original characters logged in. Compare both inventories. If no items moved and both counts are unchanged, check the confirmation and choose **Confirmed no transfer**; this reconciles the old batch and resumes remaining work. If a trade completed, choose **Confirmed transferred** only with matching evidence. Conflicting counts require investigation.
+
+Watch the next return from the inn. Both characters should approach within one unit of the recorded meeting point, and the sender should select its partner before requesting trade. A request ignored by the game may be tried again, with a three-second interval and at most three requests. Once any request is acknowledged, it must not be repeated. Normal offering and exact inventory confirmation continue after the window opens. If it pauses, copy diagnostics from both PCs before reloading; the report now includes actual distance, request count, target and raw trade states. The original game-side reason for the reported no-window timeout was not recorded by 0.3.8.1, so these changes still need live validation.
 
 ## Test faster deposits, full retainers and travel
 

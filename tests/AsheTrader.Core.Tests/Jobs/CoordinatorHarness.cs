@@ -20,7 +20,9 @@ public sealed partial class WorkflowService
     private readonly Dictionary<Guid, WorkerResponse> durableResponses = [];
     private readonly Dictionary<Guid, WorkerCommand> receivedCommands = [];
     private readonly Dictionary<Guid, Guid> commandOwners = [];
+    private readonly Dictionary<Guid, uint> tradeBeforeQuantities = [];
     private WorkerCommand? armedReceiver;
+    private WorkerCommand? deferredSender;
     private uint armedBefore;
     private readonly bool host = true;
     private readonly bool journalHealthy = true;
@@ -45,6 +47,8 @@ public sealed partial class WorkflowService
     public uint? DepositMovementLimit { get; set; }
     public uint? WithdrawMovementLimit { get; set; }
     public bool RejectNextSenderBeforeStart { get; set; }
+    public bool DeferTradeCompletion { get; set; }
+    public HashSet<Guid> StoppedTradeCommands { get; } = [];
     public bool StorageMenusClosed { get; set; } = true;
     // The worker still persists the result. A subsequent query can recover a lost response.
     public Predicate<WorkerCommand>? SuppressInitialResponse { get; set; }
@@ -115,6 +119,12 @@ public sealed partial class WorkflowService
 
     public void PauseForTest(string reason = "Test pause") => Pause(reason);
 
+    public void FailTradeForTest(WorkerCommandKind kind, string failure)
+    {
+        var pending = Run!.Pending.Single(command => command.Command.Kind == kind);
+        Deliver(pending.PeerId, new() { CommandId = pending.Command.Id, Ambiguous = true, Error = failure });
+    }
+
     private void RequireIdle()
     {
         if (Run is { Paused: false, Step: not CoordinatorStep.Finished }) throw new InvalidOperationException("A job is already running.");
@@ -131,6 +141,18 @@ public sealed partial class WorkflowService
     {
         error = reason;
         if (Run != null) { Run.Paused = true; Run.Status = reason; SaveRun(); }
+        foreach (var command in new[] { armedReceiver, deferredSender }.OfType<WorkerCommand>())
+        {
+            StoppedTradeCommands.Add(command.Id);
+            if (!durableResponses.ContainsKey(command.Id))
+                durableResponses[command.Id] = new()
+                {
+                    CommandId = command.Id, Ambiguous = true,
+                    Error = "Trade stopped after the coordinator requested pause.",
+                };
+        }
+        armedReceiver = null;
+        deferredSender = null;
     }
 
     private void Send<T>(string kind, T payload)
@@ -206,6 +228,7 @@ public sealed partial class WorkflowService
             return;
         }
         if (character.Location != "meeting") throw new InvalidOperationException("Trade participant did not return to the meeting point.");
+        tradeBeforeQuantities[command.Id] = stock.Bags;
         if (command.Kind == WorkerCommandKind.ReceiveBatch)
         {
             if (armedReceiver != null) throw new InvalidOperationException("A receiver was already armed.");
@@ -242,6 +265,7 @@ public sealed partial class WorkflowService
             || receiver.Location != "meeting" || receiver.CurrentWorldId != character.CurrentWorldId
             || stock.Bags < amount || receiver.BagSpace < amount)
             throw new InvalidOperationException("The proposed trade cannot fit or does not match the armed partner.");
+        if (DeferTradeCompletion) { deferredSender = Clone(command); return; }
         stock.Bags -= amount; receiverStock.Bags += amount;
         Trades.Add(new(character.Id, receiver.Id, amount, command.Id, arm.Id, command.Operation.ItemId, command.Operation.HighQuality, character.CurrentWorldId));
         Deliver(receiver.PeerId, new() { CommandId = arm.Id, Success = true, Quantity = amount });
@@ -253,7 +277,20 @@ public sealed partial class WorkflowService
     {
         if (commandOwners.TryGetValue(id, out var expected) && owner != expected)
             throw new InvalidOperationException("Query sent to the wrong worker.");
-        if (durableResponses.TryGetValue(id, out var response)) AcceptResponse(owner, Clone(response));
+        if (durableResponses.TryGetValue(id, out var response))
+        {
+            var command = receivedCommands[id];
+            if (command.Kind is WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch
+                && response is not ({ Success: true } or { OperatorReviewed: true } or { NeverStarted: true })
+                && tradeBeforeQuantities.TryGetValue(id, out var before)
+                && loggedIn.GetValueOrDefault(owner) == command.Operation.CharacterId)
+            {
+                response = TradeReconciliationEvidence.Capture(command, response, before,
+                    characters[command.Operation.CharacterId].Inventory(command.Operation.ItemId, command.Operation.HighQuality).Bags);
+                durableResponses[id] = Clone(response);
+            }
+            AcceptResponse(owner, Clone(response));
+        }
         else if (armedReceiver?.Id == id) AcceptResponse(owner, new() { CommandId = id, Ready = true });
         else AcceptResponse(owner, new() { CommandId = id, Ambiguous = true, Error = "Unknown operation." });
     }

@@ -316,6 +316,24 @@ public sealed partial class WorkflowService
             }
         }
         SaveRun();
+        if (!response.Ready && !response.Success && !response.OperatorReviewed
+            && pending.Command.Kind is WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch)
+        {
+            if (Run is { Paused: false })
+            {
+                // A failed side cannot be completed by leaving the other side armed. Stop both
+                // immediately, retaining both command IDs for explicit, inventory-backed review.
+                RecordDiagnostic($"Trade failure received; command={pending.Command.Id}; kind={pending.Command.Kind}; stopping both PCs; error={response.Error}");
+                Pause(TradeFailureMessage());
+            }
+            else
+            {
+                // The stopped peer or a later query can reply after the pause. Keep both
+                // explanations visible instead of replacing the original timeout with a stop.
+                error = Run!.Status = TradeFailureMessage();
+                SaveRun();
+            }
+        }
     }
 
     private bool Perform(ulong characterId, GameOperationKind kind, CoordinatorStep next, Action<GameOperationResult>? apply = null,
@@ -449,6 +467,7 @@ public sealed partial class WorkflowService
                 else Dispatch(pending.PeerId, pending.Command);
             }
         }
+        if (run.Paused) return;
         if (AdvanceAutomaticRelayPreparation()) return;
         if (run.Step == CoordinatorStep.DiscoverCache)
         {
@@ -631,12 +650,15 @@ public sealed partial class WorkflowService
                     Issue(leg.ReceiverPeerId, Command(leg.ReceiverId, GameOperationKind.Inspect, run.DesiredQuantity,
                         workerKind: WorkerCommandKind.ReceiveBatch, partner: leg.SenderId));
                 }
-                else if (run.Pending[0].Ready) SetStep(CoordinatorStep.SendBatch);
                 else if (run.Pending[0].Response is { Success: false } rejected) throw new InvalidOperationException(rejected.Error);
+                else if (run.Pending[0].Ready) SetStep(CoordinatorStep.SendBatch);
                 break;
             case CoordinatorStep.SendBatch:
+                if (run.Pending.Any(pending => pending.Response is { Success: false }))
+                    throw new InvalidOperationException(TradeFailureMessage());
                 if (run.Pending.Count == 1) Issue(leg.SenderPeerId, Command(leg.SenderId, GameOperationKind.Inspect, run.DesiredQuantity,
                     workerKind: WorkerCommandKind.SendBatch, partner: leg.ReceiverId), marksTrade: true);
+                if (run.Paused) break;
                 SetStep(CoordinatorStep.AwaitTrade);
                 break;
             case CoordinatorStep.AwaitTrade:
@@ -665,6 +687,8 @@ public sealed partial class WorkflowService
         }
         var sender = run.Pending.Single(x => x.Command.Kind == WorkerCommandKind.SendBatch).Response;
         var receiver = run.Pending.Single(x => x.Command.Kind == WorkerCommandKind.ReceiveBatch).Response;
+        if (run.Pending.Any(pending => pending.Response is { Success: false } failed && !IsVerifiedNoTransfer(failed)))
+            throw new InvalidOperationException(TradeFailureMessage());
         if (sender == null || receiver == null) return;
         if (IsVerifiedNoTransfer(sender) && IsVerifiedNoTransfer(receiver))
         {
@@ -674,7 +698,7 @@ public sealed partial class WorkflowService
         else
         {
             if (!sender.Success || !receiver.Success || sender.Quantity != run.DesiredQuantity || receiver.Quantity != run.DesiredQuantity)
-                throw new InvalidOperationException($"Trade outcome needs reconciliation. Sender: {sender.Error}; receiver: {receiver.Error}");
+                throw new InvalidOperationException(TradeFailureMessage());
             ledger.RecordObservation(run.TradeOperationId!.Value, ObservationSide.Sender, Observe(leg.SenderPeerId, leg.SenderId, sender.Quantity));
             ledger.RecordObservation(run.TradeOperationId.Value, ObservationSide.Receiver, Observe(leg.ReceiverPeerId, leg.ReceiverId, receiver.Quantity));
             SaveRun();
@@ -684,6 +708,14 @@ public sealed partial class WorkflowService
         }
         run.Pending.Clear(); run.TradeOperationId = null;
         SetStep(CoordinatorStep.SelectLeg);
+    }
+
+    private string TradeFailureMessage()
+    {
+        var failures = Run!.Pending.Where(pending => pending.Response is { Success: false })
+            .Select(pending => $"{(pending.Command.Kind == WorkerCommandKind.SendBatch ? "Sender" : "Receiver")}: {pending.Response!.Error}");
+        return $"Trade stopped; both PCs were asked to pause. {string.Join("; ", failures)} "
+            + "No trade will be repeated automatically. Keep the original characters logged in, use Review interrupted trade, then Resume / refresh observations to collect both inventory counts and explicitly review the batch outcome.";
     }
 
     private static TransferObservation Observe(Guid peerId, ulong characterId, uint quantity) => new()

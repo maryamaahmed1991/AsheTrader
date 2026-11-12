@@ -295,7 +295,7 @@ public sealed class GameWorkflowExecutor
                     break;
                 case Stage.StartPosition: StartPosition(); break;
                 case Stage.WaitPosition:
-                    if (DistanceTo(travel!.Position) <= 3)
+                    if (DistanceTo(travel!.Position) <= PositionArrivalRadius)
                     { StopNavigation(); Arrived(); }
                     else if (!NavigationBusy() && now - stageStarted > 5000)
                         throw new InvalidOperationException("Navigation stopped before reaching the configured point.");
@@ -488,16 +488,20 @@ public sealed class GameWorkflowExecutor
     private void StartPosition()
     {
         if (!PlayerReady || CurrentWorld != travel!.WorldId || Plugin.ClientState.TerritoryType != travel.TerritoryId) return;
-        if (DistanceTo(travel.Position) <= 3) { Arrived(); return; }
+        if (DistanceTo(travel.Position) <= PositionArrivalRadius) { Arrived(); return; }
         StartNavigation(travel.Position);
         Transition(Stage.WaitPosition, "Walking to the configured point…", 500);
     }
 
     private void Arrived()
     {
+        Trace($"destination reached; distance={DistanceTo(travel!.Position):F2}; arrivalRadius={PositionArrivalRadius:F2}; world={CurrentWorld}; territory={Plugin.ClientState.TerritoryType}");
         if (storageAfterTravel) Transition(Stage.ApproachBell, "Finding the configured summoning bell…", 500);
         else Finish(true);
     }
+
+    private float PositionArrivalRadius => operation?.Kind == GameOperationKind.TravelMeeting
+        ? AsheTrader.Trading.TradeOpeningGate.MeetingArrivalRadius : 3f;
 
     private void ApproachBell()
     {

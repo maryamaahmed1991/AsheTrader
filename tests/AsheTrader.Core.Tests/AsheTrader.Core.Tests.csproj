@@ -26,6 +26,8 @@
     <Compile Include="../../src/AsheTrader/Workflow/RelayBatchScheduling.cs" Link="Production/RelayBatchScheduling.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/MeetingRouting.cs" Link="Production/MeetingRouting.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/WorkflowModels.cs" Link="Production/WorkflowModels.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/TradeReconciliationEvidence.cs" Link="Production/TradeReconciliationEvidence.cs" />
+    <Compile Include="../../src/AsheTrader/Trading/TradeOpeningGate.cs" Link="Production/TradeOpeningGate.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/GameOperations.cs" Link="Production/GameOperations.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/RetainerMenuMatcher.cs" Link="Production/RetainerMenuMatcher.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/Native/BellInteractionGate.cs" Link="Production/BellInteractionGate.cs" />

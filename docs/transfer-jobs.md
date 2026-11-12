@@ -1,6 +1,6 @@
 # Ashe's Trader: transfer-job requirements
 
-Status: agreed product requirements, implemented in the 0.3.8.1 development build for staged two-PC testing. Automated tests cover planning, relay collection/delivery, accounting, LAN discovery/transport, and the transfer coordinator. User diagnostics confirm a complete ten-retainer scan; new route scheduling, cutscene preservation, native movement/trades and purchases still require live validation.
+Status: agreed product requirements, implemented in the 0.3.9.0 development build for staged two-PC testing. Automated tests cover planning, relay collection/delivery, accounting, LAN discovery/transport, and the transfer coordinator. User diagnostics confirm a complete ten-retainer scan; new route scheduling, cutscene preservation, native movement/trades and purchases still require live validation.
 
 ## Confirmed requirements
 

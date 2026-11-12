@@ -1,4 +1,7 @@
 using AsheTrader.Core;
+using System.Numerics;
+using AsheTrader.Workflow.Native;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Game.Text.SeStringHandling;
 using FFXIVClientStructs.FFXIV.Client.Game;
@@ -20,6 +23,13 @@ internal sealed record NativeTradeSnapshot(
     TradeState LocalState, TradeState RemoteState, bool SyncPending,
     IReadOnlyList<OfferedItem> LocalItems, IReadOnlyList<OfferedItem> RemoteItems,
     uint LocalGil, uint RemoteGil);
+
+internal sealed record TradeOpeningSnapshot(bool Ready, bool Acknowledged, string BlockReason, float Distance,
+    uint SelectedTarget, uint RawPartner, TradeState LocalState, TradeState RemoteState, bool SyncPending,
+    bool AddonVisible, bool AddonReady, bool TradeOpenCondition, bool AgentActive, bool PartnerTargetable)
+{
+    public string Describe() => $"ready={Ready}; blocked={BlockReason}; distance={Distance:F2}; selectedTarget={SelectedTarget}; rawPartner={RawPartner}; localState={LocalState}; remoteState={RemoteState}; sync={SyncPending}; addonVisible={AddonVisible}; addonReady={AddonReady}; tradeOpen={TradeOpenCondition}; agentActive={AgentActive}; partnerTargetable={PartnerTargetable}";
+}
 
 /// <summary>
 /// All methods are called only by TradeRunner.Update on the Dalamud framework thread.
@@ -100,12 +110,63 @@ internal sealed unsafe class NativeTradeAdapter
     public bool HasModal => ReadyAddon("InputNumeric") != null || ReadyAddon("SelectYesno") != null;
     public bool HasNumeric => ReadyAddon("InputNumeric") != null;
 
-    public void RequestTrade(TradePartner partner)
+    public void SelectPartner(TradePartner partner)
     {
         var target = Resolve(partner) ?? throw new InvalidOperationException("The selected partner is no longer nearby.");
         Plugin.TargetManager.Target = target;
+    }
+
+    public TradeOpeningSnapshot ReadOpening(TradePartner partner)
+    {
+        var manager = InventoryManager.Instance();
+        var player = Plugin.ObjectTable.LocalPlayer;
+        var target = Resolve(partner);
+        var addon = (AtkUnitBase*)Plugin.GameGui.GetAddonByName("Trade").Address;
+        var agent = AgentTrade.Instance();
+        var local = manager == null ? default : manager->TradeLocalState;
+        var remote = manager == null ? default : manager->TradeRemoteState;
+        var sync = manager != null && manager->TradeIsSyncPending;
+        var visible = addon != null && addon->IsVisible;
+        var openCondition = Plugin.Condition[ConditionFlag.TradeOpen];
+        var agentActive = agent != null && agent->IsAgentActive();
+        var acknowledged = visible || openCondition || agentActive || sync
+            || IsActiveState(local) || IsActiveState(remote);
+        var distance = player == null || target == null ? float.PositiveInfinity : Vector3.Distance(player.Position, target.Position);
+        var selected = Plugin.TargetManager.Target?.EntityId ?? 0;
+        var busy = Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51]
+            || Plugin.Condition[ConditionFlag.Occupied] || Plugin.Condition[ConditionFlag.OccupiedInEvent]
+            || Plugin.Condition[ConditionFlag.OccupiedInQuestEvent] || Plugin.Condition[ConditionFlag.OccupiedSummoningBell]
+            || Plugin.Condition[ConditionFlag.Casting] || Plugin.Condition[ConditionFlag.Jumping]
+            || Plugin.Condition[ConditionFlag.Mounted] || Plugin.Condition[ConditionFlag.LoggingOut]
+            || NativeRetainers.HasActiveCutscene;
+        var reason = !Plugin.ClientState.IsLoggedIn || player == null || manager == null ? "local player/inventory unavailable"
+            : target == null ? "partner not found"
+            : !player.IsTargetable || !target.IsTargetable ? "player or partner not targetable"
+            : target.CurrentWorld.RowId != player.CurrentWorld.RowId ? "different current worlds"
+            : distance > TradeOpeningGate.RequestDistance ? "partner outside request range"
+            : selected != partner.EntityId ? "partner target not selected"
+            : acknowledged ? "trade request already acknowledged"
+            : local != TradeState.NotTrading ? "unsupported local trade state"
+            : busy ? "game busy/loading/cutscene"
+            : HasModal || NativeRetainers.HasRetainerList || NativeRetainers.HasRetainerMenu || NativeRetainers.HasRetainerInventory
+                || ReadyAddon("Talk") != null || ReadyAddon("ContextMenu") != null ? "another interaction window is open"
+            : ActionManager.Instance() == null || ActionManager.Instance()->AnimationLock > 0 ? "animation lock"
+            : "";
+        return new(reason.Length == 0, acknowledged, reason, distance, selected,
+            manager == null ? 0 : manager->TradePartnerEntityId, local, remote, sync,
+            visible, addon != null && addon->IsReady, openCondition, agentActive, target?.IsTargetable == true);
+    }
+
+    public void RequestTrade(TradePartner partner)
+    {
+        // Selection and stable-readiness observation happen on earlier updates.
+        var opening = ReadOpening(partner);
+        if (!opening.Ready) throw new InvalidOperationException($"Trade request is no longer ready: {opening.BlockReason}.");
         InventoryManager.Instance()->SendTradeRequest(partner.EntityId);
     }
+
+    private static bool IsActiveState(TradeState state) => state is TradeState.TradeRequestPending
+        or TradeState.SelectingTradeGoods or TradeState.LockedIn or TradeState.WaitingForConfirmation or TradeState.Confirmed;
 
     public bool AddItem(TradeAllocation entry)
     {

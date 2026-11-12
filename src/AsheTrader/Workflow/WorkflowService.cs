@@ -425,12 +425,8 @@ public sealed partial class WorkflowService : IDisposable
         {
             var after = ReadQuantity(record.Command.Operation.ItemId, record.Command.Operation.HighQuality);
             var before = record.BeforeQuantity.Value;
-            var expected = record.Command.Operation.Quantity;
-            var matches = record.Command.Kind == WorkerCommandKind.SendBatch
-                ? before >= after && before - after == expected : after >= before && after - before == expected;
-            var outcome = new WorkerResponse { CommandId = id, BeforeQuantity = before, CurrentQuantity = after,
-                Quantity = matches ? expected : 0, Unchanged = after == before, Ambiguous = true,
-                Error = "Trade was interrupted before a durable success result. Review both PCs and explicitly reconcile this batch." };
+            var outcome = TradeReconciliationEvidence.Capture(record.Command, record.Response, before, after);
+            RecordDiagnostic($"Trade reconciliation evidence command={id}; before={before}; current={after}; unchanged={outcome.Unchanged}; originalError={outcome.Error}");
             record.Response = outcome; SaveWorkers(); Reply(caller, outcome); return;
         }
         Reply(caller, record.Response ?? new() { CommandId = id, Ambiguous = true,

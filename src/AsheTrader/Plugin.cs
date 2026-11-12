@@ -55,6 +55,7 @@ public sealed class Plugin : IDalamudPlugin
         Lifestream = new LifestreamClient();
         Fuel = new FuelRunner();
         Workflow = new WorkflowService(this);
+        Trader.Diagnostic = Workflow.RecordTradeDiagnostic;
         Save();
         mainWindow = new MainWindow(this) { IsOpen = Config.OpenOnLoad };
         windows.AddWindow(mainWindow);

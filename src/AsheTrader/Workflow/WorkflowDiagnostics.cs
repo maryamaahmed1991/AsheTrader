@@ -13,6 +13,8 @@ public sealed partial class WorkflowService
         catch { }
     }
 
+    public void RecordTradeDiagnostic(string message) => RecordDiagnostic("trade " + message);
+
     private void RecordDiagnostic(string message)
     {
         // Diagnostics must never interrupt gameplay or change an operation's outcome.
@@ -40,6 +42,7 @@ public sealed partial class WorkflowService
         if (!Plugin.Framework.IsInFrameworkUpdateThread || Plugin.Framework.IsFrameworkUnloading)
             throw new InvalidOperationException("Capture diagnostics on the active framework thread.");
         executor.CaptureDiagnosticSnapshot("User requested diagnostic report");
+        plugin.Trader.CaptureDiagnosticSnapshot("User requested diagnostic report");
         var header = new WorkflowTrace(40, 2000);
         header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 3; timestamps UTC; this PC only");
         header.Add("Session", $"Role={(IsHost ? "coordinator" : "worker")}; connected={Connected}; paired={HasAcceptedConnection}; remoteControl={Settings.AllowRemoteControl}; journalHealthy={journalHealthy}");
@@ -54,6 +57,8 @@ public sealed partial class WorkflowService
                 header.Add("Pending", $"command={pending.Command.Id}; kind={pending.Command.Kind}/{pending.Command.Operation.Kind}; character={pending.Command.Operation.CharacterId}; item={pending.Command.Operation.ItemId}; HQ={pending.Command.Operation.HighQuality}; quantity={pending.Command.Operation.Quantity}; response={pending.Response?.Success.ToString() ?? "waiting"}; error={pending.Response?.Error ?? ""}");
                 if (StorageReconciliation.IsStorage(pending.Command))
                     header.Add("StorageRecovery", $"command={pending.Command.Id}; responsePresent={pending.Response != null}; ambiguous={pending.Response?.Ambiguous}; operatorReviewed={pending.Response?.OperatorReviewed}; observationPresent={pending.Response?.Observation != null}; confirmedMoved={pending.Response?.Observation?.MovedQuantity}; bagAtStop={pending.Response?.Observation?.BagQuantity}; movementUncertain={pending.Response?.Observation?.MovementUncertain}; accountingApplied={pending.InventoryAdjustmentApplied}; reviewAccepted={StorageReconciliation.IsReviewed(pending.Response)}");
+                if (pending.Command.Kind is WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch)
+                    header.Add("TradeRecovery", $"trade={run.TradeOperationId}; command={pending.Command.Id}; peer={pending.PeerId}; side={pending.Command.Kind}; responsePresent={pending.Response != null}; ambiguous={pending.Response?.Ambiguous}; operatorReviewed={pending.Response?.OperatorReviewed}; beforeQuantity={pending.Response?.BeforeQuantity}; currentQuantity={pending.Response?.CurrentQuantity}; expectedQuantity={pending.Command.Operation.Quantity}; neverStarted={pending.Response?.NeverStarted}; unchanged={pending.Response?.Unchanged}");
             }
         }
         if (activeWorker is { } worker)
