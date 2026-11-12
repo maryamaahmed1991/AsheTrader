@@ -33,7 +33,7 @@ public sealed partial class WorkflowService
             throw new ArgumentException("Add each item and quality only once per job; combine its recipient quantities on that item line.", nameof(job));
         if (definitions.Select(item => item.Id).Distinct().Count() != definitions.Length)
             throw new ArgumentException("Each job item needs its own stable ID. Remove and re-add the duplicate item line.", nameof(job));
-        if (!discoveryOnly && (job.Meeting.WorldId == 0 || job.Meeting.TerritoryId == 0 || job.Meeting.AetheryteId == 0))
+        if (!discoveryOnly && (job.Meeting.TerritoryId == 0 || job.Meeting.AetheryteId == 0))
             throw new InvalidOperationException("Capture an outdoor meeting point and choose its main aetheryte before starting.");
         Run = new() { Job = saved, DiscoveryOnly = discoveryOnly, DiscoveryOrder = DiscoveryCharacters(saved.Definition), Step = CoordinatorStep.DiscoverCache,
             Status = "Reading Allagan Tools inventories from both PCs…" };
@@ -78,6 +78,7 @@ public sealed partial class WorkflowService
             Run = new()
             {
                 Job = run.Job, DiscoveryOnly = run.DiscoveryOnly, ActiveItemIndex = nextIndex,
+                ObservedWorlds = new(run.ObservedWorlds),
                 CompletedItems = completed, DiscoveryOrder = order, Step = CoordinatorStep.DiscoverCache,
                 Status = $"Item {nextIndex + 1}/{run.TotalItemCount}: reading cached inventories before continuing…"
             };
@@ -131,6 +132,23 @@ public sealed partial class WorkflowService
         }
         else
         {
+            var pendingTravel = Run.Pending.SingleOrDefault(x => x.Command.Kind == WorkerCommandKind.Game
+                && x.Command.Operation.Kind == GameOperationKind.TravelMeeting
+                && (x.Response == null || x.Response.Success));
+            if (pendingTravel?.Command.Operation.Destination is { } pinnedDestination
+                && Run.Step is CoordinatorStep.TravelSender or CoordinatorStep.TravelReceiver)
+            {
+                // Recover the same travel command before moving the other PC. Explicit
+                // resume must not discard an in-flight world's pinned rendezvous.
+                Run.EffectiveMeeting = Clone(pinnedDestination);
+                Run.MeetingPinned = true;
+                pendingTravel.Response = null;
+                Run.Paused = false;
+                Run.Status = "Recovering the saved travel destination…";
+                resendAt = 0;
+                SaveRun();
+                return;
+            }
             var storage = Run.Pending.SingleOrDefault(x => x.Command.Kind == WorkerCommandKind.Game
                 && x.Command.Operation.Kind is GameOperationKind.Deposit or GameOperationKind.Withdraw);
             if (storage != null && storage.Response?.NeverStarted != true
@@ -244,9 +262,19 @@ public sealed partial class WorkflowService
         if (response.Ready) pending.Ready = true;
         else
         {
+            // A delayed pre-review reply must not undo a durable, explicit storage decision.
+            if (StorageReconciliation.IsStorage(pending.Command) && StorageReconciliation.IsReviewed(pending.Response))
+            {
+                if (!response.OperatorReviewed) return;
+                if (response.Ambiguous || response.Success || response.Observation?.MovedQuantity != pending.Response!.Observation!.MovedQuantity
+                    || response.Observation?.BagQuantity != pending.Response.Observation.BagQuantity)
+                    throw new InvalidDataException("Conflicting operator-reviewed storage results arrived for the same operation.");
+            }
             if (pending.Response is { Success: true } old && (!response.Success || response.Quantity != old.Quantity))
                 throw new InvalidDataException("Conflicting results arrived for the same operation.");
             pending.Response = response;
+            if (Run!.Paused && StorageReconciliation.IsStorage(pending.Command) && StorageReconciliation.IsReviewed(response))
+                Run.Status = response.Error;
         }
         SaveRun();
     }
@@ -275,6 +303,8 @@ public sealed partial class WorkflowService
         if (!pending.Response.Success) throw new InvalidOperationException(pending.Response.Error);
         var result = pending.Response.Observation ?? throw new InvalidDataException("Worker omitted its inventory observation.");
         if (result.CharacterId != characterId) throw new InvalidDataException("Worker observed a different character.");
+        if (kind != GameOperationKind.ReadCachedInventory && result.CurrentWorldId != 0)
+            Run.ObservedWorlds[characterId] = result.CurrentWorldId;
         apply?.Invoke(result);
         Run.Pending.Clear();
         SetStep(next);
@@ -541,7 +571,10 @@ public sealed partial class WorkflowService
                     run.PreviousItemDepositCharacterId = 0;
                 }, run.DesiredQuantity, inventoryItemIndex: previousIndex);
                 break;
-            case CoordinatorStep.TravelSender: Perform(leg.SenderId, GameOperationKind.TravelMeeting, CoordinatorStep.TravelReceiver, destination: run.EffectiveMeeting ?? run.Job.Meeting); break;
+            case CoordinatorStep.TravelSender:
+                if (run.Pending.Count == 0) PinLegMeeting(assignment, run.LegIndex);
+                Perform(leg.SenderId, GameOperationKind.TravelMeeting, CoordinatorStep.TravelReceiver, destination: run.EffectiveMeeting ?? run.Job.Meeting);
+                break;
             case CoordinatorStep.TravelReceiver: Perform(leg.ReceiverId, GameOperationKind.TravelMeeting, CoordinatorStep.PreviewBatch, destination: run.EffectiveMeeting ?? run.Job.Meeting); break;
             case CoordinatorStep.PreviewBatch:
                 if (run.Pending.Count == 0) Issue(leg.SenderPeerId, Command(leg.SenderId, GameOperationKind.Inspect, run.DesiredQuantity, workerKind: WorkerCommandKind.PreviewBatch));
@@ -645,6 +678,28 @@ public sealed partial class WorkflowService
             else Send("resolve", resolution);
         }
         Run.Paused = false; Run.Step = CoordinatorStep.AwaitTrade; error = ""; SaveRun();
+    }
+
+    public void ResolvePendingStorage(Guid commandId)
+    {
+        RequirePair();
+        if (Run is not { Paused: true, TradeOperationId: null } || Run.Pending.Count != 1
+            || Run.Journal != null && new TransferJobLedger(Run.Journal).HasPendingOperation)
+            throw new InvalidOperationException("Pause the job and reconcile any pending trade before reviewing storage.");
+        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || plugin.Fuel.Active)
+            throw new InvalidOperationException("Wait for active work to stop before reviewing storage.");
+        var pending = Run.Pending.Single();
+        if (pending.Command.Id != commandId || !StorageReconciliation.IsStorage(pending.Command)
+            || pending.Response?.Observation == null
+            || (!pending.Response.Ambiguous && !StorageReconciliation.IsReviewed(pending.Response)))
+            throw new InvalidOperationException("The selected storage command has no uncertain recorded observation to review.");
+        var resolution = new ManualResolution(commandId, false, StorageVerifiedOnly: true);
+        // Retain the original evidence while waiting, including after a lost reply. Repeating
+        // this explicit review only queries/applies the same durable worker decision.
+        Run.Status = "Waiting for the original character's storage review. The job remains paused.";
+        SaveRun();
+        if (pending.PeerId == Settings.PeerId) ResolveWorker(resolution, pending.PeerId);
+        else Send("resolve", resolution);
     }
 
     private static bool IsVerifiedNoTransfer(WorkerResponse response) => response.NeverStarted || (response.Unchanged && response.OperatorReviewed && !response.Ambiguous);

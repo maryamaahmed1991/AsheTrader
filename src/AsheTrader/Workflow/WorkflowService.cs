@@ -465,6 +465,28 @@ public sealed partial class WorkflowService : IDisposable
 
     private void ResolveWorker(ManualResolution resolution, Guid caller)
     {
+        if (resolution.StorageVerifiedOnly)
+        {
+            if (resolution.Transferred || !journalHealthy
+                || !workerRecords.TryGetValue(resolution.CommandId, out var storageRecord)
+                || !StorageReconciliation.IsStorage(storageRecord.Command))
+                throw new InvalidOperationException("This command cannot be reconciled as a recorded storage-only movement.");
+            if (StorageReconciliation.IsReviewed(storageRecord.Response)) { Reply(caller, storageRecord.Response!); return; }
+            if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || plugin.Fuel.Active)
+                throw new InvalidOperationException("Stop active work before storage reconciliation.");
+            if (!Plugin.ClientState.IsLoggedIn || Plugin.PlayerState.ContentId != storageRecord.Command.Operation.CharacterId)
+                throw new InvalidOperationException("Log in the original storage character before reviewing its bags and retainers.");
+            if (NativeRetainers.HasNumeric || NativeRetainers.HasRetainerList || NativeRetainers.HasRetainerMenu
+                || NativeRetainers.HasRetainerInventory || NativeRetainers.HasUnrelatedModal || NativeRetainers.HasActiveCutscene
+                || Plugin.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.OccupiedSummoningBell])
+                throw new InvalidOperationException("Close all retainer, quantity and trade windows before accepting the storage review.");
+            var storageCurrent = ReadQuantity(storageRecord.Command.Operation.ItemId, storageRecord.Command.Operation.HighQuality);
+            var storageResponse = StorageReconciliation.Review(storageRecord.Command, storageRecord.Response, storageCurrent);
+            storageRecord.Response = storageResponse;
+            SaveWorkers(); // The review is durable before its acknowledgement is sent.
+            Reply(caller, storageResponse);
+            return;
+        }
         if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning) throw new InvalidOperationException("Stop active work before reconciliation.");
         if (!workerRecords.TryGetValue(resolution.CommandId, out var record)
             || record.Command.Kind is not (WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch)

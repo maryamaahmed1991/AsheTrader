@@ -30,6 +30,7 @@ public sealed class GameWorkflowExecutor
     private bool ownsNavigation;
     private bool ownsRelog;
     private long? relogIdleSince;
+    private long? worldTravelIdleSince;
     private bool restoreArSuppression;
     private long stageStarted;
     private long operationStarted;
@@ -40,19 +41,17 @@ public sealed class GameWorkflowExecutor
     private bool rosterLoaded;
     private uint moved;
     private uint moveQuantity;
-    private uint moveSourceQuantity;
+    private NativeBagSlot? pendingMoveSource;
     private bool movementIssued;
-    private ItemInventory? beforeBags;
-    private ItemInventory? beforeRetainer;
     private int inventoryStableFrames;
     private string inventoryFingerprint = string.Empty;
-    private int moveStableFrames;
-    private RetainerTransferConfirmation? withdrawalConfirmation;
+    private RetainerTransferConfirmation? movementConfirmation;
     private int shutdown;
     private long nextDiagnosticAt;
     private string lastDiagnosticState = string.Empty;
     private readonly BellInteractionGate bellInteraction = new();
     private readonly CutsceneWait cutsceneWait = new();
+    private readonly InnArrivalGate innArrival = new();
     private string statusBeforeCutscene = string.Empty;
     private bool conditionalInnSkipMode;
 
@@ -79,13 +78,15 @@ public sealed class GameWorkflowExecutor
             Destination = Copy(command.Destination), AllowedRetainerIds = command.AllowedRetainerIds?.Distinct().ToArray() ?? [],
         };
         roster = []; observed.Clear(); rosterLoaded = false; moved = 0; retainerIndex = 0; movementIssued = false;
-        beforeBags = beforeRetainer = null;
-        withdrawalConfirmation = null;
+        movementConfirmation = null;
+        pendingMoveSource = null;
         ownsLifestream = ownsNavigation = ownsRelog = restoreArSuppression = false;
         relogIdleSince = null;
+        worldTravelIdleSince = null;
         inventoryReadFailure = string.Empty;
         bellInteraction.Reset();
         cutsceneWait.Reset();
+        innArrival.Reset();
         statusBeforeCutscene = string.Empty;
         conditionalInnSkipMode = false;
         operationStarted = Environment.TickCount64;
@@ -205,6 +206,7 @@ public sealed class GameWorkflowExecutor
                 {
                     // Preserve retry accounting, but require fresh stable readiness after the scene.
                     bellInteraction.Observe(now, playerReady: false, interactionBlocked: true, bellOccupied: false);
+                    innArrival.Reset();
                     statusBeforeCutscene = Status;
                     Status = "Waiting for the cutscene to finish naturally…";
                     Trace("cutscene wait begin; no gameplay actions or skip inputs will be sent");
@@ -216,8 +218,9 @@ public sealed class GameWorkflowExecutor
                 operationStarted += pausedFor.Value;
                 stageStarted += pausedFor.Value;
                 actionAfter += pausedFor.Value;
-                withdrawalConfirmation?.Suspend(pausedFor.Value);
+                movementConfirmation?.Suspend(pausedFor.Value);
                 if (relogIdleSince.HasValue) relogIdleSince += pausedFor.Value;
+                if (worldTravelIdleSince.HasValue) worldTravelIdleSince += pausedFor.Value;
                 Status = statusBeforeCutscene;
                 Trace($"cutscene ended; no skip input sent; pausedMs={pausedFor.Value}; resuming observed game state");
             }
@@ -229,6 +232,8 @@ public sealed class GameWorkflowExecutor
             {
                 if (!Plugin.ClientState.IsLoggedIn || Plugin.PlayerState.ContentId != operation.CharacterId || Plugin.ObjectTable.LocalPlayer == null)
                 {
+                    if (stage == Stage.WaitWorld) worldTravelIdleSince = null;
+                    if (stage == Stage.WaitInn) innArrival.Reset();
                     if (stage is Stage.WaitWorld or Stage.WaitTerritory or Stage.WaitInn) return;
                     throw new InvalidOperationException("The logged-in character changed during the operation.");
                 }
@@ -266,8 +271,22 @@ public sealed class GameWorkflowExecutor
                     break;
                 case Stage.StartWorld: StartWorld(); break;
                 case Stage.WaitWorld:
-                    if (PlayerReady && CurrentWorld == travel!.WorldId && !LifestreamBusy())
-                    { ownsLifestream = false; Transition(Stage.StartTeleport, "Choosing the destination aetheryte…", 500); }
+                    var worldTravelBusy = LifestreamBusy();
+                    if (PlayerReady && CurrentWorld == travel!.WorldId && !worldTravelBusy)
+                    {
+                        worldTravelIdleSince = null;
+                        ownsLifestream = false;
+                        Transition(Stage.StartTeleport, "Choosing the destination aetheryte…", 500);
+                    }
+                    else if (PlayerReady && !worldTravelBusy)
+                    {
+                        // A successful IPC return only acknowledges dispatch. DC-travel
+                        // settings or availability can still make Lifestream decline it.
+                        worldTravelIdleSince ??= now;
+                        if (now - worldTravelIdleSince.Value >= 5000)
+                            throw new InvalidOperationException($"Lifestream stopped before reaching meeting/storage world {travel!.WorldId}; the character is still on world {CurrentWorld}. Check Lifestream's data-center travel settings and destination availability, then resume. World travel was not retried automatically.");
+                    }
+                    else worldTravelIdleSince = null;
                     break;
                 case Stage.StartTeleport: StartTeleport(); break;
                 case Stage.WaitTerritory:
@@ -283,12 +302,18 @@ public sealed class GameWorkflowExecutor
                     break;
                 case Stage.StartStorage: StartStorage(); break;
                 case Stage.WaitInn:
-                    if (PlayerReady && CurrentWorld == HomeWorld && !LifestreamBusy())
+                    var innDecision = innArrival.Observe(now, Plugin.ClientState.TerritoryType,
+                        PlayerReady && CurrentWorld == HomeWorld, LifestreamBusy(), NativeRetainers.FindBell() != null);
+                    if (innDecision == InnArrivalDecision.Arrived)
                     {
-                        if (NativeRetainers.FindBell() != null)
-                        { ownsLifestream = false; Transition(Stage.ApproachBell, "Approaching the summoning bell…", 500); }
-                        else if (now - stageStarted > 10_000) throw new InvalidOperationException("Lifestream finished without an accessible inn summoning bell.");
+                        Trace($"inn arrival confirmed; territory={Plugin.ClientState.TerritoryType}; graceElapsedMs={innArrival.GraceElapsedMilliseconds(now)}; bellReady=True");
+                        ownsLifestream = false;
+                        Transition(Stage.ApproachBell, "Approaching the summoning bell…", 500);
                     }
+                    else if (innDecision == InnArrivalDecision.TimedOut)
+                        throw new InvalidOperationException($"No accessible inn summoning bell appeared after {InnArrivalGate.GraceMilliseconds / 1000} seconds of idle, ready arrival in territory {Plugin.ClientState.TerritoryType}. Check Lifestream's inn destination and wait for loading to finish before resuming. No retainer movement was issued.");
+                    else if (innArrival.IsWaitingForArrival)
+                        Status = "Waiting for the inn and summoning bell to finish loading…";
                     break;
                 case Stage.ApproachBell: ApproachBell(); break;
                 case Stage.WaitBellWalk:
@@ -343,7 +368,9 @@ public sealed class GameWorkflowExecutor
                 case Stage.WaitInventory: WaitInventory(); break;
                 case Stage.Inventory: ProcessInventory(); break;
                 case Stage.WaitNumeric:
-                    if (NativeRetainers.SubmitQuantity(CurrentRetainer.Id, moveQuantity, moveSourceQuantity, Trace))
+                    if (NativeRetainers.SubmitQuantity(CurrentRetainer.Id,
+                        pendingMoveSource ?? throw new InvalidOperationException("The pending retainer quantity has no source slot."),
+                        moveQuantity, operation.Kind == GameOperationKind.Deposit, Trace))
                         Transition(Stage.WaitMove, "Verifying retainer item movement…", StorageDelay(500));
                     break;
                 case Stage.WaitMove: VerifyMovement(); break;
@@ -431,6 +458,7 @@ public sealed class GameWorkflowExecutor
         }
         if (CurrentWorld == HomeWorld && NativeRetainers.FindBell() is { } bell && DistanceTo(bell.Position) < 40)
         { Transition(Stage.ApproachBell, "Approaching the nearby home-world bell…"); return; }
+        innArrival.Reset();
         Plugin.PluginInterface.GetIpcSubscriber<int?, object>("Lifestream.EnqueueInnShortcut").InvokeAction(null);
         ownsLifestream = true;
         Transition(Stage.WaitInn, "Lifestream: returning home and entering an inn…", 2000);
@@ -438,6 +466,7 @@ public sealed class GameWorkflowExecutor
 
     private void StartWorld()
     {
+        worldTravelIdleSince = null;
         if (CurrentWorld == travel!.WorldId) { Transition(Stage.StartTeleport, "Checking destination territory…"); return; }
         if (!Plugin.PluginInterface.GetIpcSubscriber<uint, bool>("Lifestream.ChangeWorldById").InvokeFunc(travel.WorldId))
             throw new InvalidOperationException("Lifestream could not start the world change.");
@@ -558,13 +587,10 @@ public sealed class GameWorkflowExecutor
         var slot = source.Slots.FirstOrDefault(x => x.ItemId == op.ItemId && x.HighQuality == op.HighQuality && x.Quantity > 0 && x.Movable);
         if (slot == null || destination.Capacity == 0)
         { Transition(Stage.CloseInventory, "Continuing to the next retainer…", StorageDelay(300)); return; }
-        beforeBags = bags; beforeRetainer = retainer;
         moveQuantity = Math.Min(op.Quantity - moved, Math.Min(slot.Quantity, destination.Capacity));
-        moveSourceQuantity = slot.Quantity;
-        moveStableFrames = 0;
-        withdrawalConfirmation = op.Kind == GameOperationKind.Withdraw
-            ? new(Environment.TickCount64, bags.AllItems, retainer.AllItems, new(op.ItemId, op.HighQuality), moveQuantity, deposit: false)
-            : null;
+        pendingMoveSource = slot;
+        movementConfirmation = new(Environment.TickCount64, bags.AllItems, retainer.AllItems,
+            new(op.ItemId, op.HighQuality), moveQuantity, deposit);
         // Set before invoking native code: a callback can reach the game before managed
         // execution reports an error. A false positive requires inspection, not a retry.
         movementIssued = true;
@@ -578,52 +604,26 @@ public sealed class GameWorkflowExecutor
         if (NativeRetainers.HasNumeric) return;
         var bags = NativeRetainers.ReadBags(op.ItemId, op.HighQuality);
         var retainer = NativeRetainers.ReadRetainer(CurrentRetainer.Id, op.ItemId, op.HighQuality);
-        if (withdrawalConfirmation is { } confirmation)
-        {
-            var now = Environment.TickCount64;
-            // Like reverse entrust, advance on observed inventory changes with one short
-            // command interval. Both exact deltas must agree on consecutive observations.
-            // No timeout ever permits redispatching an unconfirmed movement.
-            if (!confirmation.Observe(now, bags.AllItems, retainer.AllItems)) return;
-            moved = checked(moved + moveQuantity); RecordRetainer(retainer.Quantity);
-            Trace($"withdrawal confirmed; quantity={moveQuantity}; totalMoved={moved}; elapsedMs={confirmation.ElapsedMilliseconds(now)}; minimumIntervalMs={RetainerTransferConfirmation.MinimumIntervalMilliseconds}; sourceAndDestinationVerified=True");
-            withdrawalConfirmation = null;
-            movementIssued = false;
-            Transition(Stage.Inventory, $"Verified {moved:N0} item(s) withdrawn…");
-            return;
-        }
-        var key = new ItemKey(op.ItemId, op.HighQuality);
+        var confirmation = movementConfirmation
+            ?? throw new InvalidOperationException("The pending retainer movement has no starting inventory snapshot.");
+        var now = Environment.TickCount64;
+        // Both directions advance on observed inventory changes with one short command
+        // interval. Both exact deltas must agree on consecutive observations.
+        // No timeout ever permits redispatching an unconfirmed movement.
+        if (!confirmation.Observe(now, bags.AllItems, retainer.AllItems)) return;
+        moved = checked(moved + moveQuantity); RecordRetainer(retainer.Quantity);
         var deposit = op.Kind == GameOperationKind.Deposit;
-        var bagsOkay = MatchesDelta(beforeBags!.AllItems, bags.AllItems, key, moveQuantity, !deposit);
-        var retainerOkay = MatchesDelta(beforeRetainer!.AllItems, retainer.AllItems, key, moveQuantity, deposit);
-        if (bagsOkay && retainerOkay)
-        {
-            if (++moveStableFrames < 2) { actionAfter = Environment.TickCount64 + 300; return; }
-            moved = checked(moved + moveQuantity); RecordRetainer(retainer.Quantity);
-            movementIssued = false;
-            Transition(Stage.Inventory, $"Verified {moved:N0} item(s) moved…", 300);
-            return;
-        }
-        moveStableFrames = 0;
-        if (Environment.TickCount64 - stageStarted > 15_000)
-            throw new InvalidOperationException("Retainer movement could not be reconciled exactly. It was not retried; inspect the inventories before resuming.");
+        Trace($"{(deposit ? "deposit" : "withdrawal")} confirmed; quantity={moveQuantity}; totalMoved={moved}; elapsedMs={confirmation.ElapsedMilliseconds(now)}; minimumIntervalMs={RetainerTransferConfirmation.MinimumIntervalMilliseconds}; sourceAndDestinationVerified=True");
+        movementConfirmation = null;
+        pendingMoveSource = null;
+        movementIssued = false;
+        Transition(Stage.Inventory, $"Verified {moved:N0} item(s) {(deposit ? "deposited" : "withdrawn")}…");
     }
 
-    private static bool MatchesDelta(IReadOnlyDictionary<ItemKey, ulong> before, IReadOnlyDictionary<ItemKey, ulong> after, ItemKey expected, uint quantity, bool increase)
-    {
-        foreach (var key in before.Keys.Union(after.Keys).Append(expected).Distinct())
-        {
-            var oldValue = before.GetValueOrDefault(key); var newValue = after.GetValueOrDefault(key);
-            if (key != expected) { if (oldValue != newValue) return false; continue; }
-            if (increase ? newValue < oldValue || newValue - oldValue != quantity : oldValue < newValue || oldValue - newValue != quantity) return false;
-        }
-        return true;
-    }
-
-    // Only withdrawals use the faster readiness-driven path. Other native workflows
+    // Item movements use readiness-driven pacing in both directions. Scan-only operations
     // keep their existing timing. Repeated UI inputs retain an explicit short throttle.
-    private int StorageDelay(int normalMilliseconds, int withdrawalMilliseconds = 0)
-        => operation?.Kind == GameOperationKind.Withdraw ? withdrawalMilliseconds : normalMilliseconds;
+    private int StorageDelay(int normalMilliseconds, int movementMilliseconds = 0)
+        => operation?.Kind is GameOperationKind.Withdraw or GameOperationKind.Deposit ? movementMilliseconds : normalMilliseconds;
 
     private void RecordRetainer(uint quantity)
     {
@@ -657,6 +657,8 @@ public sealed class GameWorkflowExecutor
             RetainerRosterVerified = success && rosterLoaded && observed.Count == roster.Count && (op.Kind != GameOperationKind.Deposit || op.AllowedRetainerIds.Length == 0),
             Retainers = observed.ToList(), ObservedAt = DateTimeOffset.UtcNow,
         };
+        if (Plugin.PlayerState.ContentId == op.CharacterId && Plugin.ClientState.IsLoggedIn)
+            result.CurrentWorldId = CurrentWorld;
         if (Plugin.PlayerState.ContentId == op.CharacterId && Plugin.ClientState.IsLoggedIn && op.ItemId != 0)
         {
             try
@@ -666,7 +668,7 @@ public sealed class GameWorkflowExecutor
             }
             catch (Exception ex) { result.Success = false; result.RetainerRosterVerified = false; result.Error = $"Could not verify final carried inventory: {ex.Message}"; }
         }
-        Trace($"operation end; success={result.Success}; stage={stage}; elapsedMs={Environment.TickCount64 - operationStarted}; moved={result.MovedQuantity}; uncertain={result.MovementUncertain}; bagQuantity={result.BagQuantity}; bagCapacity={result.BagCapacity}; observedRetainers={observed.Count}/{roster.Count}; error={NativeRetainers.DiagnosticText(result.Error)}");
+        Trace($"operation end; success={result.Success}; stage={stage}; elapsedMs={Environment.TickCount64 - operationStarted}; currentWorld={result.CurrentWorldId}; moved={result.MovedQuantity}; uncertain={result.MovementUncertain}; bagQuantity={result.BagQuantity}; bagCapacity={result.BagCapacity}; observedRetainers={observed.Count}/{roster.Count}; error={NativeRetainers.DiagnosticText(result.Error)}");
         stage = Stage.Idle; operation = null;
         Status = result.Success ? $"{op.Kind} completed." : $"{op.Kind} paused: {result.Error}";
         results.Enqueue(result);
@@ -770,6 +772,8 @@ public sealed class GameWorkflowExecutor
             }
             if (stage == Stage.WaitInventory)
                 Trace($"inventory stability polls={inventoryStableFrames}; lastReadError={inventoryReadFailure}");
+            if (stage == Stage.WaitInn)
+                Trace($"inn arrival waiting={innArrival.IsWaitingForArrival}; graceElapsedMs={innArrival.GraceElapsedMilliseconds(now)}; graceLimitMs={InnArrivalGate.GraceMilliseconds}; observedTerritory={innArrival.ObservedTerritory?.ToString() ?? "none"}; currentTerritory={Plugin.ClientState.TerritoryType}; readyAtHome={PlayerReady && CurrentWorld == HomeWorld}; bellReady={NativeRetainers.FindBell() != null}");
             if (stage is Stage.ApproachBell or Stage.WaitBellWalk or Stage.WaitList)
                 Trace($"bell attempts={bellInteraction.Attempts}; acknowledged={bellInteraction.Acknowledged}; playerTargetable={Plugin.ObjectTable.LocalPlayer?.IsTargetable}; interactionBlocked={NativeRetainers.BellInteractionBlocked}");
         }

@@ -1,6 +1,16 @@
 # Two-PC testing: start here
 
-Test build: **0.3.7.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 4.
+Test build: **0.3.8.0**. Update Ashe's Trader on **both PCs** through `/xlplugins` before testing. The repository URL is unchanged. If you use a development DLL, disable that copy before loading the repository build. Keep existing settings and journals. Both PCs still use the same shared pairing key; this update does not require generating new keys. Both PCs should use this build together; the wire protocol remains 4.
+
+## Test faster deposits, full retainers and travel
+
+Update both PCs and keep the existing settings and journal. The meeting location now applies on automatically chosen worlds; recording it again is unnecessary if the territory, aetheryte and position are still suitable. Enable the required DC travel in Lifestream on both PCs.
+
+Use providers in two DCs, including two worlds in the same DC, and give the relay enough capacity to collect from them. Activity's **Collection itinerary** should group the providers' DCs/worlds. Providers remain on their home worlds. When the relay fills or finishes gathering, it should join the recipient on the recipient's home world and remain there while that load is delivered. Limit recipient bag space to require two deposits: both deposits and the return to the meeting coordinates should happen on that same world. A full relay may need to revisit the collection DC for another load; priorities and item boundaries can also force revisits.
+
+For the reported partial-stack case, use a permitted retainer with all 175 slots occupied but 681 spaces in a matching item stack, followed by another permitted retainer with free space. It should deposit exactly 681, then continue to the next retainer. A completely full retainer with no merge space should receive no item command. Full-stack deposits should use the faster pacing; partial deposits should submit the owned quantity dialog once. Watch an inn return too: loading should finish and the bell should open without needing Resume.
+
+If the old job is paused with an uncertain storage result, inspect bags and retainers first. After closing leftover menus, use the Activity storage-review control only if **only the recorded confirmed quantity moved** and the displayed bag count is still correct. This records your review without moving items; then use Resume. Any unrecorded extra movement requires separate reconciliation, not that confirmation.
 
 ## Test faster retainer withdrawals
 
@@ -12,7 +22,7 @@ Full stacks should advance promptly after the game acknowledges them; only the p
 
 For a small new test, select three providers on one account with 100 items each and a recipient on that same account requesting 300 additional items. Leave at least 300 items' worth of capacity on the selected relay on the other account. The three providers should contribute to the relay before the destination logs in; then the relay delivers the accumulated 300. Several trade batches may be used for ledger accounting, but the destination should remain logged in while the load drains. Confirm the relay's original stock remains unchanged at the end.
 
-Add a zero-stock provider and an extra provider that the final allocations do not need. Neither should log in. A recipient with no funded quantity should also stay offline. Activity shows the selected relay, collecting/delivering phase, cargo, selected meeting world and estimated world travelers. New plans may choose another world in the captured location's data center while keeping the same outdoor coordinates. Existing issued plans keep their previous world and allocations; resume those to finish pending cargo before testing a new plan.
+Add a zero-stock provider and an extra provider that the final allocations do not need. Neither should log in. A recipient with no funded quantity should also stay offline. Activity shows the selected relay, collecting/delivering phase, cargo, itinerary and active meeting world. The captured world is ignored. Existing pending commands retain their destination until reconciled; subsequent scheduling uses the new itinerary without changing allocations.
 
 If a relay fills before all providers finish, it should deliver its cargo, then resume collection. It must not deposit relay cargo onto retainers. Preserve recipient priority: the higher-priority recipient finishes before collecting for the next. Item lines still run one at a time.
 

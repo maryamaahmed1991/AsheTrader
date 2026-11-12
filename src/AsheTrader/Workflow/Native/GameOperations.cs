@@ -38,6 +38,8 @@ public sealed class GameOperationResult
     public string Error { get; set; } = string.Empty;
     public ulong CharacterId { get; set; }
     public uint BagQuantity { get; set; }
+    // Live position only; zero for cache-only observations or older workers.
+    public uint CurrentWorldId { get; set; }
     public uint BagCapacity { get; set; }
     public uint StackSize { get; set; }
     public uint MovedQuantity { get; set; }

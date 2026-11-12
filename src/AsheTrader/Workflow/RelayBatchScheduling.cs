@@ -9,13 +9,14 @@ public sealed partial class WorkflowService
     {
         var run = Run!;
         var plan = run.Journal!.Plan;
+        EnsureCollectionRoute();
         // Both inbound and outbound work obey the ledger's recipient-priority contract.
         var recipient = plan.Definition.Recipients.FirstOrDefault(rule => plan.Allocations.Any(allocation =>
             allocation.RecipientCharacterId == rule.CharacterId
             && ledger.CommittedForLeg(allocation.Id, allocation.Legs.Count - 1) < allocation.Quantity));
         if (recipient == null) return false;
-        var allocations = plan.Allocations.Where(allocation => allocation.RecipientCharacterId == recipient.CharacterId
-            && ledger.CommittedForLeg(allocation.Id, allocation.Legs.Count - 1) < allocation.Quantity).ToArray();
+        var allocations = OrderCollectionAllocations(plan.Allocations.Where(allocation => allocation.RecipientCharacterId == recipient.CharacterId
+            && ledger.CommittedForLeg(allocation.Id, allocation.Legs.Count - 1) < allocation.Quantity)).ToArray();
         var relayed = allocations.Where(allocation => allocation.Legs.Count == 2).ToArray();
         if (relayed.Length != 0)
         {
@@ -50,6 +51,7 @@ public sealed partial class WorkflowService
     {
         Run!.AllocationId = allocation.Id;
         Run.LegIndex = legIndex;
+        Run.MeetingPinned = false;
         Run.DesiredQuantity = (uint)Math.Min(uint.MaxValue, ledger.RemainingForLeg(allocation.Id, legIndex));
         if (Run.DesiredQuantity == 0) throw new InvalidDataException("The next transfer has no funded quantity.");
     }

@@ -131,6 +131,11 @@ public sealed class CoordinatorRun
     public Dictionary<ulong, uint> RelayCapacity { get; set; } = [];
     public ulong? RelayFlushCharacterId { get; set; }
     public TravelLocation? EffectiveMeeting { get; set; }
+    public List<CollectionRouteStop>? CollectionRoute { get; set; }
+    public Dictionary<ulong, uint> ObservedWorlds { get; set; } = [];
+    public bool MeetingPinned { get; set; }
+    public string MeetingDataCenterName { get; set; } = "";
+    public string MeetingReason { get; set; } = "";
     public string MeetingWorldName { get; set; } = "";
     public int EstimatedWorldTravelers { get; set; }
     public int ConfiguredWorldTravelers { get; set; }
@@ -156,4 +161,40 @@ public sealed class CoordinatorItemResult
     public Dictionary<Guid, ulong> AutomaticRelays { get; set; } = [];
 }
 
-public sealed record ManualResolution(Guid CommandId, bool Transferred);
+public sealed record ManualResolution(Guid CommandId, bool Transferred, bool StorageVerifiedOnly = false);
+
+/// <summary>Records an operator's bounded storage review without inventing a completed movement.</summary>
+internal static class StorageReconciliation
+{
+    public static bool IsStorage(WorkerCommand command) => command.Kind == WorkerCommandKind.Game
+        && command.Operation.Kind is GameOperationKind.Deposit or GameOperationKind.Withdraw;
+
+    public static bool IsReviewed(WorkerResponse? response) => response is
+        { Success: false, OperatorReviewed: true, Ambiguous: false, Observation: { Success: false, MovementUncertain: false } };
+
+    public static WorkerResponse Review(WorkerCommand command, WorkerResponse? response, uint currentBagQuantity)
+    {
+        if (!IsStorage(command) || command.Operation.Quantity == 0 || response == null
+            || response.CommandId != command.Id || response.Observation is not { } observation
+            || observation.Id != command.Operation.Id || observation.CharacterId != command.Operation.CharacterId
+            || observation.MovedQuantity > command.Operation.Quantity || response.Success || response.NeverStarted)
+            throw new InvalidOperationException("This storage operation has no recorded observation that can be reviewed safely.");
+        if (IsReviewed(response)) return response;
+        if (!response.Ambiguous || !observation.MovementUncertain)
+            throw new InvalidOperationException("This storage operation is not awaiting an uncertain-movement review.");
+        if (currentBagQuantity != observation.BagQuantity)
+            throw new InvalidOperationException("The current item/quality bag count differs from the recorded storage-stop count. This review cannot be accepted.");
+        var reviewed = Newtonsoft.Json.JsonConvert.DeserializeObject<WorkerResponse>(
+            Newtonsoft.Json.JsonConvert.SerializeObject(response))!;
+        reviewed.Success = false;
+        reviewed.Ambiguous = false;
+        reviewed.OperatorReviewed = true;
+        reviewed.Quantity = observation.MovedQuantity;
+        reviewed.CurrentQuantity = currentBagQuantity;
+        reviewed.Observation!.Success = false;
+        reviewed.Observation.MovementUncertain = false;
+        reviewed.Error = $"Operator confirmed that only the recorded {observation.MovedQuantity:N0} item(s) moved. The job remains paused; use Resume / reconcile to continue from verified progress.";
+        reviewed.Observation.Error = reviewed.Error;
+        return reviewed;
+    }
+}

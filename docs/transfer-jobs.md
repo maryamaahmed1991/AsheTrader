@@ -1,6 +1,6 @@
 # Ashe's Trader: transfer-job requirements
 
-Status: agreed product requirements, implemented in the 0.3.7.0 development build for staged two-PC testing. Automated tests cover planning, relay collection/delivery, accounting, LAN discovery/transport, and the transfer coordinator. User diagnostics confirm a complete ten-retainer scan; new route scheduling, cutscene preservation, native movement/trades and purchases still require live validation.
+Status: agreed product requirements, implemented in the 0.3.8.0 development build for staged two-PC testing. Automated tests cover planning, relay collection/delivery, accounting, LAN discovery/transport, and the transfer coordinator. User diagnostics confirm a complete ten-retainer scan; new route scheduling, cutscene preservation, native movement/trades and purchases still require live validation.
 
 ## Confirmed requirements
 
@@ -72,7 +72,7 @@ Fund allocations in recipient-priority order, preferring direct routes, matching
 
 Collect all compatible funded contributions for the current priority recipient until the relay fills or its incoming work is complete. Then drain that load before collecting more. Physical cargo may mix in a stack, while ledger accounting remains per allocation. Never deposit relay cargo merely to make space. Persist the collection/delivery phase and capacity hints; recover pending trades before choosing further work. Unexpected fullness with carried cargo triggers delivery; fullness without cargo pauses.
 
-Choose the meeting world from public worlds in the captured location's data center by the number of distinct funded participants leaving their recorded home worlds. Include relays, exclude unfunded characters, and keep the captured world on ties. This is a fixed-hub estimate rather than a global trip optimum. Keep the chosen world, relay and allocations fixed once the per-item plan is issued; legacy issued plans keep their original world. A later item performs its own selection.
+Reuse the captured outdoor territory, aetheryte and coordinates independently of world. Group funded collection stops within each priority recipient and collector by DC and then world, preferring the collector's observed DC/world when available. Providers stay on their home worlds for retainer access; their recipient or relay visits them. A relay delivers its full collected load on the final recipient's home world so overflow deposits remain local. Finish that delivery phase before resuming the saved collection order. Finite relay space, strict recipient priority and sequential items may require revisiting a DC. Pin each active leg's destination before issuing travel; never reroute a pending trade. Preserve journal allocations, cargo and counts during legacy upgrade and recovery. Cross-DC travel uses Lifestream and must remain within supported region boundaries and actual game availability.
 
 Never send skip or progression input during inn cutscenes. Wait for natural completion and suspend gameplay deadlines while watching. Check AutoRetainer's separate inn-skip policy before relog and pause with its setting path if it would skip or cannot be read. Do not silently alter external plugin configuration.
 

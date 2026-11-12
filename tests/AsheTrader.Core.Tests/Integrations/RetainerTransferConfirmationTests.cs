@@ -110,6 +110,74 @@ public sealed class RetainerTransferConfirmationTests
     }
 
     [Fact]
+    public void FastDepositUsesTheSameSingleDispatchInterval()
+    {
+        var pending = new RetainerTransferConfirmation(0, Inventory(999), Inventory(0), Item, 999, true);
+        Assert.False(pending.Observe(50, Inventory(0), Inventory(999)));
+        Assert.False(pending.Observe(100, Inventory(0), Inventory(999)));
+        Assert.False(pending.Observe(349, Inventory(0), Inventory(999)));
+        Assert.True(pending.Observe(350, Inventory(0), Inventory(999)));
+    }
+
+    [Fact]
+    public void PartialDepositRequiresExactlyTheRequestedQuantityAndDirection()
+    {
+        var pending = new RetainerTransferConfirmation(0, Inventory(999), Inventory(100), Item, 102, true);
+        // Moving the entire stack or moving in the withdrawal direction cannot confirm.
+        Assert.False(pending.Observe(350, Inventory(0), Inventory(1099)));
+        Assert.False(pending.Observe(366, Inventory(1101), Inventory(0)));
+        Assert.False(pending.Observe(382, Inventory(897), Inventory(202)));
+        Assert.True(pending.Observe(398, Inventory(897), Inventory(202)));
+    }
+
+    [Fact]
+    public void DepositWaitsForRetainerAcknowledgementAfterBagsChange()
+    {
+        var pending = new RetainerTransferConfirmation(0, Inventory(40), Inventory(70), Item, 30, true);
+        Assert.False(pending.Observe(350, Inventory(10), Inventory(70)));
+        Assert.False(pending.Observe(2000, Inventory(10), Inventory(70)));
+        Assert.False(pending.Observe(2100, Inventory(10), Inventory(100)));
+        Assert.False(pending.Observe(2100, Inventory(10), Inventory(100)));
+        Assert.True(pending.Observe(2116, Inventory(10), Inventory(100)));
+    }
+
+    [Fact]
+    public void DepositCannotConfirmChangedQualityOrUnrelatedItems()
+    {
+        var pending = new RetainerTransferConfirmation(0, Inventory(40), Inventory(70), Item, 30, true);
+        var wrongQuality = new Dictionary<ItemKey, ulong> { [Item] = 70, [new(10155, true)] = 30 };
+        var alteredBags = Inventory(10);
+        alteredBags[new(42, false)] = 1;
+        var alteredRetainer = Inventory(100);
+        alteredRetainer[new(42, false)] = 1;
+        foreach (var now in new long[] { 350, 700 })
+        {
+            Assert.False(pending.Observe(now, Inventory(10), wrongQuality));
+            Assert.False(pending.Observe(now, alteredBags, Inventory(100)));
+            Assert.False(pending.Observe(now, Inventory(10), alteredRetainer));
+        }
+    }
+
+    [Fact]
+    public void AmbiguousDepositTimesOutWithoutConfirmingOrRetrying()
+    {
+        var pending = new RetainerTransferConfirmation(0, Inventory(40), Inventory(70), Item, 30, true);
+        Assert.False(pending.Observe(15_000, Inventory(10), Inventory(70)));
+        var error = Assert.Throws<InvalidOperationException>(() => pending.Observe(15_001, Inventory(10), Inventory(70)));
+        Assert.Contains("not retried", error.Message);
+    }
+
+    [Fact]
+    public void DepositCutsceneSuspendsDeadlineAndRequiresFreshEvidence()
+    {
+        var pending = new RetainerTransferConfirmation(0, Inventory(40), Inventory(70), Item, 30, true);
+        Assert.False(pending.Observe(350, Inventory(10), Inventory(100)));
+        pending.Suspend(60_000);
+        Assert.False(pending.Observe(60_350, Inventory(10), Inventory(100)));
+        Assert.True(pending.Observe(60_366, Inventory(10), Inventory(100)));
+    }
+
+    [Fact]
     public void LargeTotalsDoNotOverflowOrAcceptWrappedDeltas()
     {
         var pending = new RetainerTransferConfirmation(0, Inventory(ulong.MaxValue - 30), Inventory(30), Item, 30, false);

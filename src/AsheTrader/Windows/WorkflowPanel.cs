@@ -20,6 +20,8 @@ public sealed class WorkflowPanel(Plugin plugin)
     private bool revealKey;
     private bool confirmedOutcome;
     private Guid? reviewedTradeId;
+    private Guid? reviewedStorageId;
+    private bool confirmedStorageOnly;
     private string dependencies = "Dependency state has not been checked on this PC.";
     private string dependencySummary = "Required plugins have not been checked on this PC yet.";
     private string notice = string.Empty;
@@ -438,13 +440,13 @@ public sealed class WorkflowPanel(Plugin plugin)
 
         if (ImGui.CollapsingHeader("Meeting point: where the PCs trade", ImGuiTreeNodeFlags.DefaultOpen))
         {
-            ImGui.TextWrapped("Stand at an outdoor location both accounts can reach, then record it. Choose a main aetheryte in that territory for the return trip.");
+            ImGui.TextWrapped("Record an outdoor location both accounts can reach. The territory, position and arrival aetheryte are reused on each provider's world; the world you record it on does not restrict the job.");
             if (ImGui.Button("Record my current meeting point"))
             {
                 var jobId = job.Definition.Id;
                 plugin.QueueAction(() => CaptureMeeting(jobId));
             }
-            DrawLocation(job.Meeting);
+            DrawLocation(job.Meeting, worldIndependent: true);
             if (job.Meeting.TerritoryId != 0)
             {
                 var choices = Plugin.DataManager.GetExcelSheet<Aetheryte>().Where(x => x.IsAetheryte && x.Territory.RowId == job.Meeting.TerritoryId).ToArray();
@@ -583,9 +585,9 @@ public sealed class WorkflowPanel(Plugin plugin)
         }
         ImGui.TextWrapped("Providers use carried items first, then automatically refill from retainers. Recipients deposit when full and return to continue. A shortage for one item is reported separately while other items continue.");
         DrawAutomaticRelayInfo();
-        ImGui.TextUnformatted("Shared meeting point");
-        DrawLocation(job.Meeting);
-        ImGui.TextWrapped("After reading cached stock, the planner chooses a world in this meeting point's data center that reduces the number of assigned characters leaving their home worlds. The outdoor position stays the same. Only providers with allocated items, their recipients and a required relay log in.");
+        ImGui.TextUnformatted("Meeting location · world chosen automatically");
+        DrawLocation(job.Meeting, worldIndependent: true);
+        ImGui.TextWrapped("Recipients and relays collect on provider home worlds, grouped by DC and world for each recipient and item. Relay deliveries happen on the final recipient's home world so deposits stay local. Recipient priority, full relays and later items can require another DC visit. Enable DC travel in Lifestream on both PCs when needed. Only characters with assigned work log in.");
         ImGui.Separator();
         ImGui.TextUnformatted("Ready to run?");
         var scanBlockers = GetScanBlockers(job);
@@ -593,7 +595,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         ReadinessLine(Service.IsHost && Service.Connected && Service.RemoteRoster != null, "PCs connected; this PC is coordinator", "Connect both PCs in step 1; host on this PC.");
         ReadinessLine(Service.RemoteRoster is { ControlEnabled: true }, "Other PC allows control", "Enable 'Allow the coordinator to run jobs' on the other PC.");
         ReadinessLine(definitions.All(definition => definition.Sources.Count > 0 && definition.Recipients.Count > 0 && !HasInvalidAmounts(definition)), "Every item has providers, recipients and amounts", "Choose providers, recipients and positive amounts for every item in step 2.");
-        ReadinessLine(job.Meeting.WorldId != 0 && job.Meeting.TerritoryId != 0 && job.Meeting.AetheryteId != 0, "Meeting point recorded", "Record an outdoor meeting point in step 2 before starting transfers.");
+        ReadinessLine(job.Meeting.TerritoryId != 0 && job.Meeting.AetheryteId != 0, "Meeting point recorded", "Record an outdoor meeting point in step 2 before starting transfers.");
         if (scanBlockers.Count > 0 || transferBlockers.Count > 0)
         {
             ImGui.Spacing();
@@ -690,7 +692,7 @@ public sealed class WorkflowPanel(Plugin plugin)
     private static List<string> GetTransferBlockers(SavedTransferJob job)
     {
         var reasons = new List<string>();
-        if (job.Meeting.WorldId == 0 || job.Meeting.TerritoryId == 0 || job.Meeting.AetheryteId == 0)
+        if (job.Meeting.TerritoryId == 0 || job.Meeting.AetheryteId == 0)
             reasons.Add("A full transfer needs a recorded meeting point and arrival aetheryte in step 2. You can still scan inventories.");
         return reasons;
     }
@@ -823,7 +825,20 @@ public sealed class WorkflowPanel(Plugin plugin)
         foreach (var relay in run.AutomaticRelays)
             UiTone.Wrapped(UiTone.Info, $"Automatic relay on {PeerName(relay.Key)}: {CharacterName(relay.Value)} · live capacity checked");
         if (run.EffectiveMeeting != null)
-            UiTone.Wrapped(UiTone.Info, $"Meeting world: {run.MeetingWorldName} · estimated characters changing worlds: {run.EstimatedWorldTravelers} (captured world: {run.ConfiguredWorldTravelers}). Based on home worlds; chosen for this item's plan.");
+            UiTone.Wrapped(UiTone.Info, $"Meeting: {run.MeetingWorldName} · {run.MeetingDataCenterName}. {run.MeetingReason}.");
+        if (run.CollectionRoute is { Count: > 0 } route && ImGui.CollapsingHeader("Collection itinerary"))
+        {
+            ImGui.TextWrapped("Grouped within each recipient and collector. Relay delivery interrupts collection when needed; the remaining provider order is kept.");
+            foreach (var stop in route)
+            {
+                var allocation = run.Journal!.Plan.Allocations.Single(allocation => allocation.Id == stop.AllocationId);
+                var ledger = new AsheTrader.Core.Jobs.TransferJobLedger(run.Journal);
+                var remaining = ledger.RemainingForLeg(allocation.Id, 0);
+                var active = run.AllocationId == allocation.Id && run.LegIndex == 0;
+                var tone = active ? UiTone.Info : remaining == 0 ? UiTone.Good : UiTone.Warning;
+                UiTone.Wrapped(tone, $"{(active ? "Now: " : "")}{stop.DataCenterName} / {stop.WorldName} · {CharacterName(allocation.SourceCharacterId)} → {CharacterName(allocation.RecipientCharacterId)} · {remaining:N0} left to collect");
+            }
+        }
         if (run.Journal == null)
         {
             var scanned = run.DiscoveryOrder.Count(id => run.Snapshots.TryGetValue(id, out var snapshot) && snapshot.IsPlanningReady);
@@ -892,6 +907,32 @@ public sealed class WorkflowPanel(Plugin plugin)
                 ImGui.TextWrapped("These decisions reconcile the saved journal; they do not perform another trade. Both workers must report counts compatible with your decision.");
             }
             else { reviewedTradeId = null; confirmedOutcome = false; }
+            var storagePending = run.Paused && run.TradeOperationId == null && run.Pending.Count == 1
+                && StorageReconciliation.IsStorage(run.Pending[0].Command) ? run.Pending[0] : null;
+            if (storagePending == null) { reviewedStorageId = null; confirmedStorageOnly = false; }
+            else
+            {
+                var commandId = storagePending.Command.Id;
+                if (reviewedStorageId != commandId) { reviewedStorageId = commandId; confirmedStorageOnly = false; }
+                if (StorageReconciliation.IsReviewed(storagePending.Response))
+                    UiTone.Wrapped(UiTone.Good, "Storage review accepted. The confirmed count is preserved. Use Resume / reconcile when ready to continue the remaining work.");
+                else if (storagePending.Response is { Ambiguous: true, Observation: { } stopped })
+                {
+                    UiTone.Wrapped(UiTone.Warning, $"Storage stopped after {stopped.MovedQuantity:N0} confirmed items out of {storagePending.Command.Operation.Quantity:N0} requested. Recorded bag count at the stop: {stopped.BagQuantity:N0}.");
+                    ImGui.TextWrapped($"On {PeerName(storagePending.PeerId)}, keep {CharacterName(storagePending.Command.Operation.CharacterId)} logged in. Inspect bags and retainers, cancel any pending quantity entry, and close all retainer and trade windows. Accept this review only if no additional items moved beyond the recorded confirmed amount.");
+                    ImGui.Checkbox("I checked bags and retainers; only the recorded confirmed quantity moved", ref confirmedStorageOnly);
+                    ImGui.BeginDisabled(!confirmedStorageOnly || !Service.IsHost || !Service.Connected || Service.Busy);
+                    if (ImGui.Button("Accept recorded storage count"))
+                    {
+                        confirmedStorageOnly = false;
+                        plugin.QueueAction(() => Service.ResolvePendingStorage(commandId));
+                    }
+                    ImGui.EndDisabled();
+                    ImGui.TextWrapped("This checks the current bag count and records your review. It moves no items and leaves the job paused. If any additional items moved, leave this unchecked and preserve diagnostics for reconciliation.");
+                }
+                else if (storagePending.Response is { Ambiguous: true })
+                    UiTone.Wrapped(UiTone.Warning, "This storage interruption has no recorded stop observation. It cannot use the recorded-count review; preserve diagnostics and inspect the inventories.");
+            }
         }
         if (ImGui.CollapsingHeader("Inventory counts and sources"))
         {
@@ -965,7 +1006,7 @@ public sealed class WorkflowPanel(Plugin plugin)
         ImGui.Spacing();
         if (!ImGui.CollapsingHeader("Recent activity", ImGuiTreeNodeFlags.DefaultOpen)) return;
         if (ImGui.Button("Copy activity for troubleshooting"))
-            ImGui.SetClipboardText($"Ashe's Trader v0.3.7\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
+            ImGui.SetClipboardText($"Ashe's Trader v0.3.8\n{Service.ConnectionStatus}\n{Service.Status}\n{dependencySummary}\n{string.Join("\n", plugin.Activity)}");
         if (plugin.Activity.Count == 0) ImGui.TextWrapped("Actions and outcomes will appear here when a job runs.");
         foreach (var entry in plugin.Activity.Reverse()) UiTone.Status(entry);
         DrawHints();
@@ -1026,12 +1067,12 @@ public sealed class WorkflowPanel(Plugin plugin)
         Settings.StorageRoutes[characterId] = location; plugin.Save(); notice = "Home-world bell location recorded.";
     }
 
-    private void DrawLocation(TravelLocation location)
+    private void DrawLocation(TravelLocation location, bool worldIndependent = false)
     {
-        if (location.WorldId == 0) { UiTone.Wrapped(UiTone.Warning, "No location recorded."); return; }
+        if (location.TerritoryId == 0 || !worldIndependent && location.WorldId == 0) { UiTone.Wrapped(UiTone.Warning, "No location recorded."); return; }
         var world = Plugin.DataManager.GetExcelSheet<World>().GetRowOrDefault(location.WorldId)?.Name.ToString() ?? location.WorldId.ToString();
         var territory = Plugin.DataManager.GetExcelSheet<TerritoryType>().GetRowOrDefault(location.TerritoryId)?.PlaceName.Value.Name.ToString() ?? location.TerritoryId.ToString();
-        ImGui.TextWrapped($"{world} · {territory} · ({location.X:F1}, {location.Y:F1}, {location.Z:F1})");
+        ImGui.TextWrapped($"{(worldIndependent ? "Automatic world" : world)} · {territory} · ({location.X:F1}, {location.Y:F1}, {location.Z:F1})");
     }
 
     private string PeerName(Guid peerId) => peerId == Settings.PeerId ? Settings.PeerName : Service.RemoteRoster?.PeerId == peerId ? Service.RemoteRoster.Name : "Other PC";

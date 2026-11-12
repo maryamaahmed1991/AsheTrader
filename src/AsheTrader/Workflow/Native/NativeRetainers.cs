@@ -96,7 +96,7 @@ internal static unsafe class NativeRetainers
         var lines = new List<string>();
         try
         {
-            string[] names = ["RetainerList", "Talk", "SelectString", "InventoryRetainer", "InventoryRetainerLarge", "RetainerItemTransferProgress", "InputNumeric", "SelectYesno", "Trade"];
+            string[] names = ["RetainerList", "Talk", "SelectString", "InventoryRetainer", "InventoryRetainerLarge", "Inventory", "InventoryLarge", "InventoryExpansion", "RetainerItemTransferProgress", "InputNumeric", "SelectYesno", "Trade"];
             var addonStates = new List<string>();
             foreach (var name in names)
             {
@@ -104,6 +104,9 @@ internal static unsafe class NativeRetainers
                 addonStates.Add(addon == null ? $"{name}=absent" : $"{name}=visible:{addon->IsVisible},ready:{addon->IsReady},values:{addon->AtkValuesCount}");
             }
             lines.Add("windows " + string.Join("; ", addonStates));
+            var numeric = (AtkUnitBase*)Plugin.GameGui.GetAddonByName("InputNumeric").Address;
+            if (numeric != null && numeric->IsVisible)
+                lines.Add(QuantityOwnershipDiagnostic(numeric, QuantityInventoryRoots(deposit: true)));
             var manager = RetainerManager.Instance();
             var active = manager == null ? null : manager->GetActiveRetainer();
             lines.Add($"retainer expected={expected?.Id.ToString() ?? "none"} name={DiagnosticText(expected?.Name)}; active={(active == null ? "none" : active->RetainerId.ToString())}; lastSelected={(manager == null ? "none" : manager->LastSelectedRetainerId.ToString())}; rosterReady={manager != null && manager->IsReady}; bellOccupied={Plugin.Condition[ConditionFlag.OccupiedSummoningBell]}; inventoryAgentActive={HasRetainerInventory}");
@@ -310,12 +313,7 @@ internal static unsafe class NativeRetainers
     {
         VerifyRetainer(retainerId);
         if (!HasVisibleRetainerInventory || HasNumeric || HasUnrelatedModal) throw new InvalidOperationException("The retainer inventory is not ready or another window prevents item movement.");
-        var manager = InventoryManager.Instance();
-        var source = manager->GetInventorySlot(slot.Container, slot.Slot);
-        if (source == null || source->ItemId != slot.ItemId || source->IsHighQuality() != slot.HighQuality || source->Quantity != slot.Quantity
-            || source->SpiritbondOrCollectability != 0 || source->GlamourId != 0 || (source->Flags & ~InventoryItem.ItemFlags.HighQuality) != 0
-            || !slot.Movable || quantity == 0 || quantity > slot.Quantity || quantity > int.MaxValue)
-            throw new InvalidOperationException("The source slot changed before the retainer movement.");
+        VerifyMoveSource(slot, quantity, deposit);
         var partial = quantity < slot.Quantity;
         // The same native retrieve/retrieve-quantity commands used by reverse entrust,
         // exposed through FFXIVClientStructs rather than a separate signature hook.
@@ -326,24 +324,88 @@ internal static unsafe class NativeRetainers
         return partial;
     }
 
-    public static bool SubmitQuantity(ulong expected, uint quantity, uint sourceQuantity, Action<string>? trace = null)
+    public static bool SubmitQuantity(ulong expected, NativeBagSlot pendingSource, uint quantity, bool deposit, Action<string>? trace = null)
     {
         VerifyRetainer(expected);
         var numeric = (AddonInputNumeric*)Ready("InputNumeric");
         if (numeric == null) return false;
-        var owner = AgentRetainer.Instance()->GetAddonId();
-        if ((numeric->ParentId != owner && numeric->BlockedParentId != owner)
-            || (numeric->ParentId != 0 && numeric->ParentId != owner) || (numeric->BlockedParentId != 0 && numeric->BlockedParentId != owner))
-            throw new InvalidOperationException("The quantity dialog belongs to another operation.");
-        if (quantity == 0 || quantity > sourceQuantity || quantity > int.MaxValue || numeric->AtkValues == null || numeric->AtkValuesCount < 7
+        if (!Plugin.Condition[ConditionFlag.OccupiedSummoningBell] || !HasVisibleRetainerInventory || HasUnrelatedModal || HasActiveCutscene)
+            throw new InvalidOperationException("The owned retainer interaction is no longer ready for its quantity dialog.");
+        // A deposit's numeric window can block the player's inventory, while a withdrawal
+        // is attached to retainer storage. AgentRetainer.GetAddonId alone is not ownership.
+        var roots = QuantityInventoryRoots(deposit);
+        Trace(trace, QuantityOwnershipDiagnostic((AtkUnitBase*)numeric, roots));
+        if (!RetainerQuantityDialogPolicy.IsOwned(numeric->ParentId, numeric->BlockedParentId, roots,
+                QuantityOwnerAncestors(numeric->ParentId, numeric->BlockedParentId)))
+            throw new InvalidOperationException($"The quantity dialog's parents do not belong to the active inventory windows (parent={numeric->ParentId}, blockedParent={numeric->BlockedParentId}).");
+        VerifyMoveSource(pendingSource, quantity, deposit);
+        if (numeric->AtkValues == null || numeric->AtkValuesCount < 7
             || numeric->AtkValues[2].Type != AtkValueType.UInt || numeric->AtkValues[3].Type != AtkValueType.UInt
-            || numeric->AtkValues[2].UInt > quantity || numeric->AtkValues[3].UInt < quantity || numeric->AtkValues[3].UInt > sourceQuantity)
+            || !RetainerQuantityDialogPolicy.LimitsMatch(quantity, pendingSource.Quantity, numeric->AtkValues[2].UInt, numeric->AtkValues[3].UInt))
             throw new InvalidOperationException("The retainer quantity dialog limits do not match the pending source stack.");
+        var destination = deposit ? ReadRetainer(expected, pendingSource.ItemId, pendingSource.HighQuality)
+            : ReadBags(pendingSource.ItemId, pendingSource.HighQuality);
+        if (quantity > destination.Capacity)
+            throw new InvalidOperationException("Receiving inventory space changed before the pending quantity could be submitted.");
         var value = new AtkValue { Type = AtkValueType.Int, Int = checked((int)quantity) };
-        Trace(trace, $"action quantity begin; retainer={expected}; amount={quantity}; sourceQuantity={sourceQuantity}");
+        Trace(trace, $"action quantity begin; retainer={expected}; deposit={deposit}; amount={quantity}; source={pendingSource.Container}/{pendingSource.Slot}; sourceQuantity={pendingSource.Quantity}; destinationCapacity={destination.Capacity}; minimum={numeric->AtkValues[2].UInt}; maximum={numeric->AtkValues[3].UInt}");
         var callbackResult = numeric->FireCallback(1, &value, true);
         Trace(trace, $"action quantity dispatched; callbackReturn={callbackResult}; awaiting inventory deltas");
         return true;
+    }
+
+    private static void VerifyMoveSource(NativeBagSlot slot, uint quantity, bool deposit)
+    {
+        if (!(deposit ? Bags : RetainerBags).Contains(slot.Container))
+            throw new InvalidOperationException("The pending source inventory does not match the retainer movement direction.");
+        var manager = InventoryManager.Instance();
+        var page = manager == null ? null : manager->GetInventoryContainer(slot.Container);
+        if (page == null || !page->IsLoaded || slot.Slot < 0 || slot.Slot >= page->Size)
+            throw new InvalidOperationException("The pending source inventory slot is not loaded.");
+        var source = page->GetInventorySlot(slot.Slot);
+        if (source == null || source->ItemId != slot.ItemId || source->IsHighQuality() != slot.HighQuality || source->Quantity != slot.Quantity
+            || source->SpiritbondOrCollectability != 0 || source->GlamourId != 0 || (source->Flags & ~InventoryItem.ItemFlags.HighQuality) != 0
+            || !slot.Movable || quantity == 0 || quantity > slot.Quantity || quantity > int.MaxValue)
+            throw new InvalidOperationException("The source slot changed before the retainer movement.");
+    }
+
+    private static HashSet<uint> QuantityInventoryRoots(bool deposit)
+    {
+        var roots = new HashSet<uint>();
+        string[] names = deposit
+            ? ["InventoryRetainer", "InventoryRetainerLarge", "Inventory", "InventoryLarge", "InventoryExpansion"]
+            : ["InventoryRetainer", "InventoryRetainerLarge"];
+        foreach (var name in names)
+        {
+            var addon = Ready(name);
+            if (addon != null && addon->Id != 0) roots.Add(addon->Id);
+        }
+        return roots;
+    }
+
+    private static Dictionary<uint, QuantityDialogAddon> QuantityOwnerAncestors(uint parentId, uint blockedParentId)
+    {
+        var result = new Dictionary<uint, QuantityDialogAddon>();
+        var manager = RaptureAtkUnitManager.Instance();
+        if (manager == null) return result;
+        var pending = new Queue<uint>();
+        pending.Enqueue(parentId); pending.Enqueue(blockedParentId);
+        while (pending.TryDequeue(out var id) && result.Count < 32)
+        {
+            if (id == 0 || id > ushort.MaxValue || result.ContainsKey(id)) continue;
+            var addon = manager->GetAddonById((ushort)id);
+            if (addon == null || addon->Id != id) continue;
+            result.Add(id, new(id, addon->ParentId, addon->HostId, addon->IsReady && addon->IsVisible));
+            pending.Enqueue(addon->ParentId); pending.Enqueue(addon->HostId);
+        }
+        return result;
+    }
+
+    private static string QuantityOwnershipDiagnostic(AtkUnitBase* numeric, IReadOnlySet<uint> roots)
+    {
+        var retainer = AgentRetainer.Instance();
+        var player = AgentInventory.Instance();
+        return $"quantity ownership id={numeric->Id}; parent={numeric->ParentId}; blockedParent={numeric->BlockedParentId}; host={numeric->HostId}; retainerOwner={(retainer == null ? 0 : retainer->GetAddonId())}; playerOwner={(player == null ? 0 : player->GetAddonId())}; approvedInventoryRoots={string.Join(",", roots.Order())}";
     }
 
     public static void HideInventory(ulong expected, Action<string>? trace = null)

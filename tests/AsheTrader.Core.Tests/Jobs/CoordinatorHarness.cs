@@ -27,8 +27,8 @@ public sealed partial class WorkflowService
     private readonly object? activeWorker = null;
     private string error = string.Empty;
     private WorkflowSettings Settings => settings;
-    private void ChooseMeetingWorld(TransferPlan plan) { }
-    private string PreferredMeetingWorld(TransferPlan plan) => "";
+    private IReadOnlyList<RouteWorld> RoutingWorlds() => TestWorlds;
+    private void RecordDiagnostic(string message) => Diagnostics.Add(message);
     private uint PlanningItemStackSize() => 999;
 
     public CoordinatorRun? Run { get; private set; }
@@ -38,11 +38,14 @@ public sealed partial class WorkflowService
     public string SavedJson { get; private set; } = "null";
     public List<SimulatedCommandTrace> Trace { get; } = [];
     public List<SimulatedTrade> Trades { get; } = [];
+    public List<string> Diagnostics { get; } = [];
+    public List<RouteWorld> TestWorlds { get; set; } = [new(1, "Home World", 1, "Home DC", 1)];
     public IReadOnlyDictionary<ulong, SimulatedCharacter> Characters => characters;
     public Func<WorkerCommand, GameOperationResult, GameOperationResult>? TransformResult { get; set; }
     public uint? DepositMovementLimit { get; set; }
     public uint? WithdrawMovementLimit { get; set; }
     public bool RejectNextSenderBeforeStart { get; set; }
+    public bool StorageMenusClosed { get; set; } = true;
     // The worker still persists the result. A subsequent query can recover a lost response.
     public Predicate<WorkerCommand>? SuppressInitialResponse { get; set; }
 
@@ -58,6 +61,8 @@ public sealed partial class WorkflowService
         settings = new() { PeerId = localPeer, AllowRemoteControl = true };
         peer = new() { RemotePeerId = remotePeer };
         characters = initialCharacters.ToDictionary(character => character.Id);
+        foreach (var character in initialCharacters)
+            if (character.CurrentWorldId == 0) character.CurrentWorldId = character.HomeWorldId;
         plugin.Config.Characters = initialCharacters.Where(character => character.PeerId == localPeer).Select(Profile).ToList();
         RemoteRoster = new()
         {
@@ -147,7 +152,8 @@ public sealed partial class WorkflowService
         var character = characters[command.Operation.CharacterId];
         var stock = character.Inventory(command.Operation.ItemId, command.Operation.HighQuality);
         if (character.PeerId != owner) throw new InvalidOperationException("Command went to the wrong peer.");
-        Trace.Add(new(command.Kind, command.Operation.Kind, character.Id, command.Operation.Quantity, character.Location, command.Operation.ItemId, command.Operation.HighQuality));
+        Trace.Add(new(command.Kind, command.Operation.Kind, character.Id, command.Operation.Quantity, character.Location,
+            command.Operation.ItemId, command.Operation.HighQuality, command.Operation.Destination?.WorldId ?? 0, character.CurrentWorldId));
 
         if (command.Kind == WorkerCommandKind.Game)
         {
@@ -158,15 +164,17 @@ public sealed partial class WorkflowService
             uint moved = 0;
             switch (operation.Kind)
             {
-                case GameOperationKind.ScanRetainers: character.Location = "home"; break;
+                case GameOperationKind.ScanRetainers: character.Location = "home"; character.CurrentWorldId = character.HomeWorldId; break;
                 case GameOperationKind.Withdraw:
                     character.Location = "home";
+                    character.CurrentWorldId = character.HomeWorldId;
                     moved = Math.Min(operation.Quantity, Math.Min(stock.RetainerTotal, character.BagSpace));
                     if (WithdrawMovementLimit is { } pickupLimit) moved = Math.Min(moved, pickupLimit);
                     RemoveStored(stock, moved); stock.Bags += moved;
                     break;
                 case GameOperationKind.Deposit:
                     character.Location = "home";
+                    character.CurrentWorldId = character.HomeWorldId;
                     moved = Math.Min(operation.Quantity, Math.Min(stock.Bags, character.StorageSpace));
                     if (DepositMovementLimit is { } limit) moved = Math.Min(moved, limit);
                     stock.Bags -= moved;
@@ -177,6 +185,7 @@ public sealed partial class WorkflowService
                 case GameOperationKind.TravelMeeting:
                     if (operation.Destination == null) throw new InvalidOperationException("Travel destination omitted.");
                     character.Location = "meeting";
+                    character.CurrentWorldId = operation.Destination.WorldId;
                     break;
             }
             var result = Result(character, operation, moved);
@@ -230,10 +239,11 @@ public sealed partial class WorkflowService
         if (arm.Operation.Quantity != amount || arm.Partner?.ContentId != character.Id
             || arm.Operation.ItemId != command.Operation.ItemId || arm.Operation.HighQuality != command.Operation.HighQuality
             || command.Partner?.ContentId != receiver.Id || loggedIn.GetValueOrDefault(receiver.PeerId) != receiver.Id
-            || receiver.Location != "meeting" || stock.Bags < amount || receiver.BagSpace < amount)
+            || receiver.Location != "meeting" || receiver.CurrentWorldId != character.CurrentWorldId
+            || stock.Bags < amount || receiver.BagSpace < amount)
             throw new InvalidOperationException("The proposed trade cannot fit or does not match the armed partner.");
         stock.Bags -= amount; receiverStock.Bags += amount;
-        Trades.Add(new(character.Id, receiver.Id, amount, command.Id, arm.Id, command.Operation.ItemId, command.Operation.HighQuality));
+        Trades.Add(new(character.Id, receiver.Id, amount, command.Id, arm.Id, command.Operation.ItemId, command.Operation.HighQuality, character.CurrentWorldId));
         Deliver(receiver.PeerId, new() { CommandId = arm.Id, Success = true, Quantity = amount });
         Deliver(owner, new() { CommandId = command.Id, Success = true, Quantity = amount });
         armedReceiver = null;
@@ -252,6 +262,18 @@ public sealed partial class WorkflowService
     {
         var command = receivedCommands[resolution.CommandId];
         var previous = durableResponses[resolution.CommandId];
+        if (resolution.StorageVerifiedOnly)
+        {
+            if (resolution.Transferred || !StorageReconciliation.IsStorage(command))
+                throw new InvalidOperationException("This command cannot be reviewed as storage.");
+            if (StorageReconciliation.IsReviewed(previous)) { Deliver(owner, previous); return; }
+            if (loggedIn.GetValueOrDefault(owner) != command.Operation.CharacterId)
+                throw new InvalidOperationException("The original storage character must be logged in.");
+            if (!StorageMenusClosed) throw new InvalidOperationException("Close storage and quantity menus before review.");
+            var storageQuantity = characters[command.Operation.CharacterId].Inventory(command.Operation.ItemId, command.Operation.HighQuality).Bags;
+            Deliver(owner, StorageReconciliation.Review(command, previous, storageQuantity));
+            return;
+        }
         var before = previous.BeforeQuantity ?? throw new InvalidOperationException("No pre-trade evidence.");
         var current = characters[command.Operation.CharacterId].Inventory(command.Operation.ItemId, command.Operation.HighQuality).Bags;
         if (!resolution.Transferred && before != current) throw new InvalidOperationException("The inventory is not unchanged.");
@@ -286,6 +308,7 @@ public sealed partial class WorkflowService
         return new()
         {
             Id = operation.Id, Success = true, CharacterId = character.Id, BagQuantity = stock.Bags,
+            CurrentWorldId = character.CurrentWorldId,
             BagCapacity = character.BagSpace, StackSize = stock.StackSize, MovedQuantity = moved,
             RetainerRosterVerified = character.ScanVerified,
             Retainers = stock.Retainers.Select(pair => new RetainerInventorySnapshot(pair.Key, $"Retainer {pair.Key}", pair.Value, character.ScanVerified)).ToList(),
@@ -306,7 +329,7 @@ public sealed partial class WorkflowService
 
     private static CharacterProfile Profile(SimulatedCharacter character) => new()
     {
-        ContentId = character.Id, Name = $"Character {character.Id}", World = "Home World",
+        ContentId = character.Id, Name = $"Character {character.Id}", World = character.WorldName,
         InventoryFreeSlots = Math.Min(140U, character.BagSpace), InventorySlotsRetrievedAt = DateTimeOffset.UtcNow
     };
 
@@ -327,6 +350,9 @@ public sealed class SimulatedCharacter : SimulatedItemInventory
 {
     public required ulong Id { get; init; }
     public required Guid PeerId { get; init; }
+    public uint HomeWorldId { get; init; } = 1;
+    public string WorldName { get; init; } = "Home World";
+    public uint CurrentWorldId { get; set; }
     public uint BagLimit { get; init; } = 999;
     public uint StorageLimit { get; init; } = 1_000_000;
     public bool ScanVerified { get; set; } = true;
@@ -358,5 +384,5 @@ public class SimulatedItemInventory
     public ulong Total => (ulong)Bags + RetainerTotal;
 }
 
-public sealed record SimulatedCommandTrace(WorkerCommandKind Kind, GameOperationKind Operation, ulong CharacterId, uint Quantity, string StartLocation, uint ItemId, bool HighQuality);
-public sealed record SimulatedTrade(ulong SenderId, ulong ReceiverId, uint Quantity, Guid SenderCommandId, Guid ReceiverCommandId, uint ItemId, bool HighQuality);
+public sealed record SimulatedCommandTrace(WorkerCommandKind Kind, GameOperationKind Operation, ulong CharacterId, uint Quantity, string StartLocation, uint ItemId, bool HighQuality, uint DestinationWorldId = 0, uint StartWorldId = 0);
+public sealed record SimulatedTrade(ulong SenderId, ulong ReceiverId, uint Quantity, Guid SenderCommandId, Guid ReceiverCommandId, uint ItemId, bool HighQuality, uint WorldId = 0);
