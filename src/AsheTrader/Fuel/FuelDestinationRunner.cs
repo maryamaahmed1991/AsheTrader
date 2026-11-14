@@ -21,7 +21,7 @@ namespace AsheTrader.Fuel;
 /// <summary>Framework-thread-only travel and vendor entry. This runner never purchases or moves items.</summary>
 internal sealed unsafe class FuelDestinationRunner
 {
-    private enum Stage { Idle, Travel, WaitTravel, Door, DoorPrompt, Interior, WorkshopDoor, WorkshopMenu, Workshop, Supplier, SupplierMenu, Shop }
+    private enum Stage { Idle, Travel, WaitTravel, Door, EntrancePath, DoorPrompt, Interior, WorkshopDoor, WorkshopPath, WorkshopMenu, Workshop, Supplier, SupplierMenu, Shop }
     private static readonly string[] EntranceNames = ["Entrance", "ハウスへ入る", "进入房屋", "進入房屋", "Eingang", "Entrée", "주택으로 들어가기"];
     private readonly LifestreamClient lifestream = new();
     private FuelQueueEntry entry = new();
@@ -32,6 +32,12 @@ internal sealed unsafe class FuelDestinationRunner
     private uint targetDataId, targetTerritory;
     private int attempts, pathAttempts;
     private bool ownsLifestream, ownsNavigation;
+    private LifestreamHouseRoute savedHouseRoute = LifestreamHouseRoute.Empty;
+    private string savedRouteDiagnostic = "Recorded house routes have not been read yet.";
+    private FuelSavedPathProgress? savedPathProgress, navigationProgress;
+    private Vector3? savedPathEndpoint;
+    private uint savedPathTerritory;
+    private bool entrancePathCompleted, workshopPathCompleted, freshInteriorEntry, forcePlotTravel, repositionedForPath;
     private Vector3? caretakerWaypoint;
     private Vector3? plotGatePosition, estateEntrancePosition;
     private string estateApproachDiagnostic = "No estate entrance has been selected yet.";
@@ -55,7 +61,7 @@ internal sealed unsafe class FuelDestinationRunner
     public string Status { get; private set; } = "Fuel destination idle.";
     public Action<string>? Diagnostic { get; set; }
 
-    public bool Start(FuelQueueEntry destination, out string error)
+    public bool Start(FuelQueueEntry destination, out string error, IReadOnlyList<CharacterProfile>? characters = null)
     {
         error = string.Empty;
         if (Volatile.Read(ref shutdown) != 0 || Plugin.Framework.IsFrameworkUnloading)
@@ -102,6 +108,14 @@ internal sealed unsafe class FuelDestinationRunner
         Success = false;
         Error = string.Empty;
         ownsLifestream = ownsNavigation = false;
+        savedHouseRoute = LifestreamHouseRoute.Empty;
+        savedRouteDiagnostic = "Resident Caretaker route; recorded house paths do not apply.";
+        if (!destination.UseCaretaker)
+            lifestream.TryGetHouseRoute(address, characters ?? [], out savedHouseRoute, out savedRouteDiagnostic);
+        Trace(savedRouteDiagnostic);
+        savedPathProgress = navigationProgress = null;
+        savedPathEndpoint = null;
+        entrancePathCompleted = workshopPathCompleted = freshInteriorEntry = forcePlotTravel = repositionedForPath = false;
         caretakerWaypoint = null;
         plotGatePosition = estateEntrancePosition = null;
         estateApproachDiagnostic = "No estate entrance has been selected yet.";
@@ -142,6 +156,8 @@ internal sealed unsafe class FuelDestinationRunner
                 if (lastInteraction != 0) lastInteraction += elapsed;
                 if (pathStarted != 0) pathStarted += elapsed;
                 if (dismountStarted != 0) dismountStarted += elapsed;
+                savedPathProgress?.Suspend(elapsed);
+                navigationProgress?.Suspend(elapsed);
                 Status = "Waiting for the cutscene to finish…";
                 return;
             }
@@ -149,7 +165,7 @@ internal sealed unsafe class FuelDestinationRunner
             if (Plugin.ClientState.IsLoggedIn && Plugin.PlayerState.ContentId != characterId)
                 throw new InvalidOperationException("The logged-in character changed during fuel travel.");
             var limit = stage is Stage.Travel or Stage.WaitTravel ? 900_000
-                : stage is Stage.Door or Stage.WorkshopDoor or Stage.Supplier ? 300_000 : 90_000;
+                : stage is Stage.Door or Stage.WorkshopDoor or Stage.Supplier or Stage.EntrancePath or Stage.WorkshopPath ? 300_000 : 90_000;
             if (now - stageStarted > limit)
                 throw new TimeoutException($"Timed out while {Status.TrimEnd('…', '.')}. Fuel navigation stage: {stage}.");
             if (now >= nextSnapshot)
@@ -159,7 +175,12 @@ internal sealed unsafe class FuelDestinationRunner
             }
             if (now < actionAfter) return;
             if (stage == Stage.WaitTravel) { WaitTravel(now); return; }
-            if (!PlayerReady) return;
+            if (!PlayerReady)
+            {
+                savedPathProgress?.Suspend(elapsed);
+                navigationProgress?.Suspend(elapsed);
+                return;
+            }
             if (stage != Stage.Travel && !AtRouteWorld())
                 throw new InvalidOperationException("The character left the configured home world during fuel travel.");
 
@@ -170,21 +191,26 @@ internal sealed unsafe class FuelDestinationRunner
                     // occupied frame. Allow those states to settle without pausing the queue.
                     if (NativeRetainers.BellInteractionBlocked) break;
                     if (entry.UseCaretaker && AtCaretakerDistrict(entry)) { Set(Stage.Supplier, "Approaching the Resident Caretaker…"); break; }
-                    if (!entry.UseCaretaker && CanBeginHouseApproach()) { EnterHouseStage(); break; }
+                    if (!entry.UseCaretaker && !forcePlotTravel && CanBeginHouseApproach()) { EnterHouseStage(); break; }
                     var house = entry.UseCaretaker
                         ? new HouseProfile { Name = "Resident Caretaker district", Address = LifestreamClient.FormatAddress((int)Plugin.ObjectTable.LocalPlayer!.HomeWorld.RowId, entry.CaretakerCity, 1, 1) }
                         : new HouseProfile { Name = entry.HouseName, Address = entry.HouseAddress };
                     if (!lifestream.TryTravel(house, out var travelError)) throw new InvalidOperationException(travelError);
                     ownsLifestream = true;
+                    forcePlotTravel = false;
                     Set(Stage.WaitTravel, entry.UseCaretaker ? "Lifestream is traveling to the housing district…" : "Lifestream is traveling to the configured plot…");
                     break;
                 case Stage.Door:
                     if (InsideHouse || InWorkshop) { RequireHouse(); EnterHouseStage(); break; }
+                    if (!entrancePathCompleted && savedHouseRoute.Entrance.Count > 0) { StartSavedHousePath(false); break; }
                     ApproachEstateDoor();
+                    break;
+                case Stage.EntrancePath:
+                    UpdateSavedHousePath(false, now);
                     break;
                 case Stage.DoorPrompt:
                     RequireHouse();
-                    if (InsideHouse) { EnterHouseStage(); break; }
+                    if (InsideHouse) { freshInteriorEntry = true; EnterHouseStage(); break; }
                     var yesno = (AddonSelectYesno*)NativeRetainers.Ready("SelectYesno");
                     if (yesno != null)
                     {
@@ -197,12 +223,16 @@ internal sealed unsafe class FuelDestinationRunner
                     else RetryInteraction(now);
                     break;
                 case Stage.Interior:
-                    if (InsideHouse) { RequireHouse(); EnterHouseStage(); }
+                    if (InsideHouse) { RequireHouse(); freshInteriorEntry = true; EnterHouseStage(); }
                     break;
                 case Stage.WorkshopDoor:
                     RequireHouse();
                     if (InWorkshop) { Set(Stage.Supplier, "Approaching the workshop supplier…"); break; }
+                    if (!workshopPathCompleted && savedHouseRoute.Workshop.Count > 0) { StartSavedHousePath(true); break; }
                     ApproachAndInteract(FindNearest(x => x.BaseId == 2004353), Stage.WorkshopMenu, "Opening the workshop entrance menu…");
+                    break;
+                case Stage.WorkshopPath:
+                    UpdateSavedHousePath(true, now);
                     break;
                 case Stage.WorkshopMenu:
                     RequireHouse();
@@ -284,6 +314,18 @@ internal sealed unsafe class FuelDestinationRunner
     {
         if (AtHouse(address)) return true;
         if (!AtHouseWard()) return false;
+        ReadPlotGate();
+        var player = Plugin.ObjectTable.LocalPlayer!;
+        var housing = HousingManager.Instance();
+        if (!FuelHouseArrivalPolicy.CanApproachFromGate(new(address.World, address.City, address.Ward, address.Plot),
+                (int)player.CurrentWorld.RowId, (int)player.HomeWorld.RowId, District(Plugin.ClientState.TerritoryType),
+                housing->GetCurrentWard(), housing->GetCurrentPlot(), housing->IsOutside(), player.Position, plotGatePosition)) return false;
+        Trace($"verified configured plot landing; {plotGateDiagnostic}; player={player.Position}; nativePlotIndex={housing->GetCurrentPlot()}");
+        return true;
+    }
+
+    private void ReadPlotGate()
+    {
         var now = Environment.TickCount64;
         var territory = Plugin.ClientState.TerritoryType;
         if (plotGateTerritory != territory) { plotGatePosition = null; nextGateRead = 0; }
@@ -302,13 +344,79 @@ internal sealed unsafe class FuelDestinationRunner
             catch (Exception exception)
             { plotGateDiagnostic = $"The Lifestream plot landing point is unavailable ({exception.GetType().Name})."; }
         }
-        var player = Plugin.ObjectTable.LocalPlayer!;
-        var housing = HousingManager.Instance();
-        if (!FuelHouseArrivalPolicy.CanApproachFromGate(new(address.World, address.City, address.Ward, address.Plot),
-                (int)player.CurrentWorld.RowId, (int)player.HomeWorld.RowId, District(territory),
-                housing->GetCurrentWard(), housing->GetCurrentPlot(), housing->IsOutside(), player.Position, plotGatePosition)) return false;
-        Trace($"verified configured plot landing; {plotGateDiagnostic}; player={player.Position}; nativePlotIndex={housing->GetCurrentPlot()}");
-        return true;
+    }
+
+    private void StartSavedHousePath(bool workshop)
+    {
+        if (workshop) RequireHouse();
+        else if (!AtHouseWard()) throw new InvalidOperationException("The recorded entrance path no longer matches the current world, district and ward.");
+        if (NativeRetainers.BellInteractionBlocked || NativeRetainers.Ready("SelectIconString") != null) return;
+        if (ownsNavigation) { StopNavigation(); actionAfter = Environment.TickCount64 + 350; return; }
+        if (NavigationBusy()) throw new InvalidOperationException("Another navigation operation is running before the recorded house path.");
+
+        var points = workshop ? savedHouseRoute.Workshop : savedHouseRoute.Entrance;
+        if (!workshop) ReadPlotGate();
+        if (!workshop && plotGatePosition == null)
+        {
+            if (Environment.TickCount64 - stageStarted > 20_000)
+                throw new InvalidOperationException("The plot's recorded entrance route could not be bound to its Lifestream drop-off point.");
+            Status = "Waiting for the recorded entrance route's starting point…";
+            return;
+        }
+        var playerPosition = Plugin.ObjectTable.LocalPlayer!.Position;
+        if (!FuelSavedPathJoin.TryCreate(points, playerPosition, workshop ? null : plotGatePosition,
+                workshop && freshInteriorEntry, out var remaining, out var joinReason))
+        {
+            Trace($"recorded path join rejected; workshop={workshop}; {joinReason}");
+            // A stopped character can be outside the recorded route (for example at
+            // a fence). Let Lifestream return to the verified plot gate once rather
+            // than cutting directly across the yard to a distant waypoint.
+            if (!workshop && !AtHouse(address) && !repositionedForPath)
+            {
+                repositionedForPath = forcePlotTravel = true;
+                Set(Stage.Travel, "Returning to the recorded entrance route's starting point…");
+                return;
+            }
+            throw new InvalidOperationException("The character is too far from the recorded " + (workshop ? "workshop" : "entrance")
+                + " route to rejoin it safely. Return near that route and Resume. " + joinReason);
+        }
+        var state = lifestream.GetStatus();
+        if (!state.Ready || state.Busy != false)
+            throw new InvalidOperationException(state.Error ?? "Lifestream became busy before following the recorded house path.");
+        savedPathEndpoint = remaining[^1];
+        savedPathTerritory = Plugin.ClientState.TerritoryType;
+        savedPathProgress = new(savedPathEndpoint.Value, playerPosition, Environment.TickCount64);
+        Set(workshop ? Stage.WorkshopPath : Stage.EntrancePath,
+            workshop ? "Following Lifestream's saved route to the workshop…" : "Following Lifestream's saved route through the plot entrance…");
+        // Own cleanup before dispatch: an IPC provider may throw after accepting it.
+        ownsLifestream = true;
+        if (!lifestream.TryMoveHousePath(remaining, out var error)) throw new InvalidOperationException(error);
+        Trace($"recorded path dispatched; workshop={workshop}; owner={savedHouseRoute.OwnerCharacterId}; points={remaining.Count}; endpoint={savedPathEndpoint}; {joinReason}");
+    }
+
+    private void UpdateSavedHousePath(bool workshop, long now)
+    {
+        if (Plugin.ClientState.TerritoryType != savedPathTerritory)
+            throw new InvalidOperationException("The territory changed while following the recorded house path.");
+        if (workshop) RequireHouse();
+        else if (!AtHouseWard()) throw new InvalidOperationException("The character left the configured world, district or ward during the recorded entrance route.");
+        if (NavigationBusy()) throw new InvalidOperationException("Another plugin started navigation during Lifestream's recorded house route.");
+        var state = lifestream.GetStatus();
+        if (!state.Ready || state.Busy == null) throw new InvalidOperationException(state.Error ?? "Lifestream became unavailable during its recorded house route.");
+        var observed = savedPathProgress?.Observe(state.Busy.Value, Plugin.ObjectTable.LocalPlayer!.Position, now)
+            ?? FuelSavedPathState.StoppedShort;
+        if (observed == FuelSavedPathState.Waiting) return;
+        Trace($"recorded path result={observed}; workshop={workshop}; endpoint={savedPathEndpoint}; actual={Plugin.ObjectTable.LocalPlayer!.Position}");
+        if (observed != FuelSavedPathState.Arrived)
+            throw new InvalidOperationException(observed == FuelSavedPathState.Stalled
+                ? "The recorded Lifestream house path stopped making progress. Check that its waypoints still go through the gate or around the current furnishings."
+                : "Lifestream stopped before reaching the recorded house path's endpoint. The path was not treated as completed.");
+        ownsLifestream = false;
+        savedPathProgress = null;
+        if (workshop) { workshopPathCompleted = true; freshInteriorEntry = false; }
+        else entrancePathCompleted = true;
+        Set(workshop ? Stage.WorkshopDoor : Stage.Door,
+            workshop ? "Recorded workshop route complete; opening the workshop entrance…" : "Recorded entrance route complete; opening the estate door…");
     }
 
     private bool AtHouseWard()
@@ -421,6 +529,9 @@ internal sealed unsafe class FuelDestinationRunner
         { Status = "Waiting for vnavmesh to load the fuel destination…"; actionAfter = now + 500; return false; }
         if (ownsNavigation)
         {
+            if (navigationProgress?.Observe(true, Plugin.ObjectTable.LocalPlayer!.Position, now) == FuelSavedPathState.Stalled)
+                throw new InvalidOperationException("Fuel navigation stopped making progress."
+                    + (entry.UseCaretaker ? " Check the path to the Resident Caretaker." : " Check or record this house's entrance and workshop paths in Lifestream, then Resume."));
             if (NavigationBusy() || now - pathStarted < 1_000) return false;
             ownsNavigation = false;
             if (pathAttempts >= 2) throw new InvalidOperationException("The fuel destination path ended before the entrance or supplier was within reach.");
@@ -429,6 +540,7 @@ internal sealed unsafe class FuelDestinationRunner
         if (!Plugin.PluginInterface.GetIpcSubscriber<Vector3, bool, bool>("vnavmesh.SimpleMove.PathfindAndMoveTo").InvokeFunc(position, false))
             throw new InvalidOperationException("vnavmesh could not start a path to the fuel destination.");
         ownsNavigation = true;
+        navigationProgress = new(position, Plugin.ObjectTable.LocalPlayer!.Position, now);
         pathStarted = now;
         pathAttempts++;
         Status = entry.UseCaretaker ? "Walking to the Resident Caretaker…" : "Walking to the workshop entrance or supplier…";
@@ -679,6 +791,7 @@ internal sealed unsafe class FuelDestinationRunner
     {
         if (!ownsNavigation) return;
         ownsNavigation = false;
+        navigationProgress = null;
         try { Plugin.PluginInterface.GetIpcSubscriber<object>("vnavmesh.Path.Stop").InvokeAction(); }
         catch (Exception exception) { Plugin.Log.Debug(exception, "Fuel navigation cleanup failed."); }
     }
@@ -707,6 +820,7 @@ internal sealed unsafe class FuelDestinationRunner
             var state = lifestream.GetStatus();
             Trace($"snapshot reason={reason}; active={Active}; stage={stage}; stageElapsedMs={Environment.TickCount64 - stageStarted}; expected={entry.HouseAddress}; caretaker={entry.UseCaretaker}; character={Plugin.PlayerState.ContentId}; position={player?.Position}; homeWorld={player?.HomeWorld.RowId}; playerReady={PlayerReady}; mounted={Plugin.Condition[ConditionFlag.Mounted]}; lifestreamReady={state.Ready}; lifestreamBusy={state.Busy}; ownsLifestream={ownsLifestream}; ownsNavigation={ownsNavigation}");
             Trace($"housing {locationDiagnostic}; resolved={resolved}; address={actual}; reason={locationError}");
+            Trace($"recorded route {savedRouteDiagnostic}; entranceComplete={entrancePathCompleted}; workshopComplete={workshopPathCompleted}; endpoint={savedPathEndpoint}; pathTerritory={savedPathTerritory}; freshInterior={freshInteriorEntry}; repositioned={repositionedForPath}");
             if (!entry.UseCaretaker)
             {
                 var gateDistance = player != null && plotGatePosition is { } gate ? Vector3.Distance(player.Position, gate).ToString("F2") : "unavailable";

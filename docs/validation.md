@@ -1,5 +1,13 @@
 # Development build validation
 
+## 0.5.0.4 validation — 14 November 2026
+
+- Full `scripts/Build.ps1`: **782 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.
+- Recorded routes are read through Lifestream's public GetHousePathData IPC and executed through Move, which uses the same follower as its house shortcut. IsBusy includes active waypoints but also becomes false on cancellation; completion therefore requires endpoint proximity and unchanged destination context. Stop aborts only movement owned by this runner.
+- Twenty-nine route-contract cases cover Newtonsoft IPC tuple/vector conversion, exact owner/home-world/address binding, partial recordings, immutable snapshots, limits and deterministic selection without splicing registrations. Forty progress/join cases cover real endpoint arrival, short stops, wall stalls, cutscene/loading timer suspension, complete gate routes, nearby 3D joins and refusal to cut across distant corners or floors.
+- Runner review verified that owned vnavmesh movement stops before Lifestream starts, foreign navigation is rejected, full native house verification remains before interaction, and a failed outside join can reposition through Lifestream once. Missing path sections retain normal navigation, now with a 15-second no-progress watchdog.
+- The screenshot establishes a character walking into the outside fence, but does not include a route trace. No live game movement was performed during development. Validate with both recorded entrance and workshop paths, update, and Resume the existing queue; Copy diagnostics includes the selected route and endpoint evidence.
+
 ## 0.5.0.3 validation — 14 November 2026
 
 - Full `scripts/Build.ps1`: **713 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.

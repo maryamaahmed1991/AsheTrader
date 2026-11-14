@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace AsheTrader.Core;
 
 /// <summary>Detached fields from Lifestream's public HousePathData IPC result.</summary>
@@ -8,6 +10,8 @@ public sealed class LifestreamRegisteredHouse
     public int? Plot { get; set; }
     public bool? IsPrivate { get; set; }
     public ulong? CID { get; set; }
+    public List<Vector3>? PathToEntrance { get; set; }
+    public List<Vector3>? PathToWorkshop { get; set; }
 }
 
 /// <summary>The two public Lifestream house sources use different address conventions.</summary>

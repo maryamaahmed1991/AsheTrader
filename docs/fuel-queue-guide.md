@@ -27,6 +27,10 @@ Version **0.5.0.3** handles Lifestream stopping just outside the plot: the queue
 
 ## Run a small test first
 
+Version **0.5.0.4** uses Lifestream's saved house paths when available. Under **Lifestream → House Registration → Free Company House**, check both **Path to entrance** (outside gate to house door) and **Path to workshop** (inside the estate to the workshop entrance). Existing recordings are read automatically on Start or Resume; no house re-registration is needed. A matching registration may belong to another known character on this PC, provided its home world and full address match the selected fuel destination. Custom House records are not exposed by this registration lookup.
+
+The queue follows the recorded waypoints using Lifestream itself, then performs the verified door/menu interactions. It checks endpoint arrival after movement ends. Resume preserves route corners, and a character stopped outside the recorded route can return to the plot drop-off once before trying it. If a path section is empty, that section uses normal navigation; a workshop-only recording does not replace the outside gate approach. Copy diagnostics reports the chosen registration, both point counts, the active endpoint and any short stop or stall.
+
 1. Finish or end any transfer job on this PC. AutoRetainer should be ready and idle with multi-mode paused; Lifestream and vnavmesh must be available.
 2. Select one buyer and a familiar destination. For a character carrying zero tanks, disable credit exhaustion and set **Buy when carrying fewer than: 1**, **Restock to: 99**. If it already carries fuel, choose a threshold above that carried quantity and a target only a small amount higher.
 3. Check the **Queue preview**, then press **Start selected**. Confirm the correct character logs in, reaches the chosen supplier, buys the intended fuel and stores fuel according to its keep-carried setting.

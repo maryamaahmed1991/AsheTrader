@@ -330,7 +330,7 @@ public sealed class FuelQueueService
         if (!VerifyCharacterCompany()) return;
         if (FuelDestinationRunner.IsExpectedLocation(Entry) && NativeFuelShop.TryRead(out _, out _))
         { Transition(FuelQueueStage.Buying, "Checking live fuel stock and FC credits…"); return; }
-        if (!destination.Start(Entry, out var error)) throw new InvalidOperationException(error);
+        if (!destination.Start(Entry, out var error, plugin.Config.Characters)) throw new InvalidOperationException(error);
         destinationStarted = true;
         SetStatus(destination.Status);
     }

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using AsheTrader.Core;
 using Lumina.Excel.Sheets;
 using HouseTuple = (string Name, int World, int City, int Ward, int PropertyType, int Plot, int Apartment, bool ApartmentSubdivision, bool AliasEnabled, string Alias);
@@ -112,6 +113,93 @@ public sealed class LifestreamClient
             LastHouseImportStatus += " No FC registrations were returned. Check Lifestream → House Registration → Free Company House. Custom House entries need an Address Book address or manual registration here.";
         error = string.Join(" ", warnings);
         return addressBookRead || registeredReads > 0;
+    }
+
+    /// <summary>Reads matching FC registrations from this PC's roster. A route may belong
+    /// to another FC member on the same home world; the buyer need not own that FC.</summary>
+    internal bool TryGetHouseRoute(HouseDestination destination, IReadOnlyList<CharacterProfile> characters,
+        out LifestreamHouseRoute route, out string diagnostic)
+    {
+        route = LifestreamHouseRoute.Empty;
+        if (!CanCall(out diagnostic)) return false;
+        if (!IsValid(destination.World, destination.City, destination.Ward, destination.Plot))
+        { diagnostic = "The configured house address is invalid."; return false; }
+
+        var currentCharacterId = Plugin.PlayerState.ContentId;
+        var owners = characters.Where(character => character.ContentId != 0)
+            .DistinctBy(character => character.ContentId).ToDictionary(character => character.ContentId);
+        var player = Plugin.ObjectTable.LocalPlayer;
+        if (player != null && currentCharacterId != 0)
+        {
+            // Prefer the live home world over a potentially stale roster entry.
+            owners[currentCharacterId] = new()
+            { ContentId = currentCharacterId, Name = player.Name.TextValue, World = player.HomeWorld.Value.Name.ExtractText() };
+        }
+
+        var expected = new FuelHouseAddress(destination.World, destination.City, destination.Ward, destination.Plot);
+        var candidates = new List<LifestreamHouseRoute>();
+        var attempted = 0;
+        var failed = 0;
+        var matchingWithoutPath = 0;
+        var invalidPaths = 0;
+        foreach (var owner in owners.Values.OrderByDescending(x => x.ContentId == currentCharacterId).ThenBy(x => x.ContentId))
+        {
+            var world = Plugin.DataManager.GetExcelSheet<World>().FirstOrDefault(row => row.IsPublic
+                && string.Equals(row.Name.ExtractText(), owner.World?.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (world.RowId != destination.World) continue;
+            try
+            {
+                attempted++;
+                var paths = Plugin.PluginInterface.GetIpcSubscriber<ulong,
+                    (LifestreamRegisteredHouse? Private, LifestreamRegisteredHouse? FC)>("Lifestream.GetHousePathData").InvokeFunc(owner.ContentId);
+                if (!LifestreamHouseImports.TryRegisteredFcHouse(owner.ContentId, destination.World, owner.Name, paths.FC, out var house)
+                    || !FuelHouseAddress.TryParse(house.Address, out var actual) || actual != expected) continue;
+                if (LifestreamHouseRoutes.TryCreate(expected, owner.ContentId, destination.World, paths.FC, out var candidate, out _))
+                    candidates.Add(candidate);
+                else if ((paths.FC!.PathToEntrance?.Count ?? 0) == 0 && (paths.FC.PathToWorkshop?.Count ?? 0) == 0)
+                    matchingWithoutPath++;
+                else invalidPaths++;
+            }
+            catch (Exception exception)
+            {
+                failed++;
+                if (failed == 1) Plugin.Log.Debug(exception, "Lifestream recorded house-route lookup failed.");
+            }
+        }
+
+        route = LifestreamHouseRoutes.SelectBest(candidates, currentCharacterId);
+        diagnostic = route.OwnerCharacterId == 0
+            ? $"No matching recorded Lifestream route; checked={attempted}; matchingWithoutPath={matchingWithoutPath}; invalidPaths={invalidPaths}; failedReads={failed}."
+            : $"Lifestream recorded route owner={route.OwnerCharacterId}; entrancePoints={route.Entrance.Count}; workshopPoints={route.Workshop.Count}; checked={attempted}; failedReads={failed}.";
+        return route.OwnerCharacterId != 0;
+    }
+
+    /// <summary>Follows already verified recorded points using Lifestream's own follower.
+    /// Callers own cancellation and must verify arrival after IsBusy becomes false.</summary>
+    public bool TryMoveHousePath(IReadOnlyList<Vector3> path, out string error)
+    {
+        if (!CanCall(out error)) return false;
+        if (!Plugin.ClientState.IsLoggedIn || Plugin.ObjectTable.LocalPlayer == null)
+        { error = "Log in before following a recorded house path."; return false; }
+        if (!LifestreamHouseRoutes.TrySnapshot(path, out var copy, out error)) return false;
+        if (copy.Count == 0) { error = "The recorded house path is empty."; return false; }
+        var state = GetStatus();
+        if (!state.Ready || state.Busy != false)
+        { error = state.Error ?? "Lifestream is already busy."; return false; }
+        try
+        {
+            // IPCProvider.Move uses FollowPath.Move(path, true), the same operation as
+            // Lifestream's registered-house shortcut. It neither teleports nor enters UI.
+            Plugin.PluginInterface.GetIpcSubscriber<List<Vector3>, object>("Lifestream.Move").InvokeAction(copy.ToList());
+            error = string.Empty;
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Plugin.Log.Debug(exception, "Lifestream recorded house-path request failed.");
+            error = "Lifestream could not accept the recorded house path. Inspect its movement state before resuming.";
+            return false;
+        }
     }
 
     /// <summary>Requests travel to the plot only. Workshop entry and vendor interaction are separate.</summary>
