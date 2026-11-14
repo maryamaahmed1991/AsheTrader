@@ -1,5 +1,12 @@
 # Development build validation
 
+## 0.5.0.8 validation — 14 November 2026
+
+- Full build: **910 tests passed**, zero failures/skips; Release plugin compiled without warnings/errors.
+- Added a reproduction of the legacy 19,305 → 19,404 pending receipt with an ending queue and no supplier context. Resume prioritizes inventory reconciliation, then finishes without travel. Wrong character/FC, partial or excess receipt, invalid quantity/price/cost and overflow remain unresolved rather than repeated.
+- Added estate-identity tests for Shirogane W7/P20 and all five housing districts, including one-based conversion, other-world/address mismatches, invalid coordinates, absent IDs and apartment exclusion. Native entry contracts were verified against Dalamud AetheryteEntry and FFXIVClientStructs TeleportInfo/HouseId sources: Ward/Plot are shared-estate fields; FC coordinates come from HouseId.
+- New recovery stage is appended to preserve serialized stage values. Diagnostic format 10 includes actual carried fuel for pending receipts and native FC teleport identity. Native city recovery and FC estate teleport still require user testing; no game actions were performed by development tools.
+
 ## 0.5.0.7 validation — 14 November 2026
 
 - Full `scripts/Build.ps1`: **877 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.

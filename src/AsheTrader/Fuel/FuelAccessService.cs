@@ -89,7 +89,7 @@ internal sealed class FuelAccessService
         }
         plugin.Save();
         plugin.Workflow.RecordDiagnostic($"fuel access observed character={snapshot.CharacterId}; world={snapshot.HomeWorldId}; FC={snapshot.FreeCompanyId}; "
-            + $"fcTeleports={snapshot.FcTeleports.Count}; cities={string.Join(",", snapshot.Cities.Select(c => $"{c.City}:attuned={c.AetheryteAttuned}/quest={c.HousingQuestComplete}"))}");
+            + $"fcTeleports={snapshot.FcTeleports.Count}; teleportsComplete={snapshot.TeleportsComplete}; cities={string.Join(",", snapshot.Cities.Select(c => $"{c.City}:attuned={c.AetheryteAttuned}/quest={c.HousingQuestComplete}"))}");
     }
 
     private static bool SameAccess(FuelAccessSnapshot left, FuelAccessSnapshot right) => left.Format == right.Format
@@ -126,12 +126,11 @@ internal sealed class FuelAccessService
                 HousingQuestComplete = QuestManager.IsQuestComplete(FuelAccessPlanner.HousingQuestId(city)),
             }).ToArray();
             var fcEntries = teleports.Where(t => !t.IsApartment && !t.IsSharedHouse && FuelAccessPlanner.FcCity(t.AetheryteId) != 0).ToArray();
-            var estates = fcEntries
-                .Select(t => new FuelEstateTeleport
-                {
-                    AetheryteId = t.AetheryteId, SubIndex = checked((byte)t.SubIndex), World = world,
-                    City = FuelAccessPlanner.FcCity(t.AetheryteId), Ward = t.Ward, Plot = t.Plot,
-                }).Where(t => FuelAccessPlanner.IsValid(t, world))
+            var resolvedEstates = new List<FuelEstateTeleport>();
+            foreach (var entry in fcEntries)
+                if (NativeFuelTeleports.TryResolve(entry.AetheryteId, entry.SubIndex, world, out var estate, out _))
+                    resolvedEstates.Add(estate);
+            var estates = resolvedEstates
                 .OrderBy(t => t.AetheryteId).ThenBy(t => t.SubIndex).ThenBy(t => t.Ward).ThenBy(t => t.Plot).ToArray();
             snapshot = new()
             {

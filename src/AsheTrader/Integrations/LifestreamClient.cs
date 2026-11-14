@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Numerics;
 using AsheTrader.Core;
+using AsheTrader.Fuel;
 using Lumina.Excel.Sheets;
 using HouseTuple = (string Name, int World, int City, int Ward, int PropertyType, int Plot, int Apartment, bool ApartmentSubdivision, bool AliasEnabled, string Alias);
 
@@ -214,10 +215,10 @@ public sealed class LifestreamClient
         { error = "Return to this character's home world before using its FC estate teleport."; return false; }
         // A saved address/recorded route is not a teleport entitlement. Validate the current
         // character's actual entry again immediately before dispatch, including the full address.
-        if (!Plugin.AetheryteList.Any(t => !t.IsApartment && !t.IsSharedHouse
-            && t.AetheryteId == destination.AetheryteId && t.SubIndex == destination.SubIndex
-            && t.Ward == destination.Ward && t.Plot == destination.Plot))
+        if (!NativeFuelTeleports.TryResolve(destination.AetheryteId, destination.SubIndex, destination.World,
+            out var liveEstate, out var teleportDetail) || liveEstate != destination)
         { error = "The matching FC estate teleport is no longer available for this character. Refresh fuel setup."; return false; }
+        Plugin.Log.Information("Fuel FC teleport verified: {Detail}", teleportDetail);
         var state = GetStatus();
         if (!state.Ready || state.Busy != false)
         { error = state.Error ?? "Lifestream is already busy."; return false; }

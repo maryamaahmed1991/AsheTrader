@@ -15,6 +15,22 @@ public enum FuelPurchaseOutcome { Unchanged, Completed, Inconsistent }
 
 public static class FuelPurchaseRecovery
 {
+    /// <summary>A positive saved receipt can be tallied anywhere. Unchanged bags alone
+    /// do not authorize clearing or repeating the purchase; that still requires shop evidence.</summary>
+    public static FuelPurchaseOutcome ClassifyInventoryReceipt(FuelPurchaseCheckpoint checkpoint,
+        ulong characterId, ulong freeCompanyId, uint bagQuantity)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        var cost = (ulong)checkpoint.Quantity * checkpoint.UnitPrice;
+        if (checkpoint.CharacterId == 0 || checkpoint.FreeCompanyId == 0
+            || checkpoint.CharacterId != characterId || checkpoint.FreeCompanyId != freeCompanyId
+            || checkpoint.Quantity is 0 or > FuelPlanner.MaxPurchasePerTransaction || checkpoint.UnitPrice == 0
+            || cost > checkpoint.CreditsBefore || (ulong)checkpoint.BagBefore + checkpoint.Quantity > uint.MaxValue)
+            return FuelPurchaseOutcome.Inconsistent;
+        if ((ulong)bagQuantity == (ulong)checkpoint.BagBefore + checkpoint.Quantity) return FuelPurchaseOutcome.Completed;
+        return bagQuantity == checkpoint.BagBefore ? FuelPurchaseOutcome.Unchanged : FuelPurchaseOutcome.Inconsistent;
+    }
+
     /// <summary>
     /// Unchanged is only a candidate for retry: the caller must first observe stable counts,
     /// no purchase confirmation and no active transaction. FC credits are shared, so exact item

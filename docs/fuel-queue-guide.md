@@ -57,6 +57,10 @@ Each PC's queue is started and monitored separately. You can use one PC's fuel q
 
 ## Progress and recovery
 
+Version **0.5.0.8** fixes Resume attempting housing travel before tallying an already delivered purchase. Stay on the original buyer and press **Resume**; an exact receipt is counted directly from carried inventory wherever the character is standing. If **End queue** was already requested, the queue then finishes without returning to the supplier. Start a new queue afterward to continue buying. Do not clear the saved journal. If no receipt is observed, the pending intent remains and the supplier evidence is still needed before any repeat purchase.
+
+FC estate route checks now read the packed house identity rather than the shared-estate ward/plot fields. Existing house registrations and recorded paths remain valid. Refresh setup after the old queue ends to inspect the corrected route.
+
 The run bar shows the current action and accumulated tanks bought/stored. **Current queue** records each character's result. When a buyer has no more retainer room, it is marked **Storage full** and remaining selected buyers can continue. Once the FC reaches its credit reserve, later buyers in that FC do not spend more. Other FCs continue with their own balances.
 
 **Pause** stops the queue and saves its state. Reloading the plugin leaves saved work paused. **Resume** reconciles any recorded purchase or deposit against current counts before scheduling more work. If a retainer deposit was interrupted and the character changed, return to the affected character when prompted so its inventory can be tallied. Ambiguous changes remain a visible pause rather than being repeated blindly.

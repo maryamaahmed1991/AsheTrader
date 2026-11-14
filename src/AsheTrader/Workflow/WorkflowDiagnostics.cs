@@ -45,7 +45,7 @@ public sealed partial class WorkflowService
         plugin.Trader.CaptureDiagnosticSnapshot("User requested diagnostic report");
         plugin.FuelQueue.CaptureDiagnosticSnapshot("User requested diagnostic report");
         var header = new WorkflowTrace(40, 2000);
-        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 9; timestamps UTC; this PC only");
+        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 10; timestamps UTC; this PC only");
         header.Add("Session", $"Role={(IsHost ? "coordinator" : "worker")}; connected={Connected}; paired={HasAcceptedConnection}; remoteControl={Settings.AllowRemoteControl}; journalHealthy={journalHealthy}");
         header.Add("Game", $"loggedIn={Plugin.ClientState.IsLoggedIn}; characterId={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; language={Plugin.ClientState.ClientLanguage}");
         header.Add("Status", Status);
