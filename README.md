@@ -10,6 +10,7 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 - Pair one coordinator PC and one worker PC using an authenticated, encrypted LAN connection.
 - Find nearby coordinators by PC label without copying IP addresses. Hosting chooses a local network adapter automatically; manual connection remains available.
 - Import each PC's AutoRetainer roster and plan from Allagan Tools' cached character and retainer inventories.
+- Search comma-separated partial item names across this PC or both paired PCs, with combined totals and character/retainer storage details from Allagan Tools.
 - Assign an individual item list to each recipient: one alt can receive Coke and Fuel, another only Fuel, and a third Hardened Sap. Each item keeps its providers, recipient priority, quantity rule and quality.
 - Choose providers and relays using funded quantities, direct routes, home worlds and estimated relay loads. Only assigned providers, recipients and needed relays log in.
 - Fill relays across multiple providers before delivering, then drain the collected load before gathering again.
@@ -23,6 +24,14 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 - Pace trade offers at a minimum of 250 ms, advancing on observed game readiness instead of stacked delays.
 - Persist worker results and coordinator progress. Resume tallies both PCs' current inventories and reconciles interrupted transfers automatically.
 - Preserve the local trade-list mode, workshop fuel purchasing, and Lifestream house import.
+
+## Version 0.4.1
+
+**Item Search** is a read-only sidebar page available on either PC, including during transfer jobs. Type `coke, ceruleum, sap` to find any matching cached item. Results have one row per item, combined quantities, per-PC totals and a quality breakdown. Select a row to see the characters, retainers and storage holding it; sort by quantity or copy the results as a table.
+
+Unpaired searches use only this PC. Pairing adds the other PC automatically; disconnecting removes its quantities. Allagan Tools supplies all cached personal inventory owners, including characters absent from AutoRetainer. Optional AutoRetainer data adds readable owner names; unavailable names use owner identifiers. Personal storage categories such as bags, retainers, saddlebags, armoury and market listings are included when cached; shared FC/house storage is excluded. Copied inventories on both PCs count once, preferring this PC's cache.
+
+Searches run incrementally, support cancellation, and report partial/unavailable caches separately. Cache read time is not a last-observed game timestamp. A search never logs in, moves items, changes a job or pauses trading. Update both PCs to 0.4.1.0 before pairing (protocol 7).
 
 ## Version 0.4.0
 
@@ -56,7 +65,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.4.0.0.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.4.1.0.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.

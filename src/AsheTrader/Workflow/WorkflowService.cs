@@ -227,12 +227,14 @@ public sealed partial class WorkflowService : IDisposable
                 heartbeatAt = now + 1000;
                 Send("heartbeat", new { });
             }
+            SyncItemSearchConnection();
             for (var i = 0; i < 64 && connectionId.HasValue && peer.TryReceive(out var message, connectionId); i++)
             {
                 peerSeenAt = now;
                 Receive(message);
             }
             if (Connected && now - peerSeenAt > 15_000 && Busy) Pause("Peer heartbeat timed out.");
+            UpdateItemSearch();
             executor.Update();
             while (executor.TryTakeResult(out var result))
             {
@@ -258,6 +260,7 @@ public sealed partial class WorkflowService : IDisposable
 
     private void Receive(PeerMessage message)
     {
+        if (ReceiveItemSearch(message)) return;
         switch (message.Kind)
         {
             case "heartbeat": break;

@@ -1,5 +1,16 @@
 # Development build validation
 
+## 0.4.1 validation — 13 November 2026
+
+- Full `scripts/Build.ps1`: **570 tests passed**, zero failures/skips; plugin Release build completed with zero warnings/errors, Dalamud API 15 / .NET 10.
+- New search coverage verifies comma-separated OR matching, case/whitespace/duplicate fragments, one row per item, per-PC and quality totals, large quantities, duplicated caches, malformed/conflicting physical slots, and unavailable data.
+- Paged-result tests bind results to the search request and authenticated connection, reject repeated/out-of-order/stale pages without changing accepted counts, and cover result limits, malformed labels and quantity overflow.
+- Read-only search code uses independent state and errors. Framework work is incremental; search requests never enter native gameplay execution or worker journals. Connection state is synchronized before message dispatch to preserve requests arriving immediately after pairing.
+- The production ItemSearchPanel layout was rendered offline with fixture data at 1080px, minimum 880px and 125% scale, including paired, unpaired, pending and unavailable-cache views. The isolated preview adapts its input widget for the installed older native ImGui library; it is not an in-game screenshot or an end-to-end IPC test.
+- Confirmed current Allagan Tools public IPC contracts against [IPCService](https://github.com/Critical-Impact/InventoryTools/blob/main/InventoryTools/IPC/IPCService.cs). Name lookup uses game data; counts and physical inventory come from AT. Optional AutoRetainer labels do not restrict searched inventory owners.
+- Both PCs must update to protocol 7. Actual two-PC cache responses and in-game input remain for the user's validation; no game actions were performed during development.
+
+
 ## 0.4.0 validation — 12 November 2026
 
 - Full `scripts/Build.ps1`: **538 tests passed**, zero failures/skips; plugin Release build completed with zero warnings/errors, targeting Dalamud API 15 and .NET 10.

@@ -14,8 +14,8 @@ internal static class PairingHandshake
 {
     private const int HelloLength = 61;
     private static ReadOnlySpan<byte> Magic => "ASHETRD1"u8;
-    // Version 5 adds paired live inventory tallies and durable automatic reconciliation.
-    internal const int ProtocolVersion = 6;
+    // Version 7 adds independent, read-only, paged item-search requests in either direction.
+    internal const int ProtocolVersion = 7;
 
     internal static async Task<SessionSecrets> AuthenticateAsync(NetworkStream stream, byte[] pairingKey, Guid localPeerId, bool host, CancellationToken cancellationToken)
     {

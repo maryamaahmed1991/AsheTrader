@@ -1,5 +1,17 @@
 # Two-PC testing: start here
 
+## Item Search (0.4.1)
+
+1. Update both PCs to 0.4.1.0. Keep your current settings and saved jobs.
+2. Before pairing, open **Item Search** and enter `coke, ceruleum, sap` (or fragments of items you own). Confirm one row per item and totals from this PC only. Select a result to check character/retainer locations against Allagan Tools.
+3. Pair the PCs. The same search reruns for both caches; verify the combined and per-PC counts. Try the search from the other PC too, including with remote gameplay control disabled.
+4. Try overlapping fragments such as `ceruleum, ceru`; quantities should not double. If the same inventory is cached on both PCs it is counted once, preferring the PC where you searched.
+5. Disconnect and confirm the paired PC's quantities disappear. Reconnect and confirm they return. Try Refresh after an inventory change; counts are cached estimates, not live movement verification.
+6. An unavailable Allagan Tools cache should show a notice while the other PC's results remain available. Searches, cancellation and refresh should never stop a transfer job, switch characters, or open any game window.
+
+Unknown owner names are shown as identifiers when AutoRetainer cannot supply labels. Shared FC and housing inventories are excluded. Very broad fragments take longer because the search reads cached item ownership incrementally; use Cancel or narrow the search as needed.
+
+
 ## Test the 0.4.0 workspace and grouped-item workflow
 
 1. Update both PCs to **0.4.0.0**, reconnect on **Connection**, and leave AutoRetainer multi mode paused. Protocol 6 requires both PCs to update.
