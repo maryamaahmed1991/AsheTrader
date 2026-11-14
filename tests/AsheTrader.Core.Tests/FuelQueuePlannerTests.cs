@@ -25,6 +25,17 @@ public sealed class FuelQueuePlannerTests
     }
 
     [Fact]
+    public void SetupPreviewDoesNotSelectAnUnselectedCharacter()
+    {
+        var character = Character(7, "Preview"); character.Fuel.Enabled = false;
+        var row = Assert.Single(FuelQueuePlanner.Build([character], [House], new(), World, includeUnselected: true));
+        Assert.Equal(House.Address, row.HouseAddress);
+        Assert.Equal(FuelQueueEntryStatus.Queued, row.Status);
+        Assert.False(character.Fuel.Enabled);
+        Assert.Empty(FuelQueuePlanner.Build([character], [House], new(), World));
+    }
+
+    [Fact]
     public void GroupsWorldThenCompanyThenExplicitCharacterOrder()
     {
         var second = Character(1, "A", 55); second.Fuel.QueueOrder = 2;

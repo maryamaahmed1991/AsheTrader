@@ -202,6 +202,41 @@ public sealed class LifestreamClient
         }
     }
 
+    /// <summary>Teleports through an exact available FC estate entry. Lifestream's raw teleport IPC
+    /// does not keep IsBusy set for the entire cast/loading transition; the caller must verify arrival.</summary>
+    public bool TryTeleportFcEstate(FuelEstateTeleport destination, out string error, out bool rejected)
+    {
+        rejected = false;
+        if (!CanCall(out error)) return false;
+        var player = Plugin.ObjectTable.LocalPlayer;
+        if (!Plugin.ClientState.IsLoggedIn || player == null || player.HomeWorld.RowId != destination.World
+            || player.CurrentWorld.RowId != destination.World || !FuelAccessPlanner.IsValid(destination, destination.World))
+        { error = "Return to this character's home world before using its FC estate teleport."; return false; }
+        // A saved address/recorded route is not a teleport entitlement. Validate the current
+        // character's actual entry again immediately before dispatch, including the full address.
+        if (!Plugin.AetheryteList.Any(t => !t.IsApartment && !t.IsSharedHouse
+            && t.AetheryteId == destination.AetheryteId && t.SubIndex == destination.SubIndex
+            && t.Ward == destination.Ward && t.Plot == destination.Plot))
+        { error = "The matching FC estate teleport is no longer available for this character. Refresh fuel setup."; return false; }
+        var state = GetStatus();
+        if (!state.Ready || state.Busy != false)
+        { error = state.Error ?? "Lifestream is already busy."; return false; }
+        try
+        {
+            if (!Plugin.PluginInterface.GetIpcSubscriber<uint, byte, bool>("Lifestream.Teleport")
+                .InvokeFunc(destination.AetheryteId, destination.SubIndex))
+            { rejected = true; error = "Lifestream could not start the FC estate teleport from the current game state."; return false; }
+            error = string.Empty;
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Plugin.Log.Debug(exception, "Lifestream FC estate teleport failed.");
+            error = "Lifestream could not accept the FC estate teleport request.";
+            return false;
+        }
+    }
+
     /// <summary>Requests travel to the plot only. Workshop entry and vendor interaction are separate.</summary>
     public bool TryTravel(HouseProfile house, out string error)
     {

@@ -27,6 +27,12 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.5.0.7
+
+Fuel setup shows each character's observed route availability, missing housing unlocks, and recommended alternatives. Access is cached separately per character from normal logins; selecting an offline character never borrows the current character's access or triggers a discovery login. Travel prefers an available FC estate teleport matching the chosen house, or uses that estate to reach a caretaker in the same district. City routes require the corresponding city attunement and housing unlock. Actual arrival and workshop permissions remain checked at the destination.
+
+Fuel purchases now acknowledge the exact delivered tank quantity even when other FC activity changes the shared credit balance. This fixes the reported +99 tanks / 9,873 net credits decrease pause. Active buying and saved purchase recovery both use the original buyer, FC, quantity and unit price; credits alone never prove success, and partial deliveries are not retried. A conservative spending budget prevents a delayed credit display from renewing the next batch's allowance; the shop refreshes automatically when a fresh balance is needed. Existing 0.5.0.6 purchase checkpoints can be reconciled after updating, including queues already marked to end.
+
 ## Version 0.5.0.6
 
 Fuel buying can recover automatically when the FC shop rejects a request with an inventory-space error before opening a confirmation. It waits for two seconds of unchanged inventory and credits in the original shop, then retries with a maximum of three total attempts. A confirmation or any observed item/credit change prevents retries; the saved purchase checkpoint remains intact. Diagnostics now include native shop capacity, displayed quantity, confirmation state and attempt history. Update and Resume the existing queue to tally the interrupted request and continue.
@@ -99,7 +105,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.5.0.6.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.5.0.7.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.

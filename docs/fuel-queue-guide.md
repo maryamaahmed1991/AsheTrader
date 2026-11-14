@@ -13,6 +13,20 @@ Version **0.5.0.0** adds independent fuel queues on each PC. Pairing is not requ
 
 An individual character can override the FC destination with another registered house on its home world. The house dropdown excludes other worlds, and queue validation rejects stale assignments to another world.
 
+### Route checks in 0.5.0.7
+
+Each buyer shows **Route available**, **Route unavailable**, or **Check on login**. Select the character's name for the route explanation, missing requirements, suggested alternative and observation time. Changing the FC destination or character override immediately recalculates the result from that character's saved access snapshot. **Refresh setup** refreshes the logged-in character's access as well as house imports. Offline characters are never logged in merely to populate these checks.
+
+The queue prefers a verified FC estate teleport that matches the selected house exactly. For a caretaker, an FC estate teleport into that district can provide entry without the city housing menu. Otherwise, the city route requires both attunement and the district's housing-unlock quest. Already being in the selected district or estate can also allow the local approach. A cached unavailable route is rechecked live when that buyer logs in; a verified unavailable route is skipped with its reason while other buyers continue. Unknown access is shown as unknown, not asserted to be a permanent lockout. Workshop entry and FC credit-spending permissions are still checked at the destination.
+
+### Recovering a shared-credit purchase pause
+
+If all requested tanks arrive while another FC member earns or spends credits, the net credit change can differ from the purchase cost. Version **0.5.0.7** accepts an exact delivered item quantity for the original buyer and FC, with the original unit price. It checks current affordability and the credit reserve again before another purchase. Partial or conflicting item changes remain unresolved rather than triggering a repeat purchase.
+
+The queue also tracks its acknowledged spending separately from the displayed balance. If that budget is used up while the shop still shows spendable credits, it automatically closes and reopens the same supplier to obtain a fresh balance before starting another batch. A delayed display therefore cannot renew the queue's allowance below the configured reserve.
+
+Update and **Resume** the saved queue. If **End queue** was previously pressed, Resume reconciles the outstanding purchase and finishes that queue; start a new queue afterward to buy more. Configuration and journals do not need to be deleted.
+
 ## Register houses
 
 Open **Workshop houses**. Version **0.5.0.1** imports house entries from Lifestream's **Address Book** and the registered **FC houses** under **House Registration → Free Company House** for this PC's known characters. Shared FC addresses are deduplicated. Private housing registrations and apartments are excluded because they cannot provide company workshops. The refresh summary distinguishes houses found from newly added houses and shows the total saved count.

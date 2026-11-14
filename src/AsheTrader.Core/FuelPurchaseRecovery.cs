@@ -17,21 +17,30 @@ public static class FuelPurchaseRecovery
 {
     /// <summary>
     /// Unchanged is only a candidate for retry: the caller must first observe stable counts,
-    /// no purchase confirmation and no active transaction. Partial updates remain inconsistent.
+    /// no purchase confirmation and no active transaction. FC credits are shared, so exact item
+    /// receipt establishes completion even when concurrent FC activity changes the credit balance.
+    /// Partial inventory updates remain inconsistent; credits alone never establish completion.
     /// </summary>
     public static FuelPurchaseOutcome Classify(FuelPurchaseCheckpoint checkpoint, ulong characterId,
-        ulong freeCompanyId, uint bagQuantity, uint credits)
+        ulong freeCompanyId, uint bagQuantity, uint credits, uint currentUnitPrice)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
         var cost = (ulong)checkpoint.Quantity * checkpoint.UnitPrice;
         if (checkpoint.CharacterId == 0 || checkpoint.FreeCompanyId == 0 || checkpoint.Quantity is 0 or > FuelPlanner.MaxPurchasePerTransaction
-            || checkpoint.UnitPrice == 0 || checkpoint.CharacterId != characterId || checkpoint.FreeCompanyId != freeCompanyId
+            || checkpoint.UnitPrice == 0 || currentUnitPrice != checkpoint.UnitPrice
+            || checkpoint.CharacterId != characterId || checkpoint.FreeCompanyId != freeCompanyId
             || cost > checkpoint.CreditsBefore || (ulong)checkpoint.BagBefore + checkpoint.Quantity > uint.MaxValue)
             return FuelPurchaseOutcome.Inconsistent;
         if (bagQuantity == checkpoint.BagBefore && credits == checkpoint.CreditsBefore)
             return FuelPurchaseOutcome.Unchanged;
         return (ulong)bagQuantity == (ulong)checkpoint.BagBefore + checkpoint.Quantity
-            && (ulong)credits + cost == checkpoint.CreditsBefore
             ? FuelPurchaseOutcome.Completed : FuelPurchaseOutcome.Inconsistent;
     }
+
+    /// <summary>Live purchases also wait for the shop's inventory display and confirmation to settle.</summary>
+    public static bool CanAcknowledge(FuelPurchaseCheckpoint checkpoint, ulong characterId,
+        ulong freeCompanyId, uint bagQuantity, uint displayedBagQuantity, uint credits,
+        uint currentUnitPrice, bool confirmationVisible)
+        => !confirmationVisible && bagQuantity == displayedBagQuantity
+            && Classify(checkpoint, characterId, freeCompanyId, bagQuantity, credits, currentUnitPrice) == FuelPurchaseOutcome.Completed;
 }

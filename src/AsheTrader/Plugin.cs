@@ -36,6 +36,7 @@ public sealed class Plugin : IDalamudPlugin
     internal LifestreamClient Lifestream { get; }
     public FuelRunner Fuel { get; }
     public FuelQueueService FuelQueue { get; }
+    internal FuelAccessService FuelAccess { get; }
     public WorkflowService Workflow { get; }
     public string SettingsError { get; private set; } = string.Empty;
     public Queue<string> Activity { get; } = new();
@@ -59,6 +60,7 @@ public sealed class Plugin : IDalamudPlugin
         Lifestream = new LifestreamClient();
         Fuel = new FuelRunner();
         Workflow = new WorkflowService(this);
+        FuelAccess = new FuelAccessService(this);
         FuelQueue = new FuelQueueService(this);
         Trader.Diagnostic = Workflow.RecordTradeDiagnostic;
         Fuel.Diagnostic = message => Workflow.RecordDiagnostic("fuel purchase " + message);
@@ -159,6 +161,7 @@ public sealed class Plugin : IDalamudPlugin
                 if (ar.Ready && (ar.Busy != false || ar.MultiModeEnabled != false))
                 { StopAll(); Record("Stopped because AutoRetainer resumed or its idle state could not be verified."); }
             }
+            FuelAccess.Update();
             Trader.Update();
             Fuel.Update();
             FuelQueue.Update();

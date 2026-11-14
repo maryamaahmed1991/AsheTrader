@@ -88,13 +88,13 @@ public static class FuelQueuePlanner
     }
 
     public static IReadOnlyList<FuelQueueEntry> Build(IReadOnlyList<CharacterProfile> characters,
-        IReadOnlyList<HouseProfile> houses, FuelQueueSettings settings, Func<string, uint?> resolveWorld)
+        IReadOnlyList<HouseProfile> houses, FuelQueueSettings settings, Func<string, uint?> resolveWorld, bool includeUnselected = false)
     {
         ArgumentNullException.ThrowIfNull(characters);
         ArgumentNullException.ThrowIfNull(houses);
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(resolveWorld);
-        var selected = characters.Where(character => character.Fuel.Enabled)
+        var selected = characters.Where(character => includeUnselected || character.Fuel.Enabled)
             .OrderBy(character => character.World.Trim(), StringComparer.OrdinalIgnoreCase)
             .ThenBy(CompanyKey, StringComparer.Ordinal)
             .ThenBy(character => character.Fuel.QueueOrder)

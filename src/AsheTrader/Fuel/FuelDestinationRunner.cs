@@ -9,6 +9,7 @@ using Dalamud.Game.Text.SeStringHandling;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.UI;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Data.Files;
 using Lumina.Data.Parsing.Layer;
@@ -26,6 +27,8 @@ internal sealed unsafe class FuelDestinationRunner
     private static readonly string[] EntranceNames = ["Entrance", "ハウスへ入る", "进入房屋", "進入房屋", "Eingang", "Entrée", "주택으로 들어가기"];
     private readonly LifestreamClient lifestream = new();
     private FuelQueueEntry entry = new();
+    private FuelAccessPlan? accessPlan;
+    private readonly TeleportRequestGate estateTeleport = new();
     private LifestreamClient.HouseDestination address;
     private Stage stage;
     private long stageStarted, actionAfter, lastUpdate, travelIdleSince, lastInteraction, pathStarted, nextSnapshot, nextGateRead;
@@ -62,7 +65,7 @@ internal sealed unsafe class FuelDestinationRunner
     public string Status { get; private set; } = "Fuel destination idle.";
     public Action<string>? Diagnostic { get; set; }
 
-    public bool Start(FuelQueueEntry destination, out string error, IReadOnlyList<CharacterProfile>? characters = null)
+    public bool Start(FuelQueueEntry destination, out string error, IReadOnlyList<CharacterProfile>? characters = null, FuelAccessPlan? plannedAccess = null)
     {
         error = string.Empty;
         if (Volatile.Read(ref shutdown) != 0 || Plugin.Framework.IsFrameworkUnloading)
@@ -105,6 +108,8 @@ internal sealed unsafe class FuelDestinationRunner
             HouseAddress = destination.HouseAddress, HouseName = destination.HouseName,
         };
         characterId = Plugin.PlayerState.ContentId;
+        accessPlan = plannedAccess;
+        estateTeleport.Reset();
         Active = true;
         Success = false;
         Error = string.Empty;
@@ -159,6 +164,7 @@ internal sealed unsafe class FuelDestinationRunner
                 if (dismountStarted != 0) dismountStarted += elapsed;
                 savedPathProgress?.Suspend(elapsed);
                 navigationProgress?.Suspend(elapsed);
+                estateTeleport.Suspend(elapsed);
                 Status = "Waiting for the cutscene to finish…";
                 return;
             }
@@ -193,6 +199,11 @@ internal sealed unsafe class FuelDestinationRunner
                     if (NativeRetainers.BellInteractionBlocked) break;
                     if (entry.UseCaretaker && AtCaretakerDistrict(entry)) { Set(Stage.Supplier, "Approaching the Resident Caretaker…"); break; }
                     if (!entry.UseCaretaker && !forcePlotTravel && CanBeginHouseApproach()) { EnterHouseStage(); break; }
+                    if (accessPlan is { Kind: FuelAccessRouteKind.DirectFcEstate, Teleport: { } teleport })
+                    {
+                        StartEstateTeleport(teleport, now);
+                        break;
+                    }
                     var house = entry.UseCaretaker
                         ? new HouseProfile { Name = "Resident Caretaker district", Address = LifestreamClient.FormatAddress((int)Plugin.ObjectTable.LocalPlayer!.HomeWorld.RowId, entry.CaretakerCity, 1, 1) }
                         : new HouseProfile { Name = entry.HouseName, Address = entry.HouseAddress };
@@ -300,7 +311,8 @@ internal sealed unsafe class FuelDestinationRunner
     {
         var state = lifestream.GetStatus();
         if (!state.Ready) throw new InvalidOperationException(state.Error ?? "Lifestream became unavailable during fuel travel.");
-        if (state.Busy == true || !PlayerReady) { travelIdleSince = 0; return; }
+        if (state.Busy == true || !PlayerReady || Plugin.ObjectTable.LocalPlayer?.IsCasting == true
+            || Plugin.ObjectTable.LocalPlayer?.IsTargetable != true) { travelIdleSince = 0; return; }
         if (travelIdleSince == 0) travelIdleSince = now;
         // Lifestream's queue can empty before the territory's objects and HousingManager have settled.
         if (now - travelIdleSince < 1_000) return;
@@ -312,6 +324,29 @@ internal sealed unsafe class FuelDestinationRunner
         }
         else if (now - travelIdleSince > 20_000)
             throw new InvalidOperationException("Lifestream finished, but arrival at the configured fuel destination could not be verified. Open Activity → Copy diagnostics to include the expected address and plot landing point.");
+    }
+
+    private void StartEstateTeleport(FuelEstateTeleport teleport, long now)
+    {
+        var player = Plugin.ObjectTable.LocalPlayer!;
+        var action = ActionManager.Instance();
+        var map = AgentMap.Instance();
+        var ready = player.IsTargetable && !player.IsCasting && !NativeRetainers.BellInteractionBlocked
+            && map != null && !map->IsPlayerMoving && action != null && action->GetActionStatus(ActionType.Action, 5) == 0;
+        var decision = estateTeleport.Observe(now, player.CurrentWorld.RowId, Plugin.ClientState.TerritoryType,
+            ready, false, player.IsCasting || lifestream.GetStatus().Busy == true);
+        if (decision == TeleportRequestDecision.ReadinessTimedOut)
+            throw new InvalidOperationException("The FC estate teleport did not become usable. Check the character's movement, gil and teleport availability, then Resume.");
+        if (decision != TeleportRequestDecision.Request) { Status = "Waiting for the FC estate teleport to become ready…"; return; }
+        var accepted = lifestream.TryTeleportFcEstate(teleport, out var error, out var rejected);
+        if (!accepted && !rejected) throw new InvalidOperationException(error);
+        estateTeleport.RecordRequest(now, accepted);
+        if (!accepted) { Status = "The FC teleport was not accepted yet; waiting to retry…"; return; }
+        // This IPC dispatches only the teleport action, not a Lifestream task queue.
+        // Observe cast/loading and exact arrival; do not take ownership of unrelated LS tasks.
+        forcePlotTravel = false;
+        Trace($"using verified FC estate teleport; aetheryte={teleport.AetheryteId}; subIndex={teleport.SubIndex}; world={teleport.World}; city={teleport.City}; ward={teleport.Ward}; plot={teleport.Plot}; attempts={estateTeleport.Attempts}");
+        Set(Stage.WaitTravel, entry.UseCaretaker ? "Teleporting to the FC estate, then walking to the Resident Caretaker…" : "Teleporting directly to the configured FC estate…");
     }
 
     private bool CanBeginHouseApproach()
@@ -378,6 +413,7 @@ internal sealed unsafe class FuelDestinationRunner
             if (!workshop && !AtHouse(address) && !repositionedForPath)
             {
                 repositionedForPath = forcePlotTravel = true;
+                estateTeleport.Reset();
                 Set(Stage.Travel, "Returning to the recorded entrance route's starting point…");
                 return;
             }
@@ -652,6 +688,13 @@ internal sealed unsafe class FuelDestinationRunner
             return AtCaretakerDistrict(destination) && FindNearest(x => x.BaseId == CaretakerId(destination.CaretakerCity)) is { } npc
                 && Vector3.Distance(Plugin.ObjectTable.LocalPlayer!.Position, npc.Position) <= 7;
         return LifestreamClient.TryParseAddress(destination.HouseAddress, out var house) && AtHouse(house) && InWorkshop;
+    }
+
+    internal static bool CanApproachLocally(FuelQueueEntry destination)
+    {
+        if (!Plugin.Framework.IsInFrameworkUpdateThread || !PlayerReady || Plugin.PlayerState.ContentId != destination.CharacterId) return false;
+        return destination.UseCaretaker ? AtCaretakerDistrict(destination)
+            : LifestreamClient.TryParseAddress(destination.HouseAddress, out var house) && AtHouse(house);
     }
 
     private void RequireVendorLocation()

@@ -17,11 +17,14 @@ public sealed class FuelRunner
     public Action<string>? Diagnostic { get; set; }
     private FuelQueueEntry? queueEntry;
     private ulong characterId;
+    private ulong companyId;
     private string houseAddress = string.Empty;
     private nint shopAddress;
     private ushort shopAddonId;
     private FuelShopSnapshot pendingShop;
+    private FuelPurchaseCheckpoint? pendingCheckpoint;
     private uint unitPrice;
+    private uint creditReserve;
     private uint remaining;
     private uint pendingQuantity;
     private uint beforeQuantity;
@@ -40,7 +43,7 @@ public sealed class FuelRunner
         if (!Plugin.Framework.IsInFrameworkUpdateThread || Plugin.Framework.IsFrameworkUnloading) return;
         try
         {
-            Trace($"snapshot reason={reason}; active={Active}; character={characterId}; pending={pendingQuantity}; beforeBags={beforeQuantity}; beforeCredits={beforeCredits}; confirmed={confirmed}; attempts={retryGate?.Attempts ?? 0}; confirmationSeen={retryGate?.ConfirmationObserved ?? false}; evidenceChanged={retryGate?.EvidenceChanged ?? false}; {NativeFuelShop.Describe()}");
+            Trace($"snapshot reason={reason}; active={Active}; character={characterId}; FC={companyId}; pending={pendingQuantity}; beforeBags={beforeQuantity}; beforeCredits={beforeCredits}; confirmed={confirmed}; attempts={retryGate?.Attempts ?? 0}; confirmationSeen={retryGate?.ConfirmationObserved ?? false}; evidenceChanged={retryGate?.EvidenceChanged ?? false}; {NativeFuelShop.Describe()}");
         }
         catch (Exception exception) { Trace($"snapshot unavailable: {exception.GetType().Name}"); }
     }
@@ -50,6 +53,7 @@ public sealed class FuelRunner
     private void ResetRetry()
     {
         retryGate = null;
+        pendingCheckpoint = null;
         Interlocked.Exchange(ref inventoryRejectionAt, 0);
         nextSnapshot = 0;
     }
@@ -83,6 +87,8 @@ public sealed class FuelRunner
             return false;
         }
         if (!NativeFuelShop.TryRead(out var shop, out error)) return false;
+        var currentCompany = NativeFuelShop.CurrentCompanyId;
+        if (currentCompany == 0) { error = "The active FC identity is unavailable."; return false; }
         FuelPurchasePlan plan;
         try
         {
@@ -101,10 +107,12 @@ public sealed class FuelRunner
             return true;
         }
         characterId = character.ContentId;
+        companyId = currentCompany;
         houseAddress = currentHouse.Address;
         shopAddress = shop.Address;
         shopAddonId = shop.AddonId;
         unitPrice = shop.UnitPrice;
+        creditReserve = character.Fuel.CreditReserve;
         remaining = plan.Quantity;
         pendingQuantity = 0;
         confirmed = false;
@@ -133,6 +141,8 @@ public sealed class FuelRunner
         ResetRetry();
         queueEntry = entry;
         characterId = entry.CharacterId;
+        companyId = entry.FreeCompanyId;
+        creditReserve = entry.CreditReserve;
         shopAddress = shop.Address; shopAddonId = shop.AddonId; unitPrice = shop.UnitPrice;
         Purchased = pendingQuantity = 0; confirmed = false;
         if (remaining == 0) { Complete("No further fuel fits the configured budget or inventory."); return true; }
@@ -148,6 +158,7 @@ public sealed class FuelRunner
         if (!Active) return;
         if (!CanRun(out var error)) { Halt(error); return; }
         if (Plugin.PlayerState.ContentId != characterId) { Halt("The active character changed."); return; }
+        if (NativeFuelShop.CurrentCompanyId != companyId) { Halt("The active FC changed or became unavailable."); return; }
         var now = Environment.TickCount64;
         if (pendingQuantity != 0 && NativeFuelShop.HasConfirmation) retryGate?.ObserveConfirmation();
         if (now >= nextSnapshot)
@@ -175,13 +186,16 @@ public sealed class FuelRunner
             var inventoryDelta = (long)shop.InventoryQuantity - beforeQuantity;
             var creditDelta = (long)beforeCredits - shop.Credits;
             var expectedCost = (long)pendingQuantity * unitPrice;
-            if (inventoryDelta == pendingQuantity && creditDelta == expectedCost)
+            if (pendingCheckpoint == null) { Halt("The pending fuel purchase checkpoint is unavailable."); return; }
+            if (FuelPurchaseRecovery.CanAcknowledge(pendingCheckpoint, characterId, companyId,
+                shop.InventoryQuantity, shop.DisplayedInventoryQuantity, shop.Credits, shop.UnitPrice, NativeFuelShop.HasConfirmation))
             {
                 if (queueEntry != null) PersistPurchase?.Invoke(null, pendingQuantity);
-                Trace($"reconciled quantity={pendingQuantity}; attempts={retryGate?.Attempts ?? 1}; bags={shop.InventoryQuantity}; credits={shop.Credits}");
+                Trace($"reconciled quantity={pendingQuantity}; attempts={retryGate?.Attempts ?? 1}; bags={shop.InventoryQuantity}; credits={shop.Credits}; expectedCreditSpend={expectedCost}; observedCreditSpend={creditDelta}; sharedCreditDrift={expectedCost - creditDelta}; receipt=exact inventory gain");
                 Purchased = checked(Purchased + pendingQuantity);
                 remaining -= pendingQuantity;
                 pendingQuantity = 0;
+                pendingCheckpoint = null;
                 retryGate = null;
                 runExpiresAt = now + (15 * 60 * 1000);
                 nextActionAt = now + 250;
@@ -189,9 +203,9 @@ public sealed class FuelRunner
                 if (remaining == 0) Complete("Configured purchase quantity reached.");
                 return;
             }
-            if (inventoryDelta < 0 || inventoryDelta > pendingQuantity || creditDelta < 0 || creditDelta > expectedCost)
+            if (inventoryDelta < 0 || inventoryDelta > pendingQuantity)
             {
-                Halt("Inventory or FC credits changed unexpectedly; the pending purchase was not repeated.");
+                Halt("Carried fuel changed unexpectedly; the pending purchase was not repeated.");
                 return;
             }
             if (now > transactionExpiresAt)
@@ -220,25 +234,28 @@ public sealed class FuelRunner
                 Status = $"Retrying rejected fuel request ({retryGate.Attempts}/3)…";
                 return;
             }
-            // A manually confirmed purchase may be arriving in multiple updates. Never click again
-            // after either value has started changing, or repeat a confirmed purchase.
-            if (!confirmed && inventoryDelta == 0 && creditDelta == 0 && NativeFuelShop.HasConfirmation)
+            // A manually confirmed purchase may arrive in multiple inventory updates. Never
+            // confirm after any fuel arrives, or repeat a confirmed purchase. FC income alone
+            // is allowed; the native confirmation rechecks the live budget and reserve.
+            if (!confirmed && inventoryDelta == 0 && NativeFuelShop.HasConfirmation)
             {
-                if (!NativeFuelShop.TryConfirmFuel(pendingShop, pendingQuantity, out error))
+                if (!NativeFuelShop.TryConfirmFuel(pendingShop, pendingQuantity, out error, creditReserve))
                 {
                     if (!string.IsNullOrEmpty(error)) Halt(error);
                     return;
                 }
                 confirmed = true;
                 Trace($"confirmation dispatched; quantity={pendingQuantity}; attempt={retryGate?.Attempts ?? 1}");
-                Status = $"Waiting for {pendingQuantity:N0} tanks and {expectedCost:N0} credits to reconcile.";
+                Status = $"Waiting for {pendingQuantity:N0} purchased tanks to arrive.";
             }
             return;
         }
 
         if (NativeFuelShop.HasConfirmation) { Halt("An unexpected confirmation is open; it was left untouched."); return; }
+        if (shop.DisplayedInventoryQuantity != shop.InventoryQuantity)
+        { Status = "Waiting for the fuel shop inventory to update…"; return; }
         if (shop.Capacity == 0) { Complete("Inventory is full."); return; }
-        var spendable = shop.Credits > (queueEntry?.CreditReserve ?? 0) ? shop.Credits - (queueEntry?.CreditReserve ?? 0) : 0;
+        var spendable = shop.Credits > creditReserve ? shop.Credits - creditReserve : 0;
         if (spendable < unitPrice) { Complete("The FC credit budget is exhausted."); return; }
         var amount = Math.Min(99u, Math.Min(remaining, Math.Min(shop.Capacity, spendable / unitPrice)));
         if (amount == 0) { Complete("No further fuel can be purchased."); return; }
@@ -246,6 +263,8 @@ public sealed class FuelRunner
         beforeCredits = shop.Credits;
         pendingShop = shop;
         pendingQuantity = amount;
+        pendingCheckpoint = new FuelPurchaseCheckpoint { CharacterId = characterId, FreeCompanyId = companyId,
+            Quantity = amount, BagBefore = beforeQuantity, CreditsBefore = beforeCredits, UnitPrice = unitPrice };
         confirmed = false;
         retryGate = new(now);
         Interlocked.Exchange(ref inventoryRejectionAt, 0);
@@ -253,8 +272,7 @@ public sealed class FuelRunner
         if (queueEntry != null)
         {
             var persist = PersistPurchase ?? throw new InvalidOperationException("Fuel purchases require a durable checkpoint.");
-            persist(new FuelPurchaseCheckpoint { CharacterId = characterId, FreeCompanyId = queueEntry.FreeCompanyId,
-                Quantity = amount, BagBefore = beforeQuantity, CreditsBefore = beforeCredits, UnitPrice = unitPrice }, 0);
+            persist(pendingCheckpoint, 0);
         }
         Trace($"dispatch attempt=1; quantity={amount}; bags={beforeQuantity}; credits={beforeCredits}; capacity={shop.Capacity}; price={shop.UnitPrice}");
         if (!NativeFuelShop.Buy(shop, amount, out error)) { Halt(error); return; }

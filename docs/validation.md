@@ -1,5 +1,13 @@
 # Development build validation
 
+## 0.5.0.7 validation — 14 November 2026
+
+- Full `scripts/Build.ps1`: **877 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.
+- Supplied diagnostics show exact delivery of 99 tanks (19,305 to 19,404) while the FC balance decreased by 9,873 rather than 9,900, then increased further before Resume. Active and saved purchase reconciliation now accept the exact item receipt for the original character/FC/price; shared credit drift is diagnostic, not a transaction receipt. Tests cover this trace, credit income/spending, unchanged/partial/excess inventory, identity changes, price changes and legacy checkpoint JSON.
+- Conservative credit-budget tests cover delayed credit UI across batch boundaries, reserve preservation, concurrent income, exact-offset income, persisted spend, legacy interrupted purchases and target completion without falsely exhausting a shared FC budget. Budget renewal requires closing and reopening the supplier; no live purchase or shop-refresh action was performed by development tools.
+- Access-planning tests cover exact FC estate addresses, caretaker bridges, city attunement plus quest completion, per-character/home-world/FC cache isolation, incomplete snapshots, unsupported estate routes, serialization and verified quest mappings. Native quest/teleport contracts were checked against installed game data and Lifestream source. Home-world return precedes live route assessment; accepted travel is observed rather than repeated.
+- UI code review covers per-buyer route labels and colours, detailed missing requirements/recommendations, cached observation times, unselected-character previews and unchanged selection state. In-game rendering, direct estate travel, return-home routing and supplier refresh still require user testing. Diagnostics format 9 includes route evidence and the conservative credit budget.
+
 ## 0.5.0.6 validation — 14 November 2026
 
 - Full `scripts/Build.ps1`: **819 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.

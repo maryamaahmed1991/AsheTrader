@@ -143,6 +143,7 @@ internal sealed class FuelPanel(Plugin plugin)
             ImGui.InputTextWithHint("##FuelRosterSearch", "Find a world, FC or character...", ref filter, 200);
             ImGui.Checkbox("Selected characters only", ref selectedOnly);
             if (ImGui.IsItemHovered()) ImGui.SetTooltip("Characters run in world and FC order. If a buyer's storage fills, the next selected character in that FC can continue.");
+            UiTone.Wrapped(TraderStyle.Muted, "Route checks use each character's own observed unlocks and estate teleports. Unknown access is checked on login; setup never switches characters.");
         }
         TraderStyle.EndCard();
 
@@ -253,6 +254,7 @@ internal sealed class FuelPanel(Plugin plugin)
             UiTone.Wrapped(valid ? TraderStyle.Muted : UiTone.Warning,
                 caretaker ? $"Resident Caretaker · {LifestreamClient.DistrictName(rule.CaretakerCity)}"
                     : assigned == null ? "Choose a fuel destination" : valid ? assigned.Name : "Assigned house is on another world");
+            DrawAccess(character, detailed: false);
             ImGui.TableNextColumn();
             var index = siblings.ToList().FindIndex(profile => profile.ContentId == character.ContentId);
             ImGui.BeginDisabled(index <= 0);
@@ -292,6 +294,7 @@ internal sealed class FuelPanel(Plugin plugin)
                 ? $"Uses FC destination: Resident Caretaker · {LifestreamClient.DistrictName(rule.CaretakerCity)}"
                 : $"Uses FC destination: {house?.Name ?? "not selected"}");
         }
+        DrawAccess(character, detailed: true);
         var exhaust = fuel.ExhaustCredits;
         if (ImGui.Checkbox("Convert all credits above the FC reserve", ref exhaust))
         {
@@ -320,6 +323,43 @@ internal sealed class FuelPanel(Plugin plugin)
         ImGui.Unindent(TraderStyle.Px(12));
     }
 
+    private void DrawAccess(CharacterProfile character, bool detailed, FuelQueueEntry? entry = null)
+    {
+        entry ??= plugin.FuelQueue.PreviewCharacter(character);
+        if (entry.Status == FuelQueueEntryStatus.Skipped)
+        {
+            UiTone.Wrapped(UiTone.Error, "Needs attention · " + entry.Note);
+            return;
+        }
+        var access = plugin.FuelAccess.Assess(character, entry);
+        var manualEntry = access.Status == FuelAccessStatus.Unknown && access.Kind == FuelAccessRouteKind.Unavailable;
+        var tone = manualEntry ? UiTone.Warning : access.Status switch
+        {
+            FuelAccessStatus.Eligible => UiTone.Good,
+            FuelAccessStatus.Ineligible => UiTone.Warning,
+            _ => TraderStyle.Muted,
+        };
+        var label = manualEntry ? "Manual entry needed" : access.Status switch
+        {
+            FuelAccessStatus.Eligible => "Route available",
+            FuelAccessStatus.Ineligible => "Route unavailable",
+            _ => "Check on login",
+        };
+        UiTone.Wrapped(tone, $"{label} · {access.RouteLabel}");
+        if (!detailed)
+        {
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(access.Reason);
+            return;
+        }
+        UiTone.Wrapped(tone, access.Reason);
+        if (!string.IsNullOrWhiteSpace(access.RecommendedRoute))
+            UiTone.Wrapped(UiTone.Info, "Recommended: " + access.RecommendedRoute);
+        if (access.SnapshotObservedAtUtc is { } observed)
+            UiTone.Wrapped(TraderStyle.Muted, $"Access observed {observed.ToLocalTime():g}. Rechecked before travel when this character is logged in.");
+        UiTone.Wrapped(TraderStyle.Muted, "Travel access does not guarantee workshop entry or permission to spend FC credits. Those are verified at the destination.");
+        ImGui.Spacing();
+    }
+
     private void DrawQueueProgress()
     {
         var run = plugin.FuelQueue.Run;
@@ -344,6 +384,8 @@ internal sealed class FuelPanel(Plugin plugin)
                         ? $"{entry.World} · Resident Caretaker, {LifestreamClient.DistrictName(entry.CaretakerCity)}"
                         : $"{entry.World} · {entry.HouseName}");
                     if (!string.IsNullOrWhiteSpace(entry.Note)) UiTone.Wrapped(TraderStyle.Muted, entry.Note);
+                    if (!showingRun && plugin.Config.Characters.FirstOrDefault(character => character.ContentId == entry.CharacterId) is { } buyer)
+                        DrawAccess(buyer, detailed: false, entry);
                     ImGui.TableNextColumn();
                     var tone = entry.Status switch
                     {

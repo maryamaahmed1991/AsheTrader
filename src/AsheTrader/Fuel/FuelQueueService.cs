@@ -7,7 +7,7 @@ using Newtonsoft.Json;
 
 namespace AsheTrader.Fuel;
 
-public enum FuelQueueStage { SelectCharacter, Login, Travel, Buying, CloseShop, Deposit, RecoverDeposit, Finished }
+public enum FuelQueueStage { SelectCharacter, Login, Travel, Buying, CloseShop, Deposit, RecoverDeposit, Finished, RefreshCredits }
 
 public sealed class FuelQueueRun
 {
@@ -21,6 +21,8 @@ public sealed class FuelQueueRun
     public GameOperation? PendingOperation { get; set; }
     public StorageMovementCheckpoint? StorageCheckpoint { get; set; }
     public FuelPurchaseCheckpoint? PendingPurchase { get; set; }
+    public FuelCreditBudget? CreditBudget { get; set; }
+    public bool AwaitingCreditRefresh { get; set; }
     public uint? RemainingTarget { get; set; }
     public bool TargetInitialized { get; set; }
     public bool FinishAfterDeposit { get; set; }
@@ -39,19 +41,23 @@ public sealed class FuelQueueService
     private readonly GameWorkflowExecutor executor = new();
     private readonly FuelDestinationRunner destination = new();
     private readonly StorageRecoveryStability storageStability = new();
-    private (uint Bags, uint Credits)? purchaseSample;
+    private (ulong Character, ulong Company, uint Bags, uint Price)? purchaseSample;
     private long purchaseStableAt;
     private long stageStarted;
     private (ulong Character, ulong Company)? companySample;
     private long companyStableAt;
     private bool purchaseRunning;
     private bool destinationStarted;
+    private readonly TeleportRequestGate homeReturnGate = new();
+    private bool ownsHomeTravel;
+    private uint homeTravelWorld;
+    private long homeTravelStarted;
     private bool journalHealthy = true;
     private string setupStatus = "Refresh characters and saved Lifestream houses to configure fuel runs.";
     public FuelQueueRun? Run { get; private set; }
     public bool Active => Run is { Paused: false, Finished: false };
     public bool HasUnfinishedRun => Run is { Finished: false };
-    public bool ExpectsLogout => Active && (Run!.PendingOperation?.Kind == GameOperationKind.Login || destination.Active);
+    public bool ExpectsLogout => Active && (Run!.PendingOperation?.Kind == GameOperationKind.Login || destination.Active || ownsHomeTravel);
     public string SetupStatus => setupStatus;
     public string Status => Run?.Status ?? "Fuel queue idle.";
     private FuelQueueEntry Entry => Run!.Entries[Run.Index];
@@ -103,6 +109,7 @@ public sealed class FuelQueueService
     public void RefreshSetup()
     {
         if (HasUnfinishedRun || plugin.Workflow.Busy || plugin.Fuel.Active || plugin.Trader.IsRunning) return;
+        plugin.FuelAccess.RefreshCurrent();
         plugin.Workflow.RefreshLocalRoster();
         var imported = 0;
         if (plugin.Lifestream.TryGetHouses(plugin.Config.Characters, out var houses, out var error))
@@ -146,6 +153,9 @@ public sealed class FuelQueueService
     public IReadOnlyList<FuelQueueEntry> Preview() => FuelQueuePlanner.Build(plugin.Config.Characters,
         plugin.Config.Houses, plugin.Config.FuelSettings, ResolveWorld);
 
+    public FuelQueueEntry PreviewCharacter(CharacterProfile character) => FuelQueuePlanner.Build([character],
+        plugin.Config.Houses, plugin.Config.FuelSettings, ResolveWorld, includeUnselected: true)[0];
+
     internal static uint? ResolveWorld(string name)
     {
         var world = Plugin.DataManager.GetExcelSheet<World>().FirstOrDefault(x => x.IsPublic && string.Equals(x.Name.ToString(), name, StringComparison.OrdinalIgnoreCase));
@@ -180,6 +190,7 @@ public sealed class FuelQueueService
             && !(Run.PendingOperation?.Kind == GameOperationKind.Deposit && Run.StorageCheckpoint != null))
         { FinishEnd(); return; }
         RequireAvailable();
+        StopHomeTravel();
         while (executor.TryTakeResult(out _)) { }
         purchaseRunning = destinationStarted = false; purchaseSample = null; storageStability.Reset();
         var run = Run!;
@@ -196,7 +207,8 @@ public sealed class FuelQueueService
             if (continueDeposit && Plugin.PlayerState.ContentId != Entry.CharacterId)
                 throw new InvalidOperationException("Return to the fuel character before resuming its saved retainer deposit.");
             run.PendingOperation = null; run.StorageCheckpoint = null;
-            run.Stage = continueDeposit ? FuelQueueStage.CloseShop : FuelQueueStage.SelectCharacter;
+            run.Stage = continueDeposit ? FuelQueueStage.CloseShop
+                : run.Stage == FuelQueueStage.RefreshCredits ? FuelQueueStage.RefreshCredits : FuelQueueStage.SelectCharacter;
         }
         run.Paused = false; stageStarted = Environment.TickCount64;
         SetStatus("Resuming the fuel queue and reconciling saved progress…"); Save();
@@ -206,6 +218,7 @@ public sealed class FuelQueueService
     {
         if (!HasUnfinishedRun) return;
         Run!.Paused = true;
+        StopHomeTravel();
         try { plugin.Fuel.Stop(); } catch (Exception ex) { Plugin.Log.Warning(ex, "Could not stop fuel purchases"); }
         try { destination.Stop(); } catch (Exception ex) { Plugin.Log.Warning(ex, "Could not stop the fuel destination route"); }
         try { executor.Stop(reason); } catch (Exception ex) { Plugin.Log.Warning(ex, "Could not stop the fuel storage operation"); }
@@ -254,7 +267,7 @@ public sealed class FuelQueueService
                 && (Plugin.ObjectTable.LocalPlayer == null || Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51]))
             { stageStarted = Environment.TickCount64; storageStability.Reset(); SetStatus("Waiting for loading to finish before tallying the interrupted deposit…"); return; }
             if (Run!.Stage != FuelQueueStage.SelectCharacter && Plugin.PlayerState.ContentId != Entry.CharacterId
-                && Run.Stage != FuelQueueStage.Login && !destination.Active)
+                && Run.Stage != FuelQueueStage.Login && !destination.Active && !ownsHomeTravel)
                 throw new InvalidOperationException("The active character changed outside the fuel queue.");
             switch (Run.Stage)
             {
@@ -265,6 +278,7 @@ public sealed class FuelQueueService
                 case FuelQueueStage.CloseShop: CloseAndDeposit(); break;
                 case FuelQueueStage.Deposit: SetStatus(executor.Status); break;
                 case FuelQueueStage.RecoverDeposit: RecoverDeposit(); break;
+                case FuelQueueStage.RefreshCredits: RefreshCredits(); break;
             }
         }
         catch (Exception ex) { Plugin.Log.Warning(ex, "Fuel queue paused"); Pause(ex.Message); }
@@ -272,6 +286,7 @@ public sealed class FuelQueueService
 
     private void SelectNext()
     {
+        StopHomeTravel();
         while (Run!.Index < Run.Entries.Count)
         {
             if (Entry.Status is FuelQueueEntryStatus.Completed or FuelQueueEntryStatus.Skipped or FuelQueueEntryStatus.StorageFull)
@@ -324,6 +339,7 @@ public sealed class FuelQueueService
                 throw new InvalidOperationException("Fuel travel finished without the configured supplier shop. Resume after checking the destination.");
             Transition(FuelQueueStage.Buying, "Checking live fuel stock and FC credits…"); return;
         }
+        if (!EnsureHomeWorld()) return;
         if (!Plugin.ClientState.IsLoggedIn || Plugin.ObjectTable.LocalPlayer == null
             || Plugin.Condition[ConditionFlag.BetweenAreas] || Plugin.Condition[ConditionFlag.BetweenAreas51]) return;
         if (Run!.PendingPurchase != null && Plugin.PlayerState.ContentId != Run.PendingPurchase.CharacterId)
@@ -331,9 +347,80 @@ public sealed class FuelQueueService
         if (!VerifyCharacterCompany()) return;
         if (FuelDestinationRunner.IsExpectedLocation(Entry) && NativeFuelShop.TryRead(out _, out _))
         { Transition(FuelQueueStage.Buying, "Checking live fuel stock and FC credits…"); return; }
-        if (!destination.Start(Entry, out var error, plugin.Config.Characters)) throw new InvalidOperationException(error);
+        var access = plugin.FuelAccess.AssessCurrent(Entry);
+        if (access.Status == FuelAccessStatus.Unknown && access.Kind != FuelAccessRouteKind.Unavailable && Environment.TickCount64 - stageStarted < 8000)
+        { SetStatus("Waiting for this character's travel access to load…"); return; }
+        plugin.Workflow.RecordDiagnostic($"fuel route assessment character={Entry.CharacterId}; status={access.Status}; route={access.Kind}; observed={access.SnapshotObservedAtUtc:O}; reason={access.Reason}");
+        if ((access.Status == FuelAccessStatus.Ineligible || access.Kind == FuelAccessRouteKind.Unavailable)
+            && !FuelDestinationRunner.CanApproachLocally(Entry))
+        {
+            var reason = access.Reason + (string.IsNullOrWhiteSpace(access.RecommendedRoute) ? "" : " " + access.RecommendedRoute);
+            if (Run.PendingPurchase != null) throw new InvalidOperationException("The interrupted purchase's supplier is not currently reachable: " + reason);
+            FinishEntry(FuelQueueEntryStatus.Skipped, reason);
+            return;
+        }
+        if (!destination.Start(Entry, out var error, plugin.Config.Characters, access)) throw new InvalidOperationException(error);
         destinationStarted = true;
         SetStatus(destination.Status);
+    }
+
+    private bool EnsureHomeWorld()
+    {
+        var now = Environment.TickCount64;
+        var player = Plugin.ObjectTable.LocalPlayer;
+        var ready = Plugin.ClientState.IsLoggedIn && player != null && player.IsTargetable && !player.IsCasting
+            && !Plugin.Condition[ConditionFlag.BetweenAreas] && !Plugin.Condition[ConditionFlag.BetweenAreas51]
+            && !NativeRetainers.HasActiveCutscene;
+        if (Plugin.PlayerState.ContentId != 0 && Plugin.PlayerState.ContentId != Entry.CharacterId)
+            throw new InvalidOperationException("The fuel buyer changed during the return to its home world.");
+        if (!ownsHomeTravel && ready && player!.CurrentWorld.RowId == player.HomeWorld.RowId)
+        {
+            homeReturnGate.Reset(); homeTravelStarted = 0;
+            return true;
+        }
+        if (!ownsHomeTravel && !ready) return false;
+        if (homeTravelStarted == 0) homeTravelStarted = now;
+        if (now - homeTravelStarted > 900_000)
+            throw new TimeoutException("Returning to the fuel buyer's home world timed out. Resume after the world transfer settles.");
+        var lifestream = plugin.Lifestream.GetStatus();
+        if (!lifestream.Ready) throw new InvalidOperationException(lifestream.Error ?? "Lifestream is unavailable during the home-world return.");
+        var arrived = ownsHomeTravel && ready && player!.CurrentWorld.RowId == homeTravelWorld && player.HomeWorld.RowId == homeTravelWorld
+            && lifestream.Busy == false;
+        var decision = homeReturnGate.Observe(now, player?.CurrentWorld.RowId ?? 0, Plugin.ClientState.TerritoryType,
+            ready && lifestream.Busy == false && !NativeRetainers.BellInteractionBlocked,
+            arrived, lifestream.Busy == true || !ready);
+        if (decision == TeleportRequestDecision.Arrived)
+        {
+            ownsHomeTravel = false; homeReturnGate.Reset(); homeTravelStarted = 0;
+            companySample = null; stageStarted = now;
+            plugin.FuelAccess.RefreshCurrent();
+            SetStatus("Returned home. Checking this character's housing access before choosing its route…");
+            return true;
+        }
+        if (decision is TeleportRequestDecision.ReadinessTimedOut or TeleportRequestDecision.ArrivalTimedOut)
+            throw new InvalidOperationException("Lifestream could not finish the home-world return. Resume after checking its travel state.");
+        if (decision != TeleportRequestDecision.Request)
+        { SetStatus(ownsHomeTravel ? "Returning to the buyer's home world before selecting a fuel route…" : "Waiting for the home-world return to become ready…"); return false; }
+        homeTravelWorld = player!.HomeWorld.RowId;
+        // Claim ownership before dispatch so an IPC exception after queueing can still be cancelled.
+        ownsHomeTravel = true;
+        var accepted = Plugin.PluginInterface.GetIpcSubscriber<uint, bool>("Lifestream.ChangeWorldById").InvokeFunc(homeTravelWorld);
+        homeReturnGate.RecordRequest(now, accepted);
+        if (!accepted) ownsHomeTravel = false;
+        plugin.Workflow.RecordDiagnostic($"fuel home-world return character={Entry.CharacterId}; targetWorld={homeTravelWorld}; accepted={accepted}; attempts={homeReturnGate.Attempts}");
+        SetStatus(accepted ? "Returning to the buyer's home world before selecting a fuel route…" : "Home-world return was not accepted yet; waiting to retry…");
+        return false;
+    }
+
+    private void StopHomeTravel()
+    {
+        if (ownsHomeTravel)
+        {
+            ownsHomeTravel = false;
+            try { Plugin.PluginInterface.GetIpcSubscriber<object>("Lifestream.Abort").InvokeAction(); }
+            catch (Exception ex) { Plugin.Log.Warning(ex, "Could not stop the fuel buyer's home-world return"); }
+        }
+        homeReturnGate.Reset(); homeTravelStarted = 0; homeTravelWorld = 0;
     }
 
     private void Buy()
@@ -348,25 +435,52 @@ public sealed class FuelQueueService
         if (Run!.PendingPurchase is { } pending)
         {
             if (NativeFuelShop.HasConfirmation) throw new InvalidOperationException("Close the outstanding fuel confirmation, then Resume to tally inventory and credits.");
-            var sample = (shop.InventoryQuantity, shop.Credits);
+            // FC credits are shared and can change while another member earns or spends
+            // them. Only this buyer's identity, item tally and price must settle.
+            var sample = (Plugin.PlayerState.ContentId, NativeFuelShop.CurrentCompanyId, shop.InventoryQuantity, shop.UnitPrice);
             if (purchaseSample != sample) { purchaseSample = sample; purchaseStableAt = Environment.TickCount64; return; }
             if (Environment.TickCount64 - purchaseStableAt < 500) return;
-            var outcome = FuelPurchaseRecovery.Classify(pending, Plugin.PlayerState.ContentId, NativeFuelShop.CurrentCompanyId, shop.InventoryQuantity, shop.Credits);
+            var outcome = FuelPurchaseRecovery.Classify(pending, Plugin.PlayerState.ContentId, NativeFuelShop.CurrentCompanyId, shop.InventoryQuantity, shop.Credits, shop.UnitPrice);
             if (outcome == FuelPurchaseOutcome.Inconsistent)
-                throw new InvalidOperationException("The interrupted purchase's inventory and FC-credit changes do not agree. No purchase was repeated.");
-            if (outcome == FuelPurchaseOutcome.Completed) AccountPurchase(pending.Quantity);
+                throw new InvalidOperationException("The interrupted purchase's fuel tally or buyer identity could not be reconciled. No purchase was repeated.");
+            if (outcome == FuelPurchaseOutcome.Completed)
+            {
+                plugin.Workflow.RecordDiagnostic($"fuel recovery completed from exact item delivery; quantity={pending.Quantity}; bagsBefore={pending.BagBefore}; bags={shop.InventoryQuantity}; expectedCreditCost={(ulong)pending.Quantity * pending.UnitPrice}; observedCreditChange={(long)pending.CreditsBefore - shop.Credits}; shared credits are advisory");
+                AccountPurchase(pending.Quantity);
+            }
             else Run.PendingPurchase = null;
             purchaseSample = null; Save();
         }
         if (Run.EndRequested) { FinishEnd(); return; }
         if (!VerifyCharacterCompany()) return;
+        if (Run.AwaitingCreditRefresh)
+        {
+            // This flag is saved only after the old shop and its returning menu fully close.
+            // Travel has now reopened a verified supplier shop, yielding a fresh credit balance.
+            Run.CreditBudget = FuelCreditBudget.Begin(Entry.FreeCompanyId, shop.Credits);
+            Run.AwaitingCreditRefresh = false;
+            plugin.Workflow.RecordDiagnostic($"fuel credit budget refreshed; FC={Entry.FreeCompanyId}; credits={shop.Credits}; addon={shop.AddonId}");
+            Save();
+        }
+        if (Run.CreditBudget == null || Run.CreditBudget.FreeCompanyId != Entry.FreeCompanyId)
+        {
+            Run.CreditBudget = FuelCreditBudget.Begin(Entry.FreeCompanyId, shop.Credits);
+            Save();
+        }
         if (!Run.TargetInitialized)
         {
             Run.TargetInitialized = true;
             Run.RemainingTarget = FuelQueueDecisions.InitialTarget(Entry, shop.InventoryQuantity);
             Save();
         }
-        var decision = FuelQueueDecisions.PlanPurchase(Entry, Run.RemainingTarget, shop.Capacity, shop.Credits, shop.UnitPrice);
+        if (Run.RemainingTarget != 0
+            && Run.CreditBudget.NeedsRefresh(shop.Credits, Entry.CreditReserve, shop.UnitPrice))
+        {
+            Transition(FuelQueueStage.RefreshCredits, "Refreshing the supplier's FC credit balance before purchasing more…");
+            return;
+        }
+        var decision = FuelQueueDecisions.PlanPurchase(Entry, Run.RemainingTarget, shop.Capacity,
+            Run.CreditBudget.PlanningCredits(shop.Credits, Run.RemainingTarget), shop.UnitPrice);
         if (decision.NeedsDeposit)
         {
             if (decision.CreditExhausted) Run.ExhaustedCompanies.Add(CompanyKey(Entry));
@@ -381,9 +495,37 @@ public sealed class FuelQueueService
 
     private void AccountPurchase(uint quantity)
     {
-        Entry.Purchased = checked(Entry.Purchased + quantity);
-        Run!.RemainingTarget = FuelQueueDecisions.RemainingAfterPurchase(Run.RemainingTarget, quantity);
+        var pending = Run!.PendingPurchase ?? throw new InvalidOperationException("The fuel purchase has no durable intent to tally.");
+        if (quantity != pending.Quantity || pending.FreeCompanyId != Entry.FreeCompanyId)
+            throw new InvalidOperationException("The fuel receipt does not match its saved FC purchase.");
+        var purchased = checked(Entry.Purchased + quantity);
+        var remaining = FuelQueueDecisions.RemainingAfterPurchase(Run.RemainingTarget, quantity);
+        // Legacy saved runs have no budget. Start from the pending request's original balance,
+        // not a possibly stale or independently changed balance observed during Resume.
+        var budget = Run.CreditBudget?.FreeCompanyId == pending.FreeCompanyId ? Run.CreditBudget
+            : FuelCreditBudget.Begin(pending.FreeCompanyId, pending.CreditsBefore);
+        budget.Acknowledge(pending);
+        Run.CreditBudget = budget;
+        Entry.Purchased = purchased;
+        Run.RemainingTarget = remaining;
         Run.PendingPurchase = null;
+    }
+
+    private void RefreshCredits()
+    {
+        if (Run!.PendingPurchase != null)
+            throw new InvalidOperationException("Tally the pending fuel receipt before refreshing the credit balance.");
+        if (Run.EndRequested) { FinishEnd(); return; }
+        if (!destination.TryCloseShop(Entry, out var error))
+        {
+            if (!string.IsNullOrEmpty(error)) throw new InvalidOperationException(error);
+            if (Environment.TickCount64 - stageStarted > 30_000)
+                throw new TimeoutException("The fuel shop did not close for its credit refresh.");
+            return;
+        }
+        Run.AwaitingCreditRefresh = true;
+        destinationStarted = false;
+        Transition(FuelQueueStage.Travel, "Reopening the supplier to refresh the FC credit balance…");
     }
 
     private void CloseAndDeposit()
@@ -489,6 +631,6 @@ public sealed class FuelQueueService
             if (Run != null && !Run.Finished) { Run.Paused = true; if (journalHealthy) Save(); }
         }
         catch (Exception ex) { Plugin.Log.Error(ex, "Fuel shutdown progress could not be saved"); }
-        finally { plugin.Fuel.Stop(); destination.Shutdown(); executor.Shutdown(); }
+        finally { StopHomeTravel(); plugin.Fuel.Stop(); destination.Shutdown(); executor.Shutdown(); }
     }
 }

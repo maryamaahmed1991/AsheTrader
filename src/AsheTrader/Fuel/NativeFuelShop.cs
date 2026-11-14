@@ -11,7 +11,8 @@ using AsheTrader.Workflow.Native;
 
 namespace AsheTrader.Fuel;
 
-internal readonly record struct FuelShopSnapshot(nint Address, ushort AddonId, uint Credits, uint UnitPrice, uint InventoryQuantity, uint Capacity);
+internal readonly record struct FuelShopSnapshot(nint Address, ushort AddonId, uint Credits, uint UnitPrice,
+    uint InventoryQuantity, uint Capacity, uint DisplayedInventoryQuantity);
 
 internal static unsafe class NativeFuelShop
 {
@@ -67,7 +68,7 @@ internal static unsafe class NativeFuelShop
         // Only operate row zero after checking its actual item ID and price, never an arbitrary credit shop.
         if (!TryUInt(addon, 3, out var credits) || !TryUInt(addon, 9, out var count) || count is 0 or > 20
             || !TryUInt(addon, 30, out var itemId) || itemId != FuelItemId
-            || !TryUInt(addon, 130, out var price) || price == 0)
+            || !TryUInt(addon, 130, out var price) || price == 0 || !TryUInt(addon, 90, out var displayedQuantity))
         {
             error = "The open credit shop does not match the supported Ceruleum Tank layout.";
             return false;
@@ -77,7 +78,7 @@ internal static unsafe class NativeFuelShop
             error = "Carried inventory is not available yet.";
             return false;
         }
-        snapshot = new((nint)addon, addon->Id, credits, price, quantity, capacity);
+        snapshot = new((nint)addon, addon->Id, credits, price, quantity, capacity, displayedQuantity);
         error = string.Empty;
         return true;
     }
@@ -94,7 +95,7 @@ internal static unsafe class NativeFuelShop
         var addon = ReadyAddon("FreeCompanyCreditShop");
         var readable = TryRead(out var shop, out var error);
         var number = addon == null ? null : QuantityControl(addon);
-        var uiQuantity = addon != null && TryUInt(addon, 90, out var displayed) ? displayed.ToString() : "unavailable";
+        var uiQuantity = readable ? shop.DisplayedInventoryQuantity.ToString() : "unavailable";
         return $"readable={readable}; addon={shop.AddonId}; credits={shop.Credits}; price={shop.UnitPrice}; bags={shop.InventoryQuantity}; capacity={shop.Capacity}; displayedInventory={uiQuantity}; numeric={(number == null ? "unavailable" : number->Value.ToString())}; confirmation={HasConfirmation}; retryUiReady={RetryUiReady}; error={error}";
     }
 
@@ -134,7 +135,7 @@ internal static unsafe class NativeFuelShop
         return true;
     }
 
-    public static bool TryConfirmFuel(FuelShopSnapshot expected, uint quantity, out string error)
+    public static bool TryConfirmFuel(FuelShopSnapshot expected, uint quantity, out string error, uint creditReserve = 0)
     {
         var confirmation = (AddonSelectYesno*)ReadyAddon("SelectYesno");
         if (confirmation == null || confirmation->PromptText == null)
@@ -144,9 +145,9 @@ internal static unsafe class NativeFuelShop
         }
         var shop = ReadyAddon("FreeCompanyCreditShop");
         if (shop == null || (nint)shop != expected.Address || shop->Id != expected.AddonId
-            || !TryRead(out var current, out error) || current != expected)
+            || !TryRead(out var current, out error) || (current with { Credits = expected.Credits }) != expected)
         {
-            error = "The pending fuel shop identity, inventory, price, or credits changed. The confirmation was left untouched.";
+            error = "The pending fuel shop identity, inventory, or price changed. The confirmation was left untouched.";
             return false;
         }
         // A word match alone cannot identify a purchase dialog. Require an actual parent
@@ -162,7 +163,7 @@ internal static unsafe class NativeFuelShop
         }
         var numeric = QuantityControl(shop);
         if (quantity is 0 or > 99 || numeric == null || numeric->Value != quantity
-            || (ulong)quantity * expected.UnitPrice > expected.Credits || quantity > expected.Capacity)
+            || (ulong)quantity * current.UnitPrice + creditReserve > current.Credits || quantity > current.Capacity)
         {
             error = "The pending fuel quantity or cost could not be verified. The confirmation was left untouched.";
             return false;
