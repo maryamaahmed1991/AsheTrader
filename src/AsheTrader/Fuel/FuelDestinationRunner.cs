@@ -3,6 +3,7 @@ using AsheTrader.Core;
 using AsheTrader.Integrations;
 using AsheTrader.Workflow.Native;
 using Dalamud.Game.ClientState.Conditions;
+using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Game.Text.SeStringHandling;
 using FFXIVClientStructs.FFXIV.Client.Game;
@@ -229,7 +230,10 @@ internal sealed unsafe class FuelDestinationRunner
                     RequireHouse();
                     if (InWorkshop) { Set(Stage.Supplier, "Approaching the workshop supplier…"); break; }
                     if (!workshopPathCompleted && savedHouseRoute.Workshop.Count > 0) { StartSavedHousePath(true); break; }
-                    ApproachAndInteract(FindNearest(x => x.BaseId == 2004353), Stage.WorkshopMenu, "Opening the workshop entrance menu…");
+                    var workshopDoorName = WorkshopDoorName();
+                    ApproachAndInteract(FindNearest(x => x.ObjectKind == ObjectKind.EventObj
+                        && FuelWorkshopEntranceName.Matches(x.Name.TextValue, workshopDoorName)),
+                        Stage.WorkshopMenu, "Opening the workshop entrance menu…");
                     break;
                 case Stage.WorkshopPath:
                     UpdateSavedHousePath(true, now);
@@ -690,6 +694,8 @@ internal sealed unsafe class FuelDestinationRunner
         || NativeRetainers.Ready("SelectString") != null || NativeRetainers.Ready("SelectIconString") != null
         || NativeRetainers.Ready("Talk") != null || NativeRetainers.Ready("FreeCompanyCreditShop") != null;
     private static string Normalize(string text) => text.Replace("\u00AD", string.Empty).Trim().TrimEnd('.', '。');
+    // 2004353 is a name lookup, not the only possible live door BaseId.
+    private static string WorkshopDoorName() => Plugin.DataManager.GetExcelSheet<EObjName>().GetRow(2004353).Singular.ExtractText();
     private static IGameObject? FindNearest(Func<IGameObject, bool> predicate) => Plugin.ObjectTable
         .Where(x => x.IsTargetable && predicate(x)).OrderBy(x => Vector3.DistanceSquared(Plugin.ObjectTable.LocalPlayer!.Position, x.Position)).FirstOrDefault();
     private Vector3? FindCaretakerWaypoint()
@@ -833,6 +839,14 @@ internal sealed unsafe class FuelDestinationRunner
                         .OrderBy(x => Vector3.DistanceSquared(layoutReady ? entrance : player.Position, x.Position)).Take(6);
                     foreach (var candidate in candidates)
                         Trace($"estate candidate object={candidate.GameObjectId}; data={candidate.BaseId}; targetable={candidate.IsTargetable}; position={candidate.Position}; playerDistance={Vector3.Distance(player.Position, candidate.Position):F2}; plotDoorDistance={(layoutReady ? Vector3.Distance(entrance, candidate.Position).ToString("F2") : "unavailable")}");
+                    if (stage is Stage.WorkshopDoor or Stage.WorkshopPath or Stage.WorkshopMenu or Stage.Workshop)
+                    {
+                        var expectedName = WorkshopDoorName();
+                        Trace($"workshop entrance expectedName={expectedName}; expectedKind={ObjectKind.EventObj}");
+                        foreach (var candidate in Plugin.ObjectTable.Where(x => x.ObjectKind == ObjectKind.EventObj)
+                            .OrderBy(x => Vector3.DistanceSquared(player.Position, x.Position)).Take(8))
+                            Trace($"workshop candidate object={candidate.GameObjectId}; data={candidate.BaseId}; kind={candidate.ObjectKind}; name={candidate.Name.TextValue}; targetable={candidate.IsTargetable}; nameMatch={FuelWorkshopEntranceName.Matches(candidate.Name.TextValue, expectedName)}; position={candidate.Position}; playerDistance={Vector3.Distance(player.Position, candidate.Position):F2}");
+                    }
                 }
             }
             Trace($"interaction target={targetId}; data={targetDataId}; territory={targetTerritory}; currentTarget={Plugin.TargetManager.Target?.GameObjectId}; attempts={attempts}; pathAttempts={pathAttempts}; yesno={NativeRetainers.Ready("SelectYesno") != null}; selectString={NativeRetainers.Ready("SelectString") != null}");

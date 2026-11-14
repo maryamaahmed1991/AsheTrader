@@ -27,6 +27,10 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.5.0.5
+
+Fuel runs recognize the additional-chambers door by its localized name, as Lifestream does, instead of requiring one specific object ID. This fixes stopping after the saved workshop path completes in interiors with another door variant. The configured house and selected interaction target remain verified. Diagnostics now include nearby interior door IDs, names, targetability and matching results. Update and Resume the existing fuel queue; no path re-recording is needed.
+
 ## Version 0.5.0.4
 
 Fuel runs now prefer Lifestream's recorded `PathToEntrance` and `PathToWorkshop` for the configured house, using Lifestream's own path follower. Registrations are matched by owner home world and exact district/ward/plot across this PC's roster; the two path sections stay together from one registration. Resume joins only a nearby recorded segment or returns to the plot drop-off once, preserving the recorded corners instead of cutting across a fence. Path completion requires observed arrival, and stalled movement stops with a useful diagnostic. Houses without a recorded section retain navigation for that section.
@@ -91,7 +95,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.5.0.4.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.5.0.5.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.

@@ -1,5 +1,13 @@
 # Development build validation
 
+## 0.5.0.5 validation — 14 November 2026
+
+- Full `scripts/Build.ps1`: **804 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.
+- The supplied 0.5.0.4 trace confirms both saved paths arrived and the full indoor house address resolved. The subsequent WorkshopDoor stage selected no target and attempted no interaction before timing out. Door lookup previously required BaseId 2004353.
+- A read-only installed-game probe found six additional-chambers variants: 2004353, 2004624, 2004625, 2004626, 2008126 and 2011571. All share the localized door name and event handler 721074. Recognition now follows [Lifestream's localized-name approach](https://github.com/NightmareXIV/Lifestream/blob/main/Lifestream/Utils.cs), including the grammar-tag-free form. Only targetable event objects qualify; house-address and bound-target checks remain active.
+- Twenty-two regression cases cover actual installed English, German, French and Japanese labels, German grammatical tags, case/whitespace, missing names and rejection of unrelated or partial labels. Interior diagnostics now list nearby event objects and whether their names match.
+- Downstream source/game-data review verified the workshop menu's custom dialogue row 11 and NPC 1011274's association with FC credit shop 2752515. No live door interaction or purchase was performed during development. Update and Resume the existing queue to validate entering the workshop and reaching the vendor.
+
 ## 0.5.0.4 validation — 14 November 2026
 
 - Full `scripts/Build.ps1`: **782 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.
