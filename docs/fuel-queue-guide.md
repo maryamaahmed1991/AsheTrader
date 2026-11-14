@@ -23,7 +23,7 @@ Use **Add a house** to enter its label, world, residential district, ward and pl
 
 A registered address must have an accessible company workshop and fuel supplier. An address alone does not establish workshop access. Characters without a suitable house can use the Resident Caretaker option instead.
 
-Version **0.5.0.2** handles Lifestream stopping just outside the plot: the queue verifies the selected plot's drop-off location, approaches its entrance, and then continues through the house and workshop. A queue paused at that handoff can be resumed after updating; the house registration does not need to be recreated. If entry still fails, copy diagnostics while the character is at the stopping point.
+Version **0.5.0.3** handles Lifestream stopping just outside the plot: the queue verifies the selected plot's drop-off location, identifies its visible entrance using the plot's map marker, and then continues through the house and workshop. This also handles a zero native entrance-VFX coordinate, which blocked 0.5.0.2 at some visible houses. A paused queue can be resumed after updating; no new path or house registration is required. If entry still fails, copy diagnostics while the character is at the stopping point.
 
 ## Run a small test first
 

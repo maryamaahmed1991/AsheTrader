@@ -34,6 +34,7 @@ internal sealed unsafe class FuelDestinationRunner
     private bool ownsLifestream, ownsNavigation;
     private Vector3? caretakerWaypoint;
     private Vector3? plotGatePosition, estateEntrancePosition;
+    private string estateApproachDiagnostic = "No estate entrance has been selected yet.";
     private uint plotGateTerritory;
     private string plotGateDiagnostic = "The configured plot's landing point has not been read yet.";
     private long dismountStarted;
@@ -103,6 +104,7 @@ internal sealed unsafe class FuelDestinationRunner
         ownsLifestream = ownsNavigation = false;
         caretakerWaypoint = null;
         plotGatePosition = estateEntrancePosition = null;
+        estateApproachDiagnostic = "No estate entrance has been selected yet.";
         plotGateTerritory = 0;
         nextSnapshot = nextGateRead = 0;
         dismountStarted = 0;
@@ -321,30 +323,39 @@ internal sealed unsafe class FuelDestinationRunner
     private void ApproachEstateDoor()
     {
         // Arrival was proved once in Travel/WaitTravel. Do not keep requiring proximity
-        // to the gate while walking across a large yard; the ward and exact plot layout
+        // to the gate while walking across a large yard; the ward and exact plot marker
         // remain bound, and the native plot is required again before interaction.
         if (!AtHouseWard()) throw new InvalidOperationException("The character left the configured estate's world, district, or ward while approaching its entrance.");
-        if (!NativeFuelEstateEntrance.TryRead(address.Plot, out var entrance, out var layoutDiagnostic))
+        if (!NativeFuelEstateMarkers.TryRead(Plugin.ClientState.TerritoryType, out var markers, out var markerDiagnostic))
         {
+            estateApproachDiagnostic = markerDiagnostic;
             if (Environment.TickCount64 - stageStarted > 20_000)
-                throw new InvalidOperationException("The configured plot's estate entrance layout did not become available. " + layoutDiagnostic);
-            Status = "Waiting for the configured estate entrance to load…";
+                throw new InvalidOperationException("The configured district's plot markers could not be read. " + markerDiagnostic);
+            Status = "Waiting for the configured plot's map data…";
             return;
         }
-        estateEntrancePosition = entrance;
-        var candidates = Plugin.ObjectTable.Where(x => x.IsTargetable && EntranceNames.Contains(x.Name.TextValue, StringComparer.Ordinal)
-            && Vector3.DistanceSquared(x.Position, entrance) <= 25f).Take(2).ToArray();
-        if (candidates.Length > 1)
-            throw new InvalidOperationException("More than one estate entrance matched the configured plot's door position; no entrance was selected.");
-        if (candidates.Length == 0)
+        var candidates = Plugin.ObjectTable.Where(IsEstateEntrance).ToArray();
+        if (!FuelEstateEntranceSelection.TrySelect(address.Plot, markers,
+                candidates.Select(x => new FuelEstateEntranceCandidate(x.GameObjectId, x.Position, x.IsTargetable)).ToArray(),
+                out var selected, out var selectionDiagnostic))
         {
-            if (!MoveNear(entrance, 3.5f)) return;
+            estateApproachDiagnostic = $"{markerDiagnostic}; plotMarker={markers[address.Plot - 1]}; {selectionDiagnostic}";
+            if (ownsNavigation) StopNavigation();
             if (Environment.TickCount64 - stageStarted > 20_000)
-                throw new InvalidOperationException("The configured plot's entrance object was not found at its loaded estate door position.");
+                throw new InvalidOperationException("The configured estate entrance could not be identified. " + selectionDiagnostic + " Open Activity → Copy diagnostics.");
+            Status = "Waiting for the configured estate entrance…";
             return;
         }
-        ApproachAndInteract(candidates[0], Stage.DoorPrompt, "Waiting for the estate entrance…");
+        var entrance = candidates.Single(x => x.GameObjectId == selected);
+        if (estateEntrancePosition != entrance.Position)
+            Trace($"estate approach selected object={selected}; plotIndex={address.Plot - 1}; marker={markers[address.Plot - 1]}; position={entrance.Position}; source=plot marker and live entrance");
+        estateEntrancePosition = entrance.Position;
+        estateApproachDiagnostic = $"{markerDiagnostic}; plotMarker={markers[address.Plot - 1]}; selectedObject={selected}; {selectionDiagnostic}";
+        ApproachAndInteract(entrance, Stage.DoorPrompt, "Waiting for the estate entrance…");
     }
+
+    private static bool IsEstateEntrance(IGameObject value) => value.BaseId is 2002737 or 2002739
+        && EntranceNames.Contains(value.Name.TextValue, StringComparer.Ordinal);
 
     private void EnterHouseStage() => Set(InWorkshop ? Stage.Supplier : InsideHouse ? Stage.WorkshopDoor : Stage.Door,
         InWorkshop ? "Approaching the workshop supplier…" : InsideHouse ? "Approaching the workshop entrance…" : "Approaching the estate entrance…");
@@ -701,6 +712,7 @@ internal sealed unsafe class FuelDestinationRunner
                 var gateDistance = player != null && plotGatePosition is { } gate ? Vector3.Distance(player.Position, gate).ToString("F2") : "unavailable";
                 var layoutReady = NativeFuelEstateEntrance.TryRead(address.Plot, out var entrance, out var layoutDiagnostic);
                 Trace($"estate arrival gate={plotGateDiagnostic}; gateDistance={gateDistance}; door={estateEntrancePosition}; layoutReady={layoutReady}; {layoutDiagnostic}");
+                Trace($"estate approach {estateApproachDiagnostic}");
                 if (player != null)
                 {
                     var candidates = Plugin.ObjectTable.Where(x => EntranceNames.Contains(x.Name.TextValue, StringComparer.Ordinal))

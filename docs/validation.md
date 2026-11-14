@@ -1,5 +1,14 @@
 # Development build validation
 
+## 0.5.0.3 validation — 14 November 2026
+
+- Full `scripts/Build.ps1`: **713 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.
+- The supplied 0.5.0.2 report proves the gate handoff succeeded and the Door stage then stalled on a zero entrance-VFX coordinate. The cause of that native field being empty is not established. Door approach no longer depends on it.
+- An isolated read-only Lumina probe verified the installed game's HousingMapMarkerInfo subrows: all five residential districts have plot markers 0..59, followed by two apartment markers. Goblet plot 33's marker is (-623.98, 6, -789.64). No live game interaction was performed.
+- Thirty-seven selection cases cover subdivision plots, elevated map markers, missing neighboring doors, all-plot ownership comparisons, ambiguity, targetability, horizontal/vertical bounds and invalid data. Two additional regressions use all 60 actual Goblet markers and the six reported live entrance positions; the production selector chooses the intended entrance and rejects all five others. Fixture identities are synthetic.
+- Native world/district/ward checks remain active during walking; full native plot verification is still required before interaction and confirmation. The map marker identifies an approach target and is never used as a movement destination itself.
+- Independent source review checked AutoRetainer's marker-based house approach and the game-sheet marker mapping. No upstream implementation was copied. Actual estate/workshop entry still needs user testing after updating and resuming the existing queue.
+
 ## 0.5.0.2 validation — 14 November 2026
 
 - Full `scripts/Build.ps1`: **674 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.

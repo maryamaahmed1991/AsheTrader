@@ -27,6 +27,10 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.5.0.3
+
+Fuel house entry now associates a visible entrance with the configured plot's game-sheet map marker, including subdivision plots. It no longer waits for a native entrance-VFX coordinate that can remain zero even when the house is visible. Competing plot markers and ambiguous entrances are rejected, and the full native house address is still checked before interaction. Existing paused queues can resume without recording a path or registering the house again.
+
 ## Version 0.5.0.2
 
 Fuel travel now hands off from Lifestream's configured plot drop-off point to the house-entry route even when the game has not yet reported the character as standing on the plot. The handoff checks the home world, district, ward and proximity to that specific plot's entrance waypoint. Door approach remains bound to the selected estate, and interior/workshop checks retain the full address. Fuel diagnostics include the intended address and live arrival/door observations.
@@ -83,7 +87,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.5.0.2.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.5.0.3.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
