@@ -98,14 +98,16 @@ public sealed class FuelQueueService
         if (HasUnfinishedRun || plugin.Workflow.Busy || plugin.Fuel.Active || plugin.Trader.IsRunning) return;
         plugin.Workflow.RefreshLocalRoster();
         var imported = 0;
-        if (plugin.Lifestream.TryGetHouses(out var houses, out var error))
+        if (plugin.Lifestream.TryGetHouses(plugin.Config.Characters, out var houses, out var error))
         {
             foreach (var house in houses)
                 if (plugin.Config.Houses.All(x => x.Address != house.Address)) { plugin.Config.Houses.Add(house); imported++; }
             plugin.Save();
         }
-        setupStatus = $"{plugin.Workflow.RosterStatus} {imported} new Lifestream house(s)."
+        setupStatus = $"{plugin.Workflow.RosterStatus} {plugin.Lifestream.LastHouseImportStatus} "
+            + $"{imported} added; {plugin.Config.Houses.Count} saved house(s) available."
             + (string.IsNullOrEmpty(error) ? "" : " " + error);
+        plugin.Workflow.RecordDiagnostic("fuel house refresh: " + setupStatus);
     }
 
     public void RegisterHouse(string name, uint worldId, int city, int ward, int plot)
@@ -123,9 +125,15 @@ public sealed class FuelQueueService
     public void CaptureHouse()
     {
         if (HasUnfinishedRun) throw new InvalidOperationException("Finish or end the fuel queue before changing destinations.");
-        if (!FuelRunner.TryCaptureCurrentHouse(out var house, out var error)) { setupStatus = error; return; }
+        if (!FuelRunner.TryCaptureCurrentHouse(out var house, out var error))
+        {
+            setupStatus = error;
+            plugin.Workflow.RecordDiagnostic("fuel workshop capture failed: " + error + " " + NativeFuelShop.LastHousingDiagnostic);
+            return;
+        }
         if (plugin.Config.Houses.All(x => x.Address != house.Address)) plugin.Config.Houses.Add(house);
         plugin.Save(); setupStatus = $"Registered {house.Name}.";
+        plugin.Workflow.RecordDiagnostic("fuel workshop capture: " + house.Address);
     }
 
     public IReadOnlyList<FuelQueueEntry> Preview() => FuelQueuePlanner.Build(plugin.Config.Characters,

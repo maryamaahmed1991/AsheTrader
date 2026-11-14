@@ -15,7 +15,11 @@ An individual character can override the FC destination with another registered 
 
 ## Register houses
 
-Open **Workshop houses**. Existing Lifestream house addresses are imported automatically. Use **Add a house** to enter its label, world, residential district, ward and plot, or **Record this workshop** while inside the intended workshop.
+Open **Workshop houses**. Version **0.5.0.1** imports house entries from Lifestream's **Address Book** and the registered **FC houses** under **House Registration → Free Company House** for this PC's known characters. Shared FC addresses are deduplicated. Private housing registrations and apartments are excluded because they cannot provide company workshops. The refresh summary distinguishes houses found from newly added houses and shows the total saved count.
+
+Registered FC plots do not need recorded entrance or workshop paths for discovery. Lifestream's separate **Custom House** entries do not expose enough owner/world information through this integration; add those addresses to its Address Book or register them here.
+
+Use **Add a house** to enter its label, world, residential district, ward and plot, or **Record this workshop** while inside the intended workshop. If capture fails, use the fuel page's **Copy diagnostics** before reloading; the report includes the unresolved housing fields.
 
 A registered address must have an accessible company workshop and fuel supplier. An address alone does not establish workshop access. Characters without a suitable house can use the Resident Caretaker option instead.
 

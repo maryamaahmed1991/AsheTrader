@@ -26,10 +26,12 @@ internal static unsafe class NativeFuelShop
     }
     public const uint FuelItemId = 10155;
     private static readonly InventoryType[] Bags = [InventoryType.Inventory1, InventoryType.Inventory2, InventoryType.Inventory3, InventoryType.Inventory4];
+    internal static string LastHousingDiagnostic { get; private set; } = string.Empty;
 
     public static bool TryCaptureHouse(out HouseProfile house, out string error)
     {
         house = new();
+        LastHousingDiagnostic = string.Empty;
         var manager = HousingManager.Instance();
         var player = Plugin.ObjectTable.LocalPlayer;
         if (manager == null || player == null || !manager->IsInWorkshop())
@@ -37,22 +39,15 @@ internal static unsafe class NativeFuelShop
             error = "Enter the company workshop before capturing this house.";
             return false;
         }
-        var id = manager->GetCurrentHouseId();
-        var territory = (uint)id.TerritoryTypeId;
-        if (territory == 0) territory = HousingManager.GetOriginalHouseTerritoryTypeId();
-        var region = Plugin.DataManager.GetExcelSheet<TerritoryType>().GetRowOrDefault(territory)?.PlaceNameRegion.RowId;
-        var city = region switch { 24 => 9, 23 => 2, 22 => 8, 25 => 70, 2402 => 111, _ => 0 };
-        var world = (int)player.CurrentWorld.RowId;
-        var ward = manager->GetCurrentWard() + 1;
-        var plot = manager->GetCurrentPlot() + 1;
-        var address = LifestreamClient.FormatAddress(world, city, ward, plot);
-        if (!LifestreamClient.TryParseAddress(address, out _) || (id.WorldId != 0 && id.WorldId != world))
+        var resolved = NativeHousingLocation.TryRead(out var location, out error, out var diagnostic, logFailure: true);
+        LastHousingDiagnostic = diagnostic;
+        if (!resolved)
         {
-            error = "The current workshop's world, district, ward, and plot could not be verified.";
+            error += " Use Copy diagnostics if recording still fails after loading finishes.";
             return false;
         }
-        house.Name = $"{player.CurrentWorld.Value.Name.ExtractText()}, {LifestreamClient.DistrictName(city)} W{ward}, P{plot}";
-        house.Address = address;
+        house.Name = $"{player.CurrentWorld.Value.Name.ExtractText()}, {LifestreamClient.DistrictName(location.City)} W{location.Ward}, P{location.Plot}";
+        house.Address = FuelHouseAddress.Format(location.World, location.City, location.Ward, location.Plot);
         error = string.Empty;
         return true;
     }

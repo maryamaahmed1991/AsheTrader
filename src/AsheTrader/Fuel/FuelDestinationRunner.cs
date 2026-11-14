@@ -424,15 +424,9 @@ internal sealed unsafe class FuelDestinationRunner
     private static bool AtHouse(LifestreamClient.HouseDestination target)
     {
         var player = Plugin.ObjectTable.LocalPlayer;
-        var housing = HousingManager.Instance();
-        if (player == null || housing == null || player.CurrentWorld.RowId != target.World
-            || player.HomeWorld.RowId != target.World || housing->GetCurrentWard() + 1 != target.Ward
-            || housing->GetCurrentPlot() + 1 != target.Plot) return false;
-        var id = housing->GetCurrentHouseId();
-        if (id.WorldId != 0 && id.WorldId != target.World) return false;
-        var territory = housing->IsOutside() ? Plugin.ClientState.TerritoryType : (uint)id.TerritoryTypeId;
-        if (territory == 0) territory = HousingManager.GetOriginalHouseTerritoryTypeId();
-        return District(territory) == target.City;
+        return player != null && player.CurrentWorld.RowId == target.World && player.HomeWorld.RowId == target.World
+            && NativeHousingLocation.TryRead(out var actual, out _, out _)
+            && actual == new FuelHouseAddress(target.World, target.City, target.Ward, target.Plot);
     }
 
     private static bool AtCaretakerDistrict(FuelQueueEntry target)
@@ -444,8 +438,7 @@ internal sealed unsafe class FuelDestinationRunner
             && District(Plugin.ClientState.TerritoryType) == target.CaretakerCity;
     }
 
-    private static int District(uint territory) => Plugin.DataManager.GetExcelSheet<TerritoryType>().GetRowOrDefault(territory)?.PlaceNameRegion.RowId switch
-    { 24 => 9, 23 => 2, 22 => 8, 25 => 70, 2402 => 111, _ => 0 };
+    private static int District(uint territory) => NativeHousingLocation.District(territory);
     private static uint CaretakerId(int city) => city switch { 8 => 1005632, 9 => 1005639, 2 => 1005646, 111 => 1019100, 70 => 1039486, _ => 0 };
     private static bool InsideHouse => HousingManager.Instance() != null && HousingManager.Instance()->IsInside();
     private static bool InWorkshop => HousingManager.Instance() != null && HousingManager.Instance()->IsInWorkshop();

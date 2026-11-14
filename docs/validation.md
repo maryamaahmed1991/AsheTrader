@@ -1,5 +1,13 @@
 # Development build validation
 
+## 0.5.0.1 validation — 14 November 2026
+
+- Full `scripts/Build.ps1`: **646 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.
+- Eleven import cases cover Lifestream Address Book versus registered FC house numbering, owner home-world binding, nullable IPC tuple conversion, malformed/private/apartment exclusions and address deduplication. The importer reads both public sources independently and reports partial failures without discarding a successful source.
+- Sixteen housing cases cover dedicated workshop estate identities, room/ward bit separation, renovated interiors, district fallbacks, subdivision plots, live outdoor coordinates, missing identities, apartments and mismatched worlds. Capture and route verification use the same production resolver.
+- Checked public Lifestream IPC/HousePathData contracts and current FFXIVClientStructs HouseId/WorkshopTerritory layouts. The user's screenshot establishes a failed address verification but does not identify which native field was unavailable. Raw capture observations are now included in Copy diagnostics if the problem persists.
+- No live workshop capture or Lifestream import was executed during development. Update to 0.5.0.1, refresh setup, and record the current workshop for in-game validation.
+
 ## 0.5.0 validation — 14 November 2026
 
 - Full `scripts/Build.ps1`: **619 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors against Dalamud API 15 / .NET 10.

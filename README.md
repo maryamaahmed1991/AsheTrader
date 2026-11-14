@@ -27,6 +27,10 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.5.0.1
+
+House discovery includes Lifestream's registered FC houses for local characters as well as house entries in its Address Book. Refresh reports how many houses were found, how many were newly added and how many are saved; an already-imported house no longer looks like a failed discovery. Workshop capture and destination verification share the active estate-address resolver, including the workshop's own housing data. Capture failures include diagnostic details for the unresolved address.
+
 ## Version 0.5.0
 
 **Fuel & houses** now manages a sequential fuel queue on each PC. Characters are grouped by home world and FC, with an FC destination and optional credit reserve. Choose a registered workshop on the same world or a Resident Caretaker in an accessible residential district. Lifestream houses refresh automatically; additional houses can be registered by world, district, ward and plot. Character house overrides must also be on that character's home world.
@@ -75,7 +79,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.5.0.0.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.5.0.1.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.

@@ -367,7 +367,7 @@ internal sealed class FuelPanel(Plugin plugin)
     {
         if (TraderStyle.BeginCard("FuelHouseLibrary"))
         {
-            TraderStyle.Section("Workshop houses", "Saved Lifestream houses are imported automatically. Add any other workshop you can access here.");
+            TraderStyle.Section("Workshop houses", "Imports Lifestream Address Book houses and registered FC houses. Add any other workshop you can access here.");
             if (TraderStyle.PrimaryButton("Add a house", new(140, 32))) addingHouse = !addingHouse;
             ImGui.SameLine();
             if (TraderStyle.SecondaryButton("Record this workshop", new(190, 32))) plugin.QueueAction(plugin.FuelQueue.CaptureHouse);
