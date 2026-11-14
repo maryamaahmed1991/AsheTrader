@@ -41,7 +41,8 @@ public static class FuelPlanner
         if (!policy.ExhaustCredits && currentQuantity >= policy.BuyBelow)
             return Empty(FuelPlanStatus.ThresholdNotReached);
 
-        var affordable = availableCredits / creditsPerUnit;
+        var spendable = availableCredits > policy.CreditReserve ? availableCredits - policy.CreditReserve : 0UL;
+        var affordable = spendable / creditsPerUnit;
         var wanted = policy.ExhaustCredits ? affordable : policy.TargetQuantity - currentQuantity;
         var quantity = (uint)Math.Min(wanted, Math.Min(affordable, availableCapacity));
         var creditLimited = affordable < wanted;

@@ -15,7 +15,7 @@ public sealed partial class WorkflowService
 
     public void RecordTradeDiagnostic(string message) => RecordDiagnostic("trade " + message);
 
-    private void RecordDiagnostic(string message)
+    internal void RecordDiagnostic(string message)
     {
         // Diagnostics must never interrupt gameplay or change an operation's outcome.
         try
@@ -48,6 +48,19 @@ public sealed partial class WorkflowService
         header.Add("Session", $"Role={(IsHost ? "coordinator" : "worker")}; connected={Connected}; paired={HasAcceptedConnection}; remoteControl={Settings.AllowRemoteControl}; journalHealthy={journalHealthy}");
         header.Add("Game", $"loggedIn={Plugin.ClientState.IsLoggedIn}; characterId={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; language={Plugin.ClientState.ClientLanguage}");
         header.Add("Status", Status);
+        if (plugin.FuelQueue.Run is { } fuel)
+        {
+            header.Add("FuelQueue", $"id={fuel.Id}; stage={fuel.Stage}; index={fuel.Index}/{fuel.Entries.Count}; paused={fuel.Paused}; finished={fuel.Finished}; ending={fuel.EndRequested}; purchased={fuel.TotalPurchased}; deposited={fuel.TotalDeposited}; status={fuel.Status}");
+            if (fuel.Index < fuel.Entries.Count)
+            {
+                var entry = fuel.Entries[fuel.Index];
+                header.Add("FuelBuyer", $"character={entry.CharacterId}; FC={entry.FreeCompanyId}; world={entry.World}; caretaker={entry.UseCaretaker}; reserve={entry.CreditReserve}; keep={entry.KeepCarried}; remainingTarget={fuel.RemainingTarget?.ToString() ?? "exhaust credits"}");
+            }
+            if (fuel.PendingPurchase is { } purchase)
+                header.Add("FuelPurchase", $"character={purchase.CharacterId}; FC={purchase.FreeCompanyId}; amount={purchase.Quantity}; bagsBefore={purchase.BagBefore}; creditsBefore={purchase.CreditsBefore}; unitPrice={purchase.UnitPrice}");
+            if (fuel.StorageCheckpoint is { } storage)
+                header.Add("FuelDeposit", $"operation={storage.OperationId}; character={storage.CharacterId}; retainer={storage.RetainerId}; bagsBefore={storage.BagBeforeQuantity}; attempted={storage.AttemptedQuantity}; confirmedBefore={storage.ConfirmedMovedBefore}");
+        }
         if (Run is { } run)
         {
             header.Add("Coordinator", $"job={run.Job.Definition.Id}; step={run.Step}; paused={run.Paused}; itemIndex={run.ActiveItemIndex}; discoveryIndex={run.DiscoveryIndex}/{run.DiscoveryOrder.Count}; pending={run.Pending.Count}");

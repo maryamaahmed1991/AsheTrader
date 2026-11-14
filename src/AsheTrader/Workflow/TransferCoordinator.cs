@@ -107,7 +107,7 @@ public sealed partial class WorkflowService
     {
         RequirePair();
         if (!journalHealthy) throw new InvalidOperationException("Repair the saved journal before resuming.");
-        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || plugin.Fuel.Active)
+        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || (plugin.Fuel.Active || plugin.FuelQueue.HasUnfinishedRun))
             throw new InvalidOperationException("Wait for the local operation to stop before resuming.");
         if (Run is not { Paused: true, Step: not CoordinatorStep.Finished }) return;
         error = "";
@@ -877,7 +877,7 @@ public sealed partial class WorkflowService
         if (Run is not { Paused: true, TradeOperationId: null } || Run.Pending.Count != 1
             || Run.Journal != null && new TransferJobLedger(Run.Journal).HasPendingOperation)
             throw new InvalidOperationException("Pause the job and reconcile any pending trade before reviewing storage.");
-        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || plugin.Fuel.Active)
+        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || (plugin.Fuel.Active || plugin.FuelQueue.HasUnfinishedRun))
             throw new InvalidOperationException("Wait for active work to stop before reviewing storage.");
         var pending = Run.Pending.Single();
         if (pending.Command.Id != commandId || !StorageReconciliation.IsStorage(pending.Command)

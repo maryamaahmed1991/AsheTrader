@@ -617,10 +617,12 @@ public sealed partial class WorkflowService
         public HarnessConfig Config { get; } = new();
         public HarnessTrader Trader { get; } = new();
         public HarnessFuel Fuel { get; } = new();
+        public HarnessFuelQueue FuelQueue { get; } = new();
     }
     private sealed class HarnessConfig { public List<CharacterProfile> Characters { get; set; } = []; }
     private sealed class HarnessTrader { public bool IsRunning => false; }
     private sealed class HarnessFuel { public bool Active => false; }
+    private sealed class HarnessFuelQueue { public bool HasUnfinishedRun => false; }
     private sealed class HarnessExecutor { public bool IsBusy => false; }
     private sealed class HarnessPeer { public Guid? RemotePeerId { get; init; } }
 }

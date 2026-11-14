@@ -119,4 +119,34 @@ public sealed class FuelPlannerTests
     }
 
     private static FuelPolicy Policy() => new() { Enabled = true, BuyBelow = 100, TargetQuantity = 500 };
+
+    [Fact]
+    public void ExhaustCreditsPreservesSharedCompanyReserveAndFractionalRemainder()
+    {
+        var policy = new FuelPolicy { Enabled = true, ExhaustCredits = true, CreditReserve = 10_000 };
+        var result = FuelPlanner.Plan(policy, 0, 20_050, 100, 1000);
+        Assert.Equal(100U, result.Quantity);
+        Assert.Equal(10_000UL, result.CreditCost);
+    }
+
+    [Theory]
+    [InlineData(0UL)]
+    [InlineData(9_999UL)]
+    [InlineData(10_000UL)]
+    [InlineData(10_099UL)]
+    public void ReserveCannotUnderflowOrBeSpent(ulong credits)
+    {
+        var result = FuelPlanner.Plan(new FuelPolicy { Enabled = true, ExhaustCredits = true, CreditReserve = 10_000 }, 0, credits, 100, 1000);
+        Assert.Equal(0U, result.Quantity);
+        Assert.Equal(FuelPlanStatus.LimitedByCredits, result.Status);
+    }
+
+    [Fact]
+    public void RestockModeAlsoHonorsCreditReserve()
+    {
+        var policy = Policy(); policy.CreditReserve = 10_000;
+        var result = FuelPlanner.Plan(policy, 0, 15_000, 100, 1000);
+        Assert.Equal(50U, result.Quantity);
+        Assert.Equal(FuelPlanStatus.LimitedByCredits, result.Status);
+    }
 }

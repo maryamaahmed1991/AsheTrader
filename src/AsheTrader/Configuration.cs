@@ -13,6 +13,7 @@ public sealed class Configuration : IPluginConfiguration
     public List<HouseProfile> Houses { get; set; } = [];
     public bool OpenOnLoad { get; set; }
     public WorkflowSettings Workflow { get; set; } = new();
+    public FuelQueueSettings FuelSettings { get; set; } = new();
 
     public void Normalize()
     {
@@ -20,6 +21,8 @@ public sealed class Configuration : IPluginConfiguration
         Characters ??= [];
         Houses ??= [];
         Workflow ??= new();
+        FuelSettings ??= new();
+        FuelSettings.Companies ??= [];
         foreach (var list in TradeLists) list.Items ??= [];
         foreach (var character in Characters) character.Fuel ??= new FuelPolicy();
     }

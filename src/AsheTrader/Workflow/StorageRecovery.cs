@@ -27,7 +27,7 @@ public sealed partial class WorkflowService
         if (record.Response is { AutoReconciled: true }) { response = record.Response; return true; }
         try
         {
-            if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || plugin.Fuel.Active) return false;
+            if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || (plugin.Fuel.Active || plugin.FuelQueue.HasUnfinishedRun)) return false;
             if (!Plugin.ClientState.IsLoggedIn || Plugin.PlayerState.ContentId != command.Operation.CharacterId)
                 throw new InvalidOperationException("Log in the original storage character, then resume to tally its current inventory automatically.");
             if (Plugin.ObjectTable.LocalPlayer == null || NativeRetainers.HasActiveCutscene

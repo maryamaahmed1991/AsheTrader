@@ -30,7 +30,7 @@ public sealed partial class WorkflowPanel(Plugin plugin)
     private WorkflowService Service => plugin.Workflow;
     private WorkflowSettings Settings => plugin.Config.Workflow;
     private bool HasUnfinishedJob => Service.Run is { Step: not CoordinatorStep.Finished };
-    private bool LocalActionRunning => Service.Busy || plugin.Trader.IsRunning || plugin.Fuel.Active;
+    private bool LocalActionRunning => Service.Busy || plugin.Trader.IsRunning || (plugin.Fuel.Active || plugin.FuelQueue.HasUnfinishedRun);
     private bool EditingLocked => LocalActionRunning || HasUnfinishedJob;
     private bool ReadyConnection => Service.Connected && Service.RemoteRoster != null;
     private bool CoordinatorRole => HasUnfinishedJob || (Service.PairingEnabled ? Service.IsHost : coordinatorRole ?? !Settings.AllowRemoteControl);

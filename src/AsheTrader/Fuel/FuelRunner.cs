@@ -4,14 +4,17 @@ using Dalamud.Game.ClientState.Conditions;
 namespace AsheTrader.Fuel;
 
 /// <summary>
-/// Explicitly started fuel purchases in an already-open workshop shop. Each purchase is issued once,
+/// Explicitly started fuel purchases in an already-open supplier shop. Each purchase is issued once,
 /// then requires matching inventory and FC-credit changes before another purchase can begin.
 /// </summary>
 public sealed class FuelRunner
 {
     public bool Active { get; private set; }
-    public string Status { get; private set; } = "Fuel idle. Open the configured workshop's fuel shop to purchase.";
+    public string Status { get; private set; } = "Fuel idle. Configure selected buyers and destinations in Fuel.";
     public uint Purchased { get; private set; }
+    public bool CompletedNormally { get; private set; }
+    public Action<FuelPurchaseCheckpoint?, uint>? PersistPurchase { get; set; }
+    private FuelQueueEntry? queueEntry;
     private ulong characterId;
     private string houseAddress = string.Empty;
     private nint shopAddress;
@@ -31,6 +34,8 @@ public sealed class FuelRunner
     {
         if (!CanRun(out error)) return false;
         if (Active) { error = "A fuel purchase run is already active."; return false; }
+        queueEntry = null;
+        CompletedNormally = false;
         if (!character.Fuel.Enabled || character.Fuel.HouseId != house.Id)
         {
             error = "Enable fuel purchasing and assign this house to the character first.";
@@ -86,17 +91,45 @@ public sealed class FuelRunner
         return true;
     }
 
+    internal bool StartQueue(FuelQueueEntry entry, uint maximumQuantity, out string error)
+    {
+        if (!CanRun(out error)) return false;
+        if (Active) { error = "A fuel purchase is already active."; return false; }
+        CompletedNormally = false;
+        if (Plugin.PlayerState.ContentId != entry.CharacterId || entry.FreeCompanyId == 0
+            || NativeFuelShop.CurrentCompanyId != entry.FreeCompanyId)
+        { error = "The active character or FC does not match this fuel queue entry."; return false; }
+        if (!FuelDestinationRunner.IsExpectedLocation(entry))
+        { error = "The configured home-world fuel destination is not active."; return false; }
+        if (NativeFuelShop.HasConfirmation) { error = "Close the existing confirmation before starting purchases."; return false; }
+        if (!NativeFuelShop.TryRead(out var shop, out error)) return false;
+        var affordable = shop.Credits > entry.CreditReserve ? (shop.Credits - entry.CreditReserve) / shop.UnitPrice : 0;
+        remaining = Math.Min(maximumQuantity, Math.Min(shop.Capacity, affordable));
+        queueEntry = entry;
+        characterId = entry.CharacterId;
+        shopAddress = shop.Address; shopAddonId = shop.AddonId; unitPrice = shop.UnitPrice;
+        Purchased = pendingQuantity = 0; confirmed = false;
+        if (remaining == 0) { Complete("No further fuel fits the configured budget or inventory."); return true; }
+        nextActionAt = Environment.TickCount64;
+        runExpiresAt = nextActionAt + (15 * 60 * 1000);
+        Active = true;
+        Status = $"Purchasing up to {remaining:N0} tanks for {entry.CharacterName}.";
+        return true;
+    }
+
     public void Update()
     {
         if (!Active) return;
         if (!CanRun(out var error)) { Halt(error); return; }
         if (Plugin.PlayerState.ContentId != characterId) { Halt("The active character changed."); return; }
         var now = Environment.TickCount64;
-        if (now > runExpiresAt) { Halt("The 15-minute fuel run limit was reached."); return; }
+        if (now > runExpiresAt) { Halt("No fuel purchase progress was observed for fifteen minutes."); return; }
         if (now < nextActionAt) return;
-        if (!TryCaptureCurrentHouse(out var house, out error) || house.Address != houseAddress)
+        if (queueEntry != null ? !FuelDestinationRunner.IsExpectedLocation(queueEntry)
+                || NativeFuelShop.CurrentCompanyId != queueEntry.FreeCompanyId
+            : !TryCaptureCurrentHouse(out var house, out error) || house.Address != houseAddress)
         {
-            Halt("The configured workshop is no longer active.");
+            Halt("The configured fuel destination is no longer active.");
             return;
         }
         if (!NativeFuelShop.TryRead(out var shop, out error)) { Halt(error); return; }
@@ -112,10 +145,12 @@ public sealed class FuelRunner
             var expectedCost = (long)pendingQuantity * unitPrice;
             if (inventoryDelta == pendingQuantity && creditDelta == expectedCost)
             {
+                if (queueEntry != null) PersistPurchase?.Invoke(null, pendingQuantity);
                 Purchased = checked(Purchased + pendingQuantity);
                 remaining -= pendingQuantity;
                 pendingQuantity = 0;
-                nextActionAt = now + 1000;
+                runExpiresAt = now + (15 * 60 * 1000);
+                nextActionAt = now + 250;
                 Status = $"Purchased {Purchased:N0} Ceruleum Tanks; {remaining:N0} remaining.";
                 if (remaining == 0) Complete("Configured purchase quantity reached.");
                 return;
@@ -134,7 +169,11 @@ public sealed class FuelRunner
             // after either value has started changing, and never resend a previously issued purchase.
             if (!confirmed && inventoryDelta == 0 && creditDelta == 0 && NativeFuelShop.HasConfirmation)
             {
-                if (!NativeFuelShop.TryConfirmFuel(pendingShop, pendingQuantity, out error)) { Halt(error); return; }
+                if (!NativeFuelShop.TryConfirmFuel(pendingShop, pendingQuantity, out error))
+                {
+                    if (!string.IsNullOrEmpty(error)) Halt(error);
+                    return;
+                }
                 confirmed = true;
                 Status = $"Waiting for {pendingQuantity:N0} tanks and {expectedCost:N0} credits to reconcile.";
             }
@@ -143,8 +182,9 @@ public sealed class FuelRunner
 
         if (NativeFuelShop.HasConfirmation) { Halt("An unexpected confirmation is open; it was left untouched."); return; }
         if (shop.Capacity == 0) { Complete("Inventory is full."); return; }
-        if (shop.Credits < unitPrice) { Complete("Not enough FC credits remain for another tank."); return; }
-        var amount = Math.Min(99u, Math.Min(remaining, Math.Min(shop.Capacity, shop.Credits / unitPrice)));
+        var spendable = shop.Credits > (queueEntry?.CreditReserve ?? 0) ? shop.Credits - (queueEntry?.CreditReserve ?? 0) : 0;
+        if (spendable < unitPrice) { Complete("The FC credit budget is exhausted."); return; }
+        var amount = Math.Min(99u, Math.Min(remaining, Math.Min(shop.Capacity, spendable / unitPrice)));
         if (amount == 0) { Complete("No further fuel can be purchased."); return; }
         beforeQuantity = shop.InventoryQuantity;
         beforeCredits = shop.Credits;
@@ -152,6 +192,12 @@ public sealed class FuelRunner
         pendingQuantity = amount;
         confirmed = false;
         transactionExpiresAt = now + 30_000;
+        if (queueEntry != null)
+        {
+            var persist = PersistPurchase ?? throw new InvalidOperationException("Fuel purchases require a durable checkpoint.");
+            persist(new FuelPurchaseCheckpoint { CharacterId = characterId, FreeCompanyId = queueEntry.FreeCompanyId,
+                Quantity = amount, BagBefore = beforeQuantity, CreditsBefore = beforeCredits, UnitPrice = unitPrice }, 0);
+        }
         if (!NativeFuelShop.Buy(shop, amount, out error)) { Halt(error); return; }
         Status = $"Confirming purchase of {amount:N0} Ceruleum Tanks.";
     }
@@ -171,12 +217,14 @@ public sealed class FuelRunner
 
     private void Halt(string reason)
     {
+        CompletedNormally = false;
         Active = false;
         Status = $"Fuel stopped: {reason}";
     }
 
     private void Complete(string reason)
     {
+        CompletedNormally = true;
         Active = false;
         Status = $"Fuel complete: {Purchased:N0} tanks purchased. {reason}";
     }

@@ -1,5 +1,15 @@
 # Development build validation
 
+## 0.5.0 validation — 14 November 2026
+
+- Full `scripts/Build.ps1`: **619 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors against Dalamud API 15 / .NET 10.
+- Fuel tests cover world/FC grouping, selected-character ordering, same-world house validation, Resident Caretaker destinations, detached run definitions, unknown FC metadata, shared credit reserves, multi-load target accounting and full-retainer fallback. Purchase recovery requires the original character/FC and matching item/credit deltas; partial or conflicting observations cannot be replayed as an unchanged purchase.
+- The fuel queue reuses the existing native login and retainer-deposit executor, including allowed retainers, owned quantity dialogs, full-stack/partial-stack capacity handling, movement checkpoints and acknowledgement-driven pacing. Fuel purchases save their own checkpoint before each native callback. Saved queues reload paused.
+- Reviewed supplier navigation and shop handling against current AutoRetainer/Lifestream sources and game sheets. Caretaker waypoints come from Level rows or territory event layouts. Travel/menu actions verify destination and supplier identity, wait for loading, preserve cutscenes, and stop on unsupported UI. FC membership gets a post-login settling period; cached credits are never used as a purchase authorization.
+- Rendered the actual FuelPanel offline using fixture services at wide/minimum window sizes and 125% scale, including a running queue and house registration. The isolated preview adapts input widgets for its older native ImGui version; this is not an in-game screenshot.
+- Fuel queues remain local to each PC and do not add peer commands or change wire protocol 7. Existing transfer checks continue to pass. Fuel and transfer gameplay exclude each other on the same PC; connected inventory search remains available.
+- No live fuel purchases, house/caretaker navigation or repeated fuel storage cycles were performed during development. Follow [the staged fuel test guide](fuel-queue-guide.md) before a large credit-exhaustion run.
+
 ## 0.4.1 validation — 13 November 2026
 
 - Full `scripts/Build.ps1`: **570 tests passed**, zero failures/skips; plugin Release build completed with zero warnings/errors, Dalamud API 15 / .NET 10.

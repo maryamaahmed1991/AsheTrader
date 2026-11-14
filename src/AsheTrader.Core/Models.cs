@@ -11,6 +11,12 @@ public sealed class CharacterProfile
     public uint? InventoryFreeSlots { get; set; }
     /// <summary>When the AutoRetainer cache was read, not when the character's inventory was observed.</summary>
     public DateTimeOffset? InventorySlotsRetrievedAt { get; set; }
+    /// <summary>Null means FC membership is unknown; zero means the character has no FC.</summary>
+    public ulong? FreeCompanyId { get; set; }
+    public string FreeCompanyName { get; set; } = string.Empty;
+    /// <summary>Cached estimate only. Purchases must use the current shop balance.</summary>
+    public uint? FreeCompanyCredits { get; set; }
+    public DateTimeOffset? FreeCompanyCreditsObservedAt { get; set; }
     public FuelPolicy Fuel { get; set; } = new();
 }
 
@@ -21,6 +27,11 @@ public sealed class FuelPolicy
     public Guid? HouseId { get; set; }
     public uint BuyBelow { get; set; }
     public uint TargetQuantity { get; set; }
+    public uint KeepCarried { get; set; }
+    public bool DepositToRetainers { get; set; } = true;
+    public int QueueOrder { get; set; }
+    /// <summary>The queue copies this from the shared FC rule when starting a purchase pass.</summary>
+    public uint CreditReserve { get; set; }
 }
 
 public sealed class HouseProfile

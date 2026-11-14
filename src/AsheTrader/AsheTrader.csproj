@@ -1,10 +1,10 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>0.4.1.0</Version>
+    <Version>0.5.0.0</Version>
     <Name>Ashe's Trader</Name>
     <Author>Ashe</Author>
     <Punchline>Coordinate character and retainer item transfers across two PCs.</Punchline>
-    <Description>LAN-coordinated transfer jobs with priority recipients, retainer collection and overflow storage, saved progress, character switching, and workshop fuel profiles.</Description>
+    <Description>LAN-coordinated item transfers, connected-account inventory search, and independent FC fuel queues with workshop or Resident Caretaker suppliers and automatic retainer deposits.</Description>
     <Tags>trade;inventory;characters;fuel</Tags>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

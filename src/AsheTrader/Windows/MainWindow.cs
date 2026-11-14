@@ -14,6 +14,7 @@ public sealed class MainWindow : Window
     private readonly Plugin plugin;
     private readonly WorkflowPanel workflowPanel;
     private readonly ItemSearchPanel itemSearchPanel;
+    private readonly FuelPanel fuelPanel;
     private Guid selectedList;
     private string search = string.Empty;
     private string importStatus = "Import AutoRetainer's known characters to start assigning accounts.";
@@ -23,8 +24,6 @@ public sealed class MainWindow : Window
     private string error = string.Empty;
     private List<(uint Id, string Name)>? catalog;
     private int selectedPage;
-    private string fuelCharacterSearch = string.Empty;
-    private bool configuredFuelOnly;
     private IDisposable? theme;
     private static readonly string Version = typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "";
     private static readonly string[] PageTitles = ["Connection", "Transfer jobs", "Review & run", "Activity", "Fuel & houses", "Advanced tools", "Item Search"];
@@ -34,7 +33,7 @@ public sealed class MainWindow : Window
         "Choose your items, providers and destination characters.",
         "Check the route and start when both PCs are ready.",
         "Follow the current run and inspect saved progress.",
-        "Keep workshop destinations and fuel rules in one place.",
+        "Convert FC credits with world-by-world character queues.",
         "Manual trades, character profiles and local preferences.",
         "Find your items across characters and connected PCs.",
     ];
@@ -44,6 +43,7 @@ public sealed class MainWindow : Window
         this.plugin = plugin;
         workflowPanel = new WorkflowPanel(plugin);
         itemSearchPanel = new ItemSearchPanel(plugin);
+        fuelPanel = new FuelPanel(plugin);
         Size = new Vector2(1080, 760);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(880, 620), MaximumSize = new Vector2(float.MaxValue) };
@@ -80,20 +80,19 @@ public sealed class MainWindow : Window
             }
             if (selectedPage <= 3) selectedPage = workflowPanel.Draw(selectedPage);
             else if (selectedPage == 6) itemSearchPanel.Draw();
+            else if (selectedPage == 4)
+            {
+                if (ImGui.BeginChild("FuelPage", new Vector2(0, 0))) fuelPanel.Draw();
+                ImGui.EndChild();
+            }
             else
             {
                 if (ImGui.BeginChild("ToolPage", new Vector2(0, 0)))
                 {
-                    var workflowLocked = plugin.Workflow.Busy || plugin.Workflow.Run is { Step: not Workflow.CoordinatorStep.Finished };
+                    var workflowLocked = plugin.Workflow.Busy || plugin.Workflow.Run is { Step: not Workflow.CoordinatorStep.Finished } || plugin.FuelQueue.HasUnfinishedRun;
                     if (workflowLocked)
-                        UiTone.Wrapped(UiTone.Warning, "These settings stay locked while a transfer job is unfinished. Finish or end a resolved job before making changes.");
-                    if (selectedPage == 4)
-                    {
-                        ImGui.BeginDisabled(workflowLocked);
-                        DrawFuel();
-                        ImGui.EndDisabled();
-                    }
-                    else DrawAdvanced(workflowLocked);
+                        UiTone.Wrapped(UiTone.Warning, "These settings stay locked while a transfer or fuel queue is unfinished. Finish or end the run before making changes.");
+                    DrawAdvanced(workflowLocked);
                 }
                 ImGui.EndChild();
             }
@@ -112,7 +111,7 @@ public sealed class MainWindow : Window
         ImGui.TextDisabled("YOUR WORKSPACE");
         ImGui.Spacing();
         string[] labels = ["Connection", "Jobs", "Review & run", "Activity", "Fuel & houses", "Advanced", "Item Search"];
-        string[] details = ["PCs & integrations", "Items & characters", "Ready to transfer", "Progress & diagnostics", "Workshop restocking", "Manual controls", "Across your inventories"];
+        string[] details = ["PCs & integrations", "Items & characters", "Ready to transfer", "Progress & diagnostics", "FC fuel queues", "Manual controls", "Across your inventories"];
         int[] order = [0, 1, 2, 3, 6, 4, 5];
         // The page list can scroll at small window sizes; run status stays reachable below it.
         if (ImGui.BeginChild("NavigationPages", new Vector2(0, Math.Max(TraderStyle.Px(130), ImGui.GetContentRegionAvail().Y - TraderStyle.Px(82)))))
@@ -127,8 +126,9 @@ public sealed class MainWindow : Window
         var footerY = ImGui.GetWindowHeight() - TraderStyle.Px(82);
         if (ImGui.GetCursorPosY() < footerY) ImGui.SetCursorPosY(footerY);
         ImGui.Separator();
-        var active = plugin.Workflow.Busy || plugin.Trader.IsRunning || plugin.Fuel.Active;
-        var paused = plugin.Workflow.Run is { Paused: true, Step: not Workflow.CoordinatorStep.Finished };
+        var active = plugin.Workflow.Busy || plugin.Trader.IsRunning || plugin.Fuel.Active || plugin.FuelQueue.Active;
+        var paused = plugin.Workflow.Run is { Paused: true, Step: not Workflow.CoordinatorStep.Finished }
+            || plugin.FuelQueue.HasUnfinishedRun && !plugin.FuelQueue.Active;
         TraderStyle.Badge(active ? "RUNNING" : paused ? "PAUSED" : "IDLE", active ? TraderStyle.Accent : paused ? TraderStyle.Gold : TraderStyle.Muted);
         ImGui.TextDisabled($"Version {Version}");
     }
@@ -142,7 +142,7 @@ public sealed class MainWindow : Window
             ImGui.TableNextRow(); ImGui.TableNextColumn();
             TraderStyle.Section(PageTitles[selectedPage], PageDescriptions[selectedPage]);
             ImGui.TableNextColumn();
-            ImGui.BeginDisabled(!plugin.Trader.IsRunning && !plugin.Fuel.Active && !plugin.Workflow.Busy);
+            ImGui.BeginDisabled(!plugin.Trader.IsRunning && !plugin.Fuel.Active && !plugin.Workflow.Busy && !plugin.FuelQueue.Active);
             if (TraderStyle.DangerButton("STOP ALL", new Vector2(-1, 34))) plugin.QueueAction(plugin.StopAll);
             ImGui.EndDisabled();
             if (ImGui.IsItemHovered()) ImGui.SetTooltip("Stop all actions on this PC and pause the paired workflow.");
@@ -316,113 +316,6 @@ public sealed class MainWindow : Window
         plugin.Workflow.RefreshRosters();
         importStatus = plugin.Workflow.RosterStatus;
         plugin.Record(importStatus);
-    }
-
-    private void DrawFuel()
-    {
-        ImGui.BeginDisabled(plugin.Trader.IsRunning || plugin.Fuel.Active);
-        if (TraderStyle.BeginCard("WorkshopDestinations"))
-        {
-            TraderStyle.Section("Workshop destinations", "Import your saved Lifestream houses, or record the workshop you are standing in.");
-            if (TraderStyle.SecondaryButton("Import Lifestream houses")) plugin.QueueAction(() =>
-            {
-                if (!plugin.Lifestream.TryGetHouses(out var houses, out var reason)) { plugin.Record(reason); return; }
-                foreach (var house in houses)
-                    if (plugin.Config.Houses.All(x => x.Address != house.Address)) plugin.Config.Houses.Add(house);
-                plugin.Save(); plugin.Record($"Imported {houses.Count} Lifestream house destinations.");
-            });
-            if (ImGui.GetContentRegionAvail().X > TraderStyle.Px(410)) ImGui.SameLine();
-            if (TraderStyle.SecondaryButton("Record this workshop")) plugin.QueueAction(() =>
-            {
-                if (!FuelRunner.TryCaptureCurrentHouse(out var house, out var reason)) { plugin.Record(reason); return; }
-                if (plugin.Config.Houses.All(x => x.Address != house.Address)) plugin.Config.Houses.Add(house);
-                plugin.Save(); plugin.Record($"Recorded {house.Name}.");
-            });
-            ImGui.Spacing();
-            if (plugin.Config.Houses.Count == 0)
-                UiTone.Wrapped(TraderStyle.Muted, "No destinations saved yet. Add a house above, then assign it to a character below.");
-            foreach (var house in plugin.Config.Houses)
-            {
-                ImGui.PushID(house.Id.ToString());
-                if (ImGui.CollapsingHeader(house.Name.Length == 0 ? "Unnamed workshop" : house.Name))
-                {
-                    var name = house.Name;
-                    ImGui.SetNextItemWidth(-1);
-                    if (ImGui.InputText("##HouseName", ref name, 100)) { house.Name = name; plugin.Save(); }
-                    UiTone.Wrapped(TraderStyle.Muted, HouseAddress(house));
-                    if (house.Address.StartsWith("ls-house:", StringComparison.Ordinal) && TraderStyle.SecondaryButton("Travel to this house"))
-                    {
-                        var destination = house;
-                        plugin.QueueAction(() => { EnsureArIdle(); if (!plugin.Lifestream.TryTravel(destination, out var reason)) plugin.Record(reason); else plugin.Record($"Lifestream travel requested: {destination.Name}."); });
-                    }
-                }
-                ImGui.PopID();
-            }
-        }
-        TraderStyle.EndCard();
-        if (TraderStyle.BeginCard("FuelRules"))
-        {
-            TraderStyle.Section("Character restock rules", "Choose a house and amount for each character. Open its workshop's Ceruleum Tank shop before starting purchases.");
-            ImGui.SetNextItemWidth(-1);
-            ImGui.InputTextWithHint("##FuelCharacterSearch", "Find a character or world…", ref fuelCharacterSearch, 100);
-            ImGui.Checkbox("Show configured characters only", ref configuredFuelOnly);
-            var characters = plugin.Config.Characters.Where(character => (!configuredFuelOnly || character.Fuel.Enabled)
-                && (fuelCharacterSearch.Length == 0 || character.Name.Contains(fuelCharacterSearch, StringComparison.OrdinalIgnoreCase)
-                    || character.World.Contains(fuelCharacterSearch, StringComparison.OrdinalIgnoreCase))).ToArray();
-            ImGui.TextDisabled($"{characters.Length} of {plugin.Config.Characters.Count} characters");
-            if (plugin.Config.Characters.Count == 0)
-                UiTone.Wrapped(TraderStyle.Muted, "Your roster is empty. Open Connection and refresh characters from AutoRetainer first.");
-            else if (characters.Length == 0)
-                UiTone.Wrapped(TraderStyle.Muted, "No characters match these filters.");
-            foreach (var character in characters)
-            {
-                ImGui.PushID(character.ContentId.ToString());
-                if (ImGui.CollapsingHeader($"{character.Name} · {character.World}##fuel"))
-                {
-                    var fuel = character.Fuel;
-                    var enabled = fuel.Enabled;
-                    if (ImGui.Checkbox("Include in fuel runs", ref enabled)) { fuel.Enabled = enabled; plugin.Save(); }
-                    var selected = plugin.Config.Houses.FirstOrDefault(x => x.Id == fuel.HouseId);
-                    ImGui.SetNextItemWidth(-1);
-                    if (ImGui.BeginCombo("##WorkshopHouse", selected?.Name ?? "Select a workshop house"))
-                    {
-                        foreach (var house in plugin.Config.Houses)
-                            if (ImGui.Selectable($"{house.Name} — {HouseAddress(house)}##{house.Id}", house.Id == fuel.HouseId)) { fuel.HouseId = house.Id; plugin.Save(); }
-                        ImGui.EndCombo();
-                    }
-                    var exhaust = fuel.ExhaustCredits;
-                    if (ImGui.Checkbox("Buy until FC credits or inventory space run out", ref exhaust)) { fuel.ExhaustCredits = exhaust; plugin.Save(); }
-                    ImGui.BeginDisabled(exhaust);
-                    var below = (int)Math.Min(fuel.BuyBelow, int.MaxValue);
-                    var target = (int)Math.Min(fuel.TargetQuantity, int.MaxValue);
-                    ImGui.SetNextItemWidth(TraderStyle.Px(160));
-                    if (ImGui.InputInt("Buy when carrying fewer than", ref below)) { fuel.BuyBelow = (uint)Math.Max(0, below); plugin.Save(); }
-                    ImGui.SetNextItemWidth(TraderStyle.Px(160));
-                    if (ImGui.InputInt("Restock to this total", ref target)) { fuel.TargetQuantity = (uint)Math.Max(0, target); plugin.Save(); }
-                    ImGui.EndDisabled();
-                    ImGui.BeginDisabled(selected == null || !fuel.Enabled || character.ContentId != Plugin.PlayerState.ContentId);
-                    if (TraderStyle.PrimaryButton("Start workshop purchases", new Vector2(-1, 38)) && selected != null)
-                    {
-                        var profile = character; var destination = selected;
-                        plugin.QueueAction(() => { EnsureArIdle(); if (!plugin.Fuel.Start(profile, destination, out var reason)) plugin.Record(reason); });
-                    }
-                    ImGui.EndDisabled();
-                    if (character.ContentId != Plugin.PlayerState.ContentId)
-                        UiTone.Wrapped(TraderStyle.Muted, "Log into this character and open the fuel shop to start.");
-                    ImGui.Spacing();
-                }
-                ImGui.PopID();
-            }
-        }
-        TraderStyle.EndCard();
-        ImGui.EndDisabled();
-    }
-
-    private static string HouseAddress(HouseProfile house)
-    {
-        if (!LifestreamClient.TryParseAddress(house.Address, out var destination)) return house.Address;
-        var world = Plugin.DataManager.GetExcelSheet<World>().GetRowOrDefault((uint)destination.World);
-        return $"{world?.Name.ToString() ?? $"World {destination.World}"} · {LifestreamClient.DistrictName(destination.City)} · Ward {destination.Ward}, Plot {destination.Plot}";
     }
 
     private void DrawActivity()

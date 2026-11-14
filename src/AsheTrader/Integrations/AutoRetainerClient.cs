@@ -15,7 +15,13 @@ internal sealed record AutoRetainerCharacterSnapshot(
     int ServiceAccount,
     uint Gil,
     uint InventorySpace,
-    int Ceruleum);
+    int Ceruleum)
+{
+    public ulong? FreeCompanyId { get; init; }
+    public string FreeCompanyName { get; init; } = "";
+    public uint? FreeCompanyCredits { get; init; }
+    public DateTimeOffset? FreeCompanyCreditsObservedAt { get; init; }
+}
 
 /// <summary>Unknown state values stay null so callers cannot mistake missing IPC for an idle plugin.</summary>
 internal sealed record AutoRetainerStatus(bool Ready, bool? Busy, bool? MultiModeEnabled, string? Error);
@@ -85,6 +91,9 @@ internal sealed class AutoRetainerClient(
                 return false;
             }
 
+            Dictionary<ulong, CompanyWireData>? companies = null;
+            try { companies = pluginInterface.GetIpcSubscriber<Dictionary<ulong, CompanyWireData>>("AutoRetainer.GetConfig.FCData").InvokeFunc(); }
+            catch (Exception ex) { log.Debug(ex, "Optional AutoRetainer FC cache is unavailable"); }
             var imported = new List<AutoRetainerCharacterSnapshot>(contentIds.Count);
             foreach (var contentId in contentIds.Distinct())
             {
@@ -110,9 +119,18 @@ internal sealed class AutoRetainerClient(
                     return false;
                 }
 
+                var company = data.FCID.HasValue ? companies?.GetValueOrDefault(data.FCID.Value) : null;
+                DateTimeOffset? companyObserved = null;
+                if (company?.FCPointsLastUpdate is > 0 and <= 253402300799999)
+                    companyObserved = DateTimeOffset.FromUnixTimeMilliseconds(company.FCPointsLastUpdate);
                 imported.Add(new(
                     contentId, data.Name, data.World, data.ServiceAccount.Value,
-                    data.Gil.Value, data.InventorySpace.Value, data.Ceruleum.Value));
+                    data.Gil.Value, data.InventorySpace.Value, data.Ceruleum.Value)
+                {
+                    FreeCompanyId = data.FCID, FreeCompanyName = company?.Name ?? "",
+                    FreeCompanyCredits = company?.FCPoints is >= 0 and <= uint.MaxValue ? (uint)company.FCPoints : null,
+                    FreeCompanyCreditsObservedAt = companyObserved,
+                });
             }
 
             characters = imported.AsReadOnly();
@@ -206,6 +224,7 @@ internal sealed class AutoRetainerClient(
     // required fields stay null instead of silently becoming believable zero-value snapshots.
     private sealed class CharacterWireData
     {
+        public ulong? FCID { get; set; }
         public ulong? CID { get; set; }
         public string? Name { get; set; }
         public string? World { get; set; }
@@ -213,5 +232,12 @@ internal sealed class AutoRetainerClient(
         public uint? Gil { get; set; }
         public uint? InventorySpace { get; set; }
         public int? Ceruleum { get; set; }
+    }
+
+    private sealed class CompanyWireData
+    {
+        public string? Name { get; set; }
+        public long? FCPoints { get; set; }
+        public long FCPointsLastUpdate { get; set; }
     }
 }

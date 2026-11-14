@@ -141,7 +141,7 @@ public sealed partial class WorkflowService : IDisposable
 
     private void RequireIdle()
     {
-        if (Busy || plugin.Trader.IsRunning || plugin.Fuel.Active) throw new InvalidOperationException("Stop the current operation first.");
+        if (Busy || plugin.Trader.IsRunning || (plugin.Fuel.Active || plugin.FuelQueue.HasUnfinishedRun)) throw new InvalidOperationException("Stop the current operation first.");
         if (!journalHealthy) throw new InvalidOperationException(error);
     }
 
@@ -154,6 +154,8 @@ public sealed partial class WorkflowService : IDisposable
             Send("roster-request", new { });
         }
     }
+
+    public void RefreshLocalRoster() => ImportLocalCharacters();
 
     private void ImportLocalCharacters()
     {
@@ -176,6 +178,10 @@ public sealed partial class WorkflowService : IDisposable
             character.Name = row.Name; character.World = row.World; character.ServiceAccount = row.ServiceAccount;
             character.InventoryFreeSlots = row.InventorySpace;
             character.InventorySlotsRetrievedAt = DateTimeOffset.UtcNow;
+            character.FreeCompanyId = row.FreeCompanyId;
+            character.FreeCompanyName = row.FreeCompanyName;
+            character.FreeCompanyCredits = row.FreeCompanyCredits;
+            character.FreeCompanyCreditsObservedAt = row.FreeCompanyCreditsObservedAt;
         }
         plugin.Save();
         RosterStatus = imported.Count == 0
@@ -340,7 +346,7 @@ public sealed partial class WorkflowService : IDisposable
         { Reply(caller, new() { CommandId = command.Id, Error = "This worker has an unresolved trade. Reconcile it before issuing more work." }); return; }
         if (caller != Settings.PeerId && !Settings.AllowRemoteControl)
         { Reply(caller, new() { CommandId = command.Id, Error = "Enable paired workflow control on this PC." }); return; }
-        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || plugin.Fuel.Active)
+        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || (plugin.Fuel.Active || plugin.FuelQueue.HasUnfinishedRun))
         { Reply(caller, new() { CommandId = command.Id, Error = "This client is busy with another operation." }); return; }
         var character = plugin.Config.Characters.FirstOrDefault(x => x.ContentId == command.Operation.CharacterId)
             ?? throw new InvalidOperationException("Requested character is not in this client's configured roster.");
@@ -500,7 +506,7 @@ public sealed partial class WorkflowService : IDisposable
 
     private string? TradeTallyReadiness(WorkerRecord record)
     {
-        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || plugin.Fuel.Active)
+        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || (plugin.Fuel.Active || plugin.FuelQueue.HasUnfinishedRun))
             return "Waiting for both characters' active operations to stop…";
         if (!Plugin.ClientState.IsLoggedIn || Plugin.PlayerState.ContentId != record.Command.Operation.CharacterId)
             throw new InvalidOperationException("Log in the original trade character on this PC, then use Resume / tally inventories.");
@@ -631,7 +637,7 @@ public sealed partial class WorkflowService : IDisposable
                 Reply(caller, storageRecord.Response!);
                 return;
             }
-            if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || plugin.Fuel.Active)
+            if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || (plugin.Fuel.Active || plugin.FuelQueue.HasUnfinishedRun))
                 throw new InvalidOperationException("Stop active work before storage reconciliation.");
             if (!Plugin.ClientState.IsLoggedIn || Plugin.PlayerState.ContentId != storageRecord.Command.Operation.CharacterId)
                 throw new InvalidOperationException("Log in the original storage character before reviewing its bags and retainers.");

@@ -34,6 +34,7 @@ public sealed class Plugin : IDalamudPlugin
     internal AutoRetainerClient AutoRetainer { get; }
     internal LifestreamClient Lifestream { get; }
     public FuelRunner Fuel { get; }
+    public FuelQueueService FuelQueue { get; }
     public WorkflowService Workflow { get; }
     public string SettingsError { get; private set; } = string.Empty;
     public Queue<string> Activity { get; } = new();
@@ -41,6 +42,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly MainWindow mainWindow;
     private string lastStatus = string.Empty;
     private string lastFuelStatus = string.Empty;
+    private string lastFuelQueueStatus = string.Empty;
     private string lastWorkflowStatus = string.Empty;
     private long nextArCheck;
     private readonly SettingsFileStore settings;
@@ -56,6 +58,7 @@ public sealed class Plugin : IDalamudPlugin
         Lifestream = new LifestreamClient();
         Fuel = new FuelRunner();
         Workflow = new WorkflowService(this);
+        FuelQueue = new FuelQueueService(this);
         Trader.Diagnostic = Workflow.RecordTradeDiagnostic;
         Save();
         mainWindow = new MainWindow(this) { IsOpen = Config.OpenOnLoad };
@@ -108,7 +111,7 @@ public sealed class Plugin : IDalamudPlugin
         Config = LoadSettings();
     }
 
-    public void StopAll() { Trader.Stop(); Fuel.Stop(); Workflow.Pause("Paused by user."); }
+    public void StopAll() { FuelQueue.Pause(); Trader.Stop(); Fuel.Stop(); Workflow.Pause("Paused by user."); }
     public void Open() => mainWindow.IsOpen = true;
     public void Record(string message)
     {
@@ -148,18 +151,25 @@ public sealed class Plugin : IDalamudPlugin
             }
             Trader.Update();
             Fuel.Update();
+            FuelQueue.Update();
             Workflow.Update();
         }
         catch (Exception ex) { StopAll(); Record($"Operation stopped: {ex.Message}"); Log.Error(ex, "Runner update failed"); }
         if (lastStatus != Trader.Status) { lastStatus = Trader.Status; Record(lastStatus); }
         if (lastFuelStatus != Fuel.Status) { lastFuelStatus = Fuel.Status; Record(lastFuelStatus); }
+        if (lastFuelQueueStatus != FuelQueue.Status) { lastFuelQueueStatus = FuelQueue.Status; Record(lastFuelQueueStatus); }
         if (lastWorkflowStatus != Workflow.Status) { lastWorkflowStatus = Workflow.Status; Record(lastWorkflowStatus); }
     }
 
     private void OnLogout(int type, int code)
     {
-        Trader.Stop(); Fuel.Stop();
-        if (!Workflow.ExpectsLogout) Workflow.Pause("Unexpected logout; job paused.");
+        Trader.Stop();
+        if (!FuelQueue.ExpectsLogout)
+        {
+            FuelQueue.Pause("Unexpected logout; fuel queue paused.");
+            Fuel.Stop();
+            if (!Workflow.ExpectsLogout) Workflow.Pause("Unexpected logout; job paused.");
+        }
     }
 
     public void Dispose()
@@ -172,6 +182,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi -= Open;
         CommandManager.RemoveHandler("/ashetrader");
         Trader.Dispose();
+        FuelQueue.Shutdown();
         Workflow.Dispose();
         Fuel.Stop();
         windows.RemoveAllWindows();

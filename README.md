@@ -1,12 +1,12 @@
 # Ashe's Trader
 
-Dalamud API 15 / .NET 10 plugin for two-account item transfers across two PCs on a home network.
+Dalamud API 15 / .NET 10 plugin for two-account item transfers across two PCs and local character queues that convert FC credits into Ceruleum Tanks.
 
-This is a development build prepared for staged two-PC testing. The planner, journals, LAN transport, and coordinator have automated tests; native game callbacks, retainer UI transitions, and travel need in-game validation. No live trades or purchases have been performed during development.
+This is a development build with automated coverage for planning, journals, LAN transport and coordinator behavior. The new fuel queue still needs in-game validation of supplier travel, purchases and repeated deposits. The development agent has not performed live game actions.
 
 ## Features
 
-- Use a redesigned dark workspace with sidebar navigation, teal actions, gold headings, readable cards, searchable characters, responsive recipient editing and persistent stop controls. Only the coordinator configures jobs.
+- Use a redesigned dark workspace with sidebar navigation, teal actions, gold headings, readable cards, searchable characters, responsive recipient editing and persistent stop controls. The coordinator configures transfer jobs; each PC configures its own fuel queue.
 - Pair one coordinator PC and one worker PC using an authenticated, encrypted LAN connection.
 - Find nearby coordinators by PC label without copying IP addresses. Hosting chooses a local network adapter automatically; manual connection remains available.
 - Import each PC's AutoRetainer roster and plan from Allagan Tools' cached character and retainer inventories.
@@ -23,7 +23,17 @@ This is a development build prepared for staged two-PC testing. The planner, jou
 - Return a full receiver home, deposit received job items into allowed retainers, then return and continue.
 - Pace trade offers at a minimum of 250 ms, advancing on observed game readiness instead of stacked delays.
 - Persist worker results and coordinator progress. Resume tallies both PCs' current inventories and reconciles interrupted transfers automatically.
-- Preserve the local trade-list mode, workshop fuel purchasing, and Lifestream house import.
+- Run fuel buyers in world → FC → character order, with shared FC credit reserves, same-world workshop houses or Resident Caretakers, repeated retainer deposits and saved progress.
+- Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
+- Preserve the local trade-list mode and existing transfer settings.
+
+## Version 0.5.0
+
+**Fuel & houses** now manages a sequential fuel queue on each PC. Characters are grouped by home world and FC, with an FC destination and optional credit reserve. Choose a registered workshop on the same world or a Resident Caretaker in an accessible residential district. Lifestream houses refresh automatically; additional houses can be registered by world, district, ward and plot. Character house overrides must also be on that character's home world.
+
+Selected buyers log in, visit the supplier, buy fuel and deposit it with the same retainer movement engine used by transfer jobs. Credit-exhaustion runs repeat until the current FC balance reaches its reserve or no selected buyer can store more. A full buyer's storage leaves the remaining work for the next selected character in that FC. Deposits store **all carried tanks above the configured keep-carried amount, including pre-existing fuel**.
+
+FC balances shown in setup are cached estimates; purchases check live credits and inventory changes. Progress is saved, reloads remain paused, and Resume tallies outstanding purchases or deposits before continuing. Fuel queues run independently of LAN pairing and cannot share a PC with an unfinished transfer job. See the [fuel queue setup and first-test guide](docs/fuel-queue-guide.md). This release's new fuel workflow has not yet been validated in-game.
 
 ## Version 0.4.1
 
@@ -59,17 +69,17 @@ Custom repository URL:
 
 `https://raw.githubusercontent.com/maryamaahmed1991/AsheTrader/main/repo.json`
 
-Add that URL on both PCs under `/xlsettings` → Experimental → Custom Plugin Repositories, enable the repository, and save. Search for **Ashe's Trader** in `/xlplugins` and install it. Open `/ashetrader`, then follow [the two-PC test guide](docs/two-pc-test-guide.md).
+Add that URL on both PCs under `/xlsettings` → Experimental → Custom Plugin Repositories, enable the repository, and save. Search for **Ashe's Trader** in `/xlplugins` and install it. Open `/ashetrader`, then follow [the two-PC test guide](docs/two-pc-test-guide.md) for transfers or the [fuel queue guide](docs/fuel-queue-guide.md) for fuel buying.
 
 If you already loaded a development copy, disable that copy before installing the repository version. Keep your existing configuration and journals.
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.4.1.0.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.5.0.0.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.
-5. Follow [the two-PC test guide](docs/two-pc-test-guide.md).
+5. Follow [the two-PC test guide](docs/two-pc-test-guide.md) or [fuel queue guide](docs/fuel-queue-guide.md).
 
 The plugin does not open a network listener or resume gameplay merely by loading. Pairing and jobs are explicitly started in the UI. `/ashetrader stop` pauses the current operation and notifies the peer.
 

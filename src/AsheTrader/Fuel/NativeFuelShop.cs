@@ -14,6 +14,16 @@ internal readonly record struct FuelShopSnapshot(nint Address, ushort AddonId, u
 
 internal static unsafe class NativeFuelShop
 {
+    public static ulong CurrentCompanyId
+    {
+        get
+        {
+            var info = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoModule.Instance();
+            if (info == null) return 0;
+            var company = info->GetInfoProxyFreeCompany();
+            return company == null ? 0 : company->Id;
+        }
+    }
     public const uint FuelItemId = 10155;
     private static readonly InventoryType[] Bags = [InventoryType.Inventory1, InventoryType.Inventory2, InventoryType.Inventory3, InventoryType.Inventory4];
 
@@ -53,7 +63,7 @@ internal static unsafe class NativeFuelShop
         var addon = ReadyAddon("FreeCompanyCreditShop");
         if (addon == null)
         {
-            error = "Open the workshop's Ceruleum Tank credit shop before starting.";
+            error = "Open the configured supplier's Ceruleum Tank credit shop before starting.";
             return false;
         }
 
@@ -117,7 +127,7 @@ internal static unsafe class NativeFuelShop
         var confirmation = (AddonSelectYesno*)ReadyAddon("SelectYesno");
         if (confirmation == null || confirmation->PromptText == null)
         {
-            error = "Waiting for the fuel purchase confirmation.";
+            error = string.Empty; // The pending transaction's deadline bounds UI readiness waits.
             return false;
         }
         var shop = ReadyAddon("FreeCompanyCreditShop");
@@ -165,7 +175,7 @@ internal static unsafe class NativeFuelShop
         var button = confirmation->YesButton;
         if (button == null || button->OwnerNode == null || !button->IsEnabled || !button->OwnerNode->AtkResNode.IsVisible())
         {
-            error = "The fuel confirmation button is not ready.";
+            error = string.Empty;
             return false;
         }
         var registered = button->OwnerNode->AtkResNode.AtkEventManager.Event;
