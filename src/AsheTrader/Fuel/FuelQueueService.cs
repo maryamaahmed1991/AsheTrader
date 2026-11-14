@@ -60,6 +60,7 @@ public sealed class FuelQueueService
     {
         executor.CaptureDiagnosticSnapshot(reason);
         destination.CaptureDiagnosticSnapshot(reason);
+        plugin.Fuel.CaptureDiagnosticSnapshot(reason);
     }
 
     public FuelQueueService(Plugin plugin)

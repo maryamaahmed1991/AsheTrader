@@ -27,6 +27,10 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.5.0.6
+
+Fuel buying can recover automatically when the FC shop rejects a request with an inventory-space error before opening a confirmation. It waits for two seconds of unchanged inventory and credits in the original shop, then retries with a maximum of three total attempts. A confirmation or any observed item/credit change prevents retries; the saved purchase checkpoint remains intact. Diagnostics now include native shop capacity, displayed quantity, confirmation state and attempt history. Update and Resume the existing queue to tally the interrupted request and continue.
+
 ## Version 0.5.0.5
 
 Fuel runs recognize the additional-chambers door by its localized name, as Lifestream does, instead of requiring one specific object ID. This fixes stopping after the saved workshop path completes in interiors with another door variant. The configured house and selected interaction target remain verified. Diagnostics now include nearby interior door IDs, names, targetability and matching results. Update and Resume the existing fuel queue; no path re-recording is needed.
@@ -95,7 +99,7 @@ If you already loaded a development copy, disable that copy before installing th
 
 ## Install a local development build
 
-1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.5.0.5.zip`.
+1. Build using `pwsh ./scripts/Build.ps1`, or use the supplied `AsheTrader-0.5.0.6.zip`.
 2. On **each** PC, extract the ZIP to a stable local directory. Keep both `AsheTrader.dll` and `AsheTrader.Core.dll`, plus the manifest, together.
 3. In `/xlsettings` → Experimental → Dev Plugin Locations, add the full path to `AsheTrader.dll`.
 4. Enable it under `/xlplugins` → Dev Tools. Open `/ashetrader`.

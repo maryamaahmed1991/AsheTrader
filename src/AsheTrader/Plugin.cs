@@ -10,6 +10,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Newtonsoft.Json;
 using AsheTrader.Workflow;
+using Dalamud.Game.Chat;
 
 namespace AsheTrader;
 
@@ -60,6 +61,7 @@ public sealed class Plugin : IDalamudPlugin
         Workflow = new WorkflowService(this);
         FuelQueue = new FuelQueueService(this);
         Trader.Diagnostic = Workflow.RecordTradeDiagnostic;
+        Fuel.Diagnostic = message => Workflow.RecordDiagnostic("fuel purchase " + message);
         Save();
         mainWindow = new MainWindow(this) { IsOpen = Config.OpenOnLoad };
         windows.AddWindow(mainWindow);
@@ -70,6 +72,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi += Open;
         Framework.Update += Update;
         ClientState.Logout += OnLogout;
+        ChatGui.LogMessage += OnLogMessage;
         Record("Loaded. No trading or purchasing starts automatically.");
     }
 
@@ -138,6 +141,13 @@ public sealed class Plugin : IDalamudPlugin
         else Open();
     }
 
+    private void OnLogMessage(ILogMessage message)
+    {
+        // Copy only this specific game-generated FC purchase error. No chat is retained,
+        // and no native calls or retry actions run from the log-message hook.
+        if (message.LogMessageId == 4167) Fuel.SignalInventoryRejection();
+    }
+
     private void Update(IFramework framework)
     {
         try
@@ -177,6 +187,7 @@ public sealed class Plugin : IDalamudPlugin
         disposed = true;
         Framework.Update -= Update;
         ClientState.Logout -= OnLogout;
+        ChatGui.LogMessage -= OnLogMessage;
         PluginInterface.UiBuilder.Draw -= windows.Draw;
         PluginInterface.UiBuilder.OpenMainUi -= Open;
         PluginInterface.UiBuilder.OpenConfigUi -= Open;

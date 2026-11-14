@@ -7,6 +7,7 @@ using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using AsheTrader.Workflow.Native;
 
 namespace AsheTrader.Fuel;
 
@@ -83,6 +84,20 @@ internal static unsafe class NativeFuelShop
 
     public static bool HasConfirmation => ReadyAddon("SelectYesno") != null;
 
+    internal static bool RetryUiReady => !HasConfirmation && !NativeRetainers.HasUnrelatedModal
+        && !NativeRetainers.HasNumeric && !NativeRetainers.HasRetainerList && !NativeRetainers.HasRetainerInventory
+        && NativeRetainers.Ready("Trade") == null && NativeRetainers.Ready("SelectString") == null
+        && NativeRetainers.Ready("SelectIconString") == null && NativeRetainers.Ready("Talk") == null;
+
+    internal static string Describe()
+    {
+        var addon = ReadyAddon("FreeCompanyCreditShop");
+        var readable = TryRead(out var shop, out var error);
+        var number = addon == null ? null : QuantityControl(addon);
+        var uiQuantity = addon != null && TryUInt(addon, 90, out var displayed) ? displayed.ToString() : "unavailable";
+        return $"readable={readable}; addon={shop.AddonId}; credits={shop.Credits}; price={shop.UnitPrice}; bags={shop.InventoryQuantity}; capacity={shop.Capacity}; displayedInventory={uiQuantity}; numeric={(number == null ? "unavailable" : number->Value.ToString())}; confirmation={HasConfirmation}; retryUiReady={RetryUiReady}; error={error}";
+    }
+
     public static bool Buy(FuelShopSnapshot expected, uint quantity, out string error)
     {
         var addon = ReadyAddon("FreeCompanyCreditShop");
@@ -96,6 +111,8 @@ internal static unsafe class NativeFuelShop
             error = "The fuel shop changed before the purchase was issued.";
             return false;
         }
+        if (quantity > current.Capacity || (ulong)quantity * current.UnitPrice > current.Credits)
+        { error = "The fuel quantity exceeds the current capacity or FC credits."; return false; }
         // Current AR's TaskRecursivelyBuyFuel sets this numeric control before the row-zero list click.
         var number = QuantityControl(addon);
         var stage = AtkStage.Instance();

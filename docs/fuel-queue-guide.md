@@ -47,6 +47,8 @@ The run bar shows the current action and accumulated tanks bought/stored. **Curr
 
 **Pause** stops the queue and saves its state. Reloading the plugin leaves saved work paused. **Resume** reconciles any recorded purchase or deposit against current counts before scheduling more work. If a retainer deposit was interrupted and the character changed, return to the affected character when prompted so its inventory can be tallied. Ambiguous changes remain a visible pause rather than being repeated blindly.
 
+Version **0.5.0.6** automatically handles the specific FC-shop inventory-space rejection when it occurs before a confirmation appears. With the original shop still open and inventory/credits unchanged for two seconds, it can retry twice with increasing delay. Confirmed requests, changed totals, unrelated errors and unanswered requests without an explicit rejection are not retried. Persistent failures still pause; **Copy diagnostics** now includes the purchase's native state and attempt history. After updating an already-paused run, Resume tallies its saved request before continuing.
+
 **End queue** preserves completed progress. An outstanding purchase or deposit is tallied before the queue finishes; no new purchase begins during that ending step.
 
 If something stalls, use **Copy diagnostics** in the fuel run bar on the affected PC before changing the game menu. Include which character, destination and screen were visible. The report contains identifiers and recent steps, but excludes pairing keys and chat.

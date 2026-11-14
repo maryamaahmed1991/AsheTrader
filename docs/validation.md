@@ -1,5 +1,14 @@
 # Development build validation
 
+## 0.5.0.6 validation — 14 November 2026
+
+- Full `scripts/Build.ps1`: **819 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.
+- The user completed one full fuel run, including repeated purchases/deposits through credit exhaustion. A second character's supplied trace verifies 13 purchases of 99 tanks, then a 14th request that never reached confirmation and timed out. The screenshot shows the inventory-space error with 124 free slots. Neither the screenshot nor trace establishes why the game rejected that request; no capacity arithmetic defect was found.
+- Installed-game LogMessage 4167 matches that error and belongs to the FC exchange block. The observer copies only the numeric ID's timestamp through Dalamud's typed LogMessage event; no chat text is retained or suppressed. Native work stays on the framework thread.
+- AutoRetainer's recursive fuel buyer retries its request after a two-second throttle when credits remain unchanged. Our recovery is limited to an explicit rejection before any confirmation, unchanged original character/FC/shop/price and item/credit baselines, two seconds of ready observations, and three total dispatches. The original durable purchase checkpoint remains unchanged through retries.
+- Fifteen retry-gate regressions cover the supplied failure pattern, absent/stale/duplicate errors, continuous readiness, increasing backoff, attempt limits, and permanent retry exclusion after a confirmation or any partial/transient evidence change. Existing purchase-recovery tests still pass. Format 8 diagnostics include native capacity, displayed inventory, numeric value, confirmations, error observation and dispatch attempts.
+- No live purchase or retry was performed during development. Update and Resume the saved fuel queue to validate recovery in game; a persistent rejection or changed evidence still pauses for diagnostics.
+
 ## 0.5.0.5 validation — 14 November 2026
 
 - Full `scripts/Build.ps1`: **804 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.
