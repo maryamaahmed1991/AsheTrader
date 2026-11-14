@@ -43,8 +43,9 @@ public sealed partial class WorkflowService
             throw new InvalidOperationException("Capture diagnostics on the active framework thread.");
         executor.CaptureDiagnosticSnapshot("User requested diagnostic report");
         plugin.Trader.CaptureDiagnosticSnapshot("User requested diagnostic report");
+        plugin.FuelQueue.CaptureDiagnosticSnapshot("User requested diagnostic report");
         var header = new WorkflowTrace(40, 2000);
-        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 6; timestamps UTC; this PC only");
+        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 7; timestamps UTC; this PC only");
         header.Add("Session", $"Role={(IsHost ? "coordinator" : "worker")}; connected={Connected}; paired={HasAcceptedConnection}; remoteControl={Settings.AllowRemoteControl}; journalHealthy={journalHealthy}");
         header.Add("Game", $"loggedIn={Plugin.ClientState.IsLoggedIn}; characterId={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; language={Plugin.ClientState.ClientLanguage}");
         header.Add("Status", Status);
@@ -55,6 +56,7 @@ public sealed partial class WorkflowService
             {
                 var entry = fuel.Entries[fuel.Index];
                 header.Add("FuelBuyer", $"character={entry.CharacterId}; FC={entry.FreeCompanyId}; world={entry.World}; caretaker={entry.UseCaretaker}; reserve={entry.CreditReserve}; keep={entry.KeepCarried}; remainingTarget={fuel.RemainingTarget?.ToString() ?? "exhaust credits"}");
+                header.Add("FuelDestination", entry.UseCaretaker ? $"caretakerCity={entry.CaretakerCity}" : $"house={entry.HouseAddress}");
             }
             if (fuel.PendingPurchase is { } purchase)
                 header.Add("FuelPurchase", $"character={purchase.CharacterId}; FC={purchase.FreeCompanyId}; amount={purchase.Quantity}; bagsBefore={purchase.BagBefore}; creditsBefore={purchase.CreditsBefore}; unitPrice={purchase.UnitPrice}");

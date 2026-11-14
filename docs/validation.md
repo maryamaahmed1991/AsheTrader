@@ -1,5 +1,13 @@
 # Development build validation
 
+## 0.5.0.2 validation — 14 November 2026
+
+- Full `scripts/Build.ps1`: **674 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.
+- Twenty-eight arrival-policy cases cover Lifestream stopping outside the plot boundary, the 10-metre landing radius, exact world/home-world/district/ward binding, subdivision plots, neighboring plots, invalid native plot sentinels, missing coordinates and non-finite positions.
+- Fuel travel and Resume now accept a verified configured-plot landing point before approaching the estate. The door position comes from the selected plot's loaded native outdoor layout; entrance interaction and confirmation still require the full native house address. Cutscene waits remain unchanged.
+- Read-only source review checked Lifestream's public plot-entrance IPC and dismount action, plus FFXIVClientStructs outdoor plot layout. Diagnostics now include expected/live address, landing point, native entrance layout and nearby entrance candidates.
+- No live estate entry or fuel purchase was performed during development. Update to 0.5.0.2 and resume the paused fuel queue to validate gate → estate → workshop → supplier in game.
+
 ## 0.5.0.1 validation — 14 November 2026
 
 - Full `scripts/Build.ps1`: **646 tests passed**, zero failures/skips; Release plugin build completed with zero warnings/errors.

@@ -56,6 +56,12 @@ public sealed class FuelQueueService
     public string Status => Run?.Status ?? "Fuel queue idle.";
     private FuelQueueEntry Entry => Run!.Entries[Run.Index];
 
+    internal void CaptureDiagnosticSnapshot(string reason)
+    {
+        executor.CaptureDiagnosticSnapshot(reason);
+        destination.CaptureDiagnosticSnapshot(reason);
+    }
+
     public FuelQueueService(Plugin plugin)
     {
         this.plugin = plugin;

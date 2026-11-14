@@ -27,12 +27,18 @@ internal sealed unsafe class FuelDestinationRunner
     private FuelQueueEntry entry = new();
     private LifestreamClient.HouseDestination address;
     private Stage stage;
-    private long stageStarted, actionAfter, lastUpdate, travelIdleSince, lastInteraction, pathStarted;
+    private long stageStarted, actionAfter, lastUpdate, travelIdleSince, lastInteraction, pathStarted, nextSnapshot, nextGateRead;
     private ulong characterId, targetId;
     private uint targetDataId, targetTerritory;
     private int attempts, pathAttempts;
     private bool ownsLifestream, ownsNavigation;
     private Vector3? caretakerWaypoint;
+    private Vector3? plotGatePosition, estateEntrancePosition;
+    private uint plotGateTerritory;
+    private string plotGateDiagnostic = "The configured plot's landing point has not been read yet.";
+    private long dismountStarted;
+    private bool dismountIssued;
+    private int dismountAttempts;
     private int shutdown;
     private long nextClose, closeIdleSince;
     private ulong closeCharacter, closeTarget;
@@ -96,6 +102,13 @@ internal sealed unsafe class FuelDestinationRunner
         Error = string.Empty;
         ownsLifestream = ownsNavigation = false;
         caretakerWaypoint = null;
+        plotGatePosition = estateEntrancePosition = null;
+        plotGateTerritory = 0;
+        nextSnapshot = nextGateRead = 0;
+        dismountStarted = 0;
+        dismountIssued = false;
+        dismountAttempts = 0;
+        plotGateDiagnostic = "The configured plot's landing point has not been read yet.";
         ResetClosure();
         lastUpdate = Environment.TickCount64;
         Set(Stage.Travel, destination.UseCaretaker ? "Traveling to the Resident Caretaker…" : "Traveling to the configured workshop house…");
@@ -126,6 +139,7 @@ internal sealed unsafe class FuelDestinationRunner
                 if (travelIdleSince != 0) travelIdleSince += elapsed;
                 if (lastInteraction != 0) lastInteraction += elapsed;
                 if (pathStarted != 0) pathStarted += elapsed;
+                if (dismountStarted != 0) dismountStarted += elapsed;
                 Status = "Waiting for the cutscene to finish…";
                 return;
             }
@@ -136,6 +150,11 @@ internal sealed unsafe class FuelDestinationRunner
                 : stage is Stage.Door or Stage.WorkshopDoor or Stage.Supplier ? 300_000 : 90_000;
             if (now - stageStarted > limit)
                 throw new TimeoutException($"Timed out while {Status.TrimEnd('…', '.')}. Fuel navigation stage: {stage}.");
+            if (now >= nextSnapshot)
+            {
+                nextSnapshot = now + 5_000;
+                CaptureDiagnosticSnapshot("periodic wait");
+            }
             if (now < actionAfter) return;
             if (stage == Stage.WaitTravel) { WaitTravel(now); return; }
             if (!PlayerReady) return;
@@ -149,7 +168,7 @@ internal sealed unsafe class FuelDestinationRunner
                     // occupied frame. Allow those states to settle without pausing the queue.
                     if (NativeRetainers.BellInteractionBlocked) break;
                     if (entry.UseCaretaker && AtCaretakerDistrict(entry)) { Set(Stage.Supplier, "Approaching the Resident Caretaker…"); break; }
-                    if (!entry.UseCaretaker && AtHouse(address)) { EnterHouseStage(); break; }
+                    if (!entry.UseCaretaker && CanBeginHouseApproach()) { EnterHouseStage(); break; }
                     var house = entry.UseCaretaker
                         ? new HouseProfile { Name = "Resident Caretaker district", Address = LifestreamClient.FormatAddress((int)Plugin.ObjectTable.LocalPlayer!.HomeWorld.RowId, entry.CaretakerCity, 1, 1) }
                         : new HouseProfile { Name = entry.HouseName, Address = entry.HouseAddress };
@@ -158,9 +177,8 @@ internal sealed unsafe class FuelDestinationRunner
                     Set(Stage.WaitTravel, entry.UseCaretaker ? "Lifestream is traveling to the housing district…" : "Lifestream is traveling to the configured plot…");
                     break;
                 case Stage.Door:
-                    RequireHouse();
-                    if (InsideHouse) { EnterHouseStage(); break; }
-                    ApproachAndInteract(FindNearest(x => EntranceNames.Contains(x.Name.TextValue, StringComparer.Ordinal)), Stage.DoorPrompt, "Waiting for the estate entrance…");
+                    if (InsideHouse || InWorkshop) { RequireHouse(); EnterHouseStage(); break; }
+                    ApproachEstateDoor();
                     break;
                 case Stage.DoorPrompt:
                     RequireHouse();
@@ -237,6 +255,7 @@ internal sealed unsafe class FuelDestinationRunner
             Active = false;
             Success = false;
             Trace($"stopped stage={stage}; error={Error}");
+            CaptureDiagnosticSnapshot("operation stopping");
             CleanupOwnedServices();
         }
     }
@@ -249,14 +268,82 @@ internal sealed unsafe class FuelDestinationRunner
         if (travelIdleSince == 0) travelIdleSince = now;
         // Lifestream's queue can empty before the territory's objects and HousingManager have settled.
         if (now - travelIdleSince < 1_000) return;
-        if (entry.UseCaretaker ? AtCaretakerDistrict(entry) : AtHouse(address))
+        if (entry.UseCaretaker ? AtCaretakerDistrict(entry) : CanBeginHouseApproach())
         {
             ownsLifestream = false;
             if (entry.UseCaretaker) Set(Stage.Supplier, "Approaching the Resident Caretaker…");
             else EnterHouseStage();
         }
         else if (now - travelIdleSince > 20_000)
-            throw new InvalidOperationException("Lifestream finished, but the configured fuel destination could not be verified. Check district unlocks and house access.");
+            throw new InvalidOperationException("Lifestream finished, but arrival at the configured fuel destination could not be verified. Open Activity → Copy diagnostics to include the expected address and plot landing point.");
+    }
+
+    private bool CanBeginHouseApproach()
+    {
+        if (AtHouse(address)) return true;
+        if (!AtHouseWard()) return false;
+        var now = Environment.TickCount64;
+        var territory = Plugin.ClientState.TerritoryType;
+        if (plotGateTerritory != territory) { plotGatePosition = null; nextGateRead = 0; }
+        if (plotGatePosition == null && now >= nextGateRead)
+        {
+            nextGateRead = now + 1_000;
+            plotGateTerritory = territory;
+            try
+            {
+                // This public IPC returns the landing point for the requested zero-based
+                // plot, where GoToHousingAddress ends outside the yard boundary.
+                plotGatePosition = Plugin.PluginInterface.GetIpcSubscriber<uint, int, Vector3?>("Lifestream.GetPlotEntrance")
+                    .InvokeFunc(territory, address.Plot - 1);
+                plotGateDiagnostic = $"territory={territory}; plotIndex={address.Plot - 1}; point={plotGatePosition?.ToString() ?? "unavailable"}";
+            }
+            catch (Exception exception)
+            { plotGateDiagnostic = $"The Lifestream plot landing point is unavailable ({exception.GetType().Name})."; }
+        }
+        var player = Plugin.ObjectTable.LocalPlayer!;
+        var housing = HousingManager.Instance();
+        if (!FuelHouseArrivalPolicy.CanApproachFromGate(new(address.World, address.City, address.Ward, address.Plot),
+                (int)player.CurrentWorld.RowId, (int)player.HomeWorld.RowId, District(territory),
+                housing->GetCurrentWard(), housing->GetCurrentPlot(), housing->IsOutside(), player.Position, plotGatePosition)) return false;
+        Trace($"verified configured plot landing; {plotGateDiagnostic}; player={player.Position}; nativePlotIndex={housing->GetCurrentPlot()}");
+        return true;
+    }
+
+    private bool AtHouseWard()
+    {
+        var player = Plugin.ObjectTable.LocalPlayer;
+        var housing = HousingManager.Instance();
+        return player != null && housing != null && housing->CurrentTerritory != null && housing->IsOutside()
+            && player.CurrentWorld.RowId == address.World && player.HomeWorld.RowId == address.World
+            && District(Plugin.ClientState.TerritoryType) == address.City && housing->GetCurrentWard() == address.Ward - 1;
+    }
+
+    private void ApproachEstateDoor()
+    {
+        // Arrival was proved once in Travel/WaitTravel. Do not keep requiring proximity
+        // to the gate while walking across a large yard; the ward and exact plot layout
+        // remain bound, and the native plot is required again before interaction.
+        if (!AtHouseWard()) throw new InvalidOperationException("The character left the configured estate's world, district, or ward while approaching its entrance.");
+        if (!NativeFuelEstateEntrance.TryRead(address.Plot, out var entrance, out var layoutDiagnostic))
+        {
+            if (Environment.TickCount64 - stageStarted > 20_000)
+                throw new InvalidOperationException("The configured plot's estate entrance layout did not become available. " + layoutDiagnostic);
+            Status = "Waiting for the configured estate entrance to load…";
+            return;
+        }
+        estateEntrancePosition = entrance;
+        var candidates = Plugin.ObjectTable.Where(x => x.IsTargetable && EntranceNames.Contains(x.Name.TextValue, StringComparer.Ordinal)
+            && Vector3.DistanceSquared(x.Position, entrance) <= 25f).Take(2).ToArray();
+        if (candidates.Length > 1)
+            throw new InvalidOperationException("More than one estate entrance matched the configured plot's door position; no entrance was selected.");
+        if (candidates.Length == 0)
+        {
+            if (!MoveNear(entrance, 3.5f)) return;
+            if (Environment.TickCount64 - stageStarted > 20_000)
+                throw new InvalidOperationException("The configured plot's entrance object was not found at its loaded estate door position.");
+            return;
+        }
+        ApproachAndInteract(candidates[0], Stage.DoorPrompt, "Waiting for the estate entrance…");
     }
 
     private void EnterHouseStage() => Set(InWorkshop ? Stage.Supplier : InsideHouse ? Stage.WorkshopDoor : Stage.Door,
@@ -271,6 +358,11 @@ internal sealed unsafe class FuelDestinationRunner
             return;
         }
         if (!MoveNear(target.Position, 3.5f) || NativeRetainers.BellInteractionBlocked || NativeRetainers.Ready("SelectIconString") != null) return;
+        if (stage == Stage.Door)
+        {
+            RequireHouse();
+            if (!DismountAtEstateDoor()) return;
+        }
         if (Plugin.TargetManager.Target?.GameObjectId != target.GameObjectId)
         { Plugin.TargetManager.Target = target; actionAfter = Environment.TickCount64 + 200; return; }
         targetId = target.GameObjectId;
@@ -278,6 +370,31 @@ internal sealed unsafe class FuelDestinationRunner
         targetTerritory = Plugin.ClientState.TerritoryType;
         Set(next, text, resetTarget: false);
         Interact(target);
+    }
+
+    private bool DismountAtEstateDoor()
+    {
+        var now = Environment.TickCount64;
+        if (!Plugin.Condition[ConditionFlag.Mounted])
+        {
+            if (dismountStarted == 0) return true;
+            dismountStarted = 0;
+            actionAfter = now + 350;
+            return false;
+        }
+        if (dismountStarted == 0) dismountStarted = now;
+        if (now - dismountStarted > 10_000 || dismountAttempts >= 3 && !dismountIssued)
+            throw new InvalidOperationException("The character could not dismount at the configured estate entrance.");
+        if (dismountIssued) return false;
+        var actions = ActionManager.Instance();
+        if (actions == null) return false;
+        // Lifestream's DismountIfNeeded uses general action 23. Issue an accepted
+        // action once and wait for the mounted flag instead of toggling repeatedly.
+        dismountIssued = actions->UseAction(ActionType.GeneralAction, 23);
+        dismountAttempts++;
+        actionAfter = now + 1_000;
+        Trace($"dismount at estate door; accepted={dismountIssued}; attempt={dismountAttempts}");
+        return false;
     }
 
     private bool MoveNear(Vector3 position, float distance)
@@ -567,6 +684,35 @@ internal sealed unsafe class FuelDestinationRunner
     {
         Plugin.Log.Debug("Fuel destination: {Trace}", text);
         try { Diagnostic?.Invoke(text); } catch { /* Diagnostics must not interrupt gameplay cleanup. */ }
+    }
+
+    public void CaptureDiagnosticSnapshot(string reason)
+    {
+        if (!Plugin.Framework.IsInFrameworkUpdateThread || Plugin.Framework.IsFrameworkUnloading) return;
+        try
+        {
+            var player = Plugin.ObjectTable.LocalPlayer;
+            var resolved = NativeHousingLocation.TryRead(out var actual, out var locationError, out var locationDiagnostic);
+            var state = lifestream.GetStatus();
+            Trace($"snapshot reason={reason}; active={Active}; stage={stage}; stageElapsedMs={Environment.TickCount64 - stageStarted}; expected={entry.HouseAddress}; caretaker={entry.UseCaretaker}; character={Plugin.PlayerState.ContentId}; position={player?.Position}; homeWorld={player?.HomeWorld.RowId}; playerReady={PlayerReady}; mounted={Plugin.Condition[ConditionFlag.Mounted]}; lifestreamReady={state.Ready}; lifestreamBusy={state.Busy}; ownsLifestream={ownsLifestream}; ownsNavigation={ownsNavigation}");
+            Trace($"housing {locationDiagnostic}; resolved={resolved}; address={actual}; reason={locationError}");
+            if (!entry.UseCaretaker)
+            {
+                var gateDistance = player != null && plotGatePosition is { } gate ? Vector3.Distance(player.Position, gate).ToString("F2") : "unavailable";
+                var layoutReady = NativeFuelEstateEntrance.TryRead(address.Plot, out var entrance, out var layoutDiagnostic);
+                Trace($"estate arrival gate={plotGateDiagnostic}; gateDistance={gateDistance}; door={estateEntrancePosition}; layoutReady={layoutReady}; {layoutDiagnostic}");
+                if (player != null)
+                {
+                    var candidates = Plugin.ObjectTable.Where(x => EntranceNames.Contains(x.Name.TextValue, StringComparer.Ordinal))
+                        .OrderBy(x => Vector3.DistanceSquared(layoutReady ? entrance : player.Position, x.Position)).Take(6);
+                    foreach (var candidate in candidates)
+                        Trace($"estate candidate object={candidate.GameObjectId}; data={candidate.BaseId}; targetable={candidate.IsTargetable}; position={candidate.Position}; playerDistance={Vector3.Distance(player.Position, candidate.Position):F2}; plotDoorDistance={(layoutReady ? Vector3.Distance(entrance, candidate.Position).ToString("F2") : "unavailable")}");
+                }
+            }
+            Trace($"interaction target={targetId}; data={targetDataId}; territory={targetTerritory}; currentTarget={Plugin.TargetManager.Target?.GameObjectId}; attempts={attempts}; pathAttempts={pathAttempts}; yesno={NativeRetainers.Ready("SelectYesno") != null}; selectString={NativeRetainers.Ready("SelectString") != null}");
+        }
+        catch (Exception exception)
+        { Trace($"snapshot unavailable; type={exception.GetType().Name}; message={exception.Message}"); }
     }
 
     /// <summary>Closes the verified vendor interaction, including its returning menu or farewell.</summary>
