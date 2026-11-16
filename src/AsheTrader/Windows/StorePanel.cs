@@ -61,13 +61,25 @@ internal sealed class StorePanel(Plugin plugin)
                     {var selected=settings.Items.Contains(item.Id);if(ImGui.Checkbox($"{item.Name}##storeItem{item.Id}",ref selected)){if(selected)settings.Items.Add(item.Id);else settings.Items.Remove(item.Id);service.ChangedSelection();}}
                 ImGui.EndChild();
             }
-            if(ImGui.CollapsingHeader($"Shared items ({settings.Items.Count})"))
+            if(ImGui.CollapsingHeader($"Shared items ({settings.Items.Count})###StoreSharedItems"))
             {
                 foreach(var id in settings.Items.Order().ToArray())
                 {if(ImGui.SmallButton($"Remove##shared{id}")){settings.Items.Remove(id);service.ChangedSelection();}ImGui.SameLine();ImGui.TextUnformatted(catalog.FirstOrDefault(x=>x.Id==id).Name ?? $"Item {id}");}
             }
-            if(ImGui.CollapsingHeader($"Characters on this PC ({settings.Characters.Count} selected)"))
+            // Keep expansion state independent of the changing selection-count caption.
+            if(ImGui.CollapsingHeader($"Characters on this PC ({settings.Characters.Count} selected)###StoreCharacters"))
             {
+                if(ImGui.Button("Select All##storeCharacters"))
+                {
+                    settings.Characters=plugin.Config.Characters.Select(x=>x.ContentId).Where(id=>id!=0).ToHashSet();
+                    service.ChangedSelection();
+                }
+                ImGui.SameLine();
+                if(ImGui.Button("Select None##storeCharacters"))
+                {
+                    settings.Characters.Clear();
+                    service.ChangedSelection();
+                }
                 ImGui.TextWrapped("Select a different set on each PC. The server rejects overlapping inventories to prevent double counting.");
                 if(plugin.Config.Characters.Count==0) ImGui.TextWrapped("Import your AutoRetainer roster from Connection first.");
                 foreach(var world in plugin.Config.Characters.GroupBy(x=>x.World).OrderBy(x=>x.Key))
