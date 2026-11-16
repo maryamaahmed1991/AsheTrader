@@ -15,6 +15,7 @@ public sealed class MainWindow : Window
     private readonly WorkflowPanel workflowPanel;
     private readonly ItemSearchPanel itemSearchPanel;
     private readonly FuelPanel fuelPanel;
+    private readonly StorePanel storePanel;
     private Guid selectedList;
     private string search = string.Empty;
     private string importStatus = "Import AutoRetainer's known characters to start assigning accounts.";
@@ -26,7 +27,7 @@ public sealed class MainWindow : Window
     private int selectedPage;
     private IDisposable? theme;
     private static readonly string Version = typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "";
-    private static readonly string[] PageTitles = ["Connection", "Transfer jobs", "Review & run", "Activity", "Fuel & houses", "Advanced tools", "Item Search"];
+    private static readonly string[] PageTitles = ["Connection", "Transfer jobs", "Review & run", "Activity", "Fuel & houses", "Advanced tools", "Item Search", "Private stores"];
     private static readonly string[] PageDescriptions =
     [
         "Connect your PCs and get your characters ready.",
@@ -36,6 +37,7 @@ public sealed class MainWindow : Window
         "Convert FC credits with world-by-world character queues.",
         "Manual trades, character profiles and local preferences.",
         "Find your items across characters and connected PCs.",
+        "Share selected stock with friends, even while you are offline.",
     ];
 
     public MainWindow(Plugin plugin) : base("Ashe's Trader###AsheTraderMain")
@@ -44,6 +46,7 @@ public sealed class MainWindow : Window
         workflowPanel = new WorkflowPanel(plugin);
         itemSearchPanel = new ItemSearchPanel(plugin);
         fuelPanel = new FuelPanel(plugin);
+        storePanel = new StorePanel(plugin);
         Size = new Vector2(1080, 760);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(880, 620), MaximumSize = new Vector2(float.MaxValue) };
@@ -80,6 +83,7 @@ public sealed class MainWindow : Window
             }
             if (selectedPage <= 3) selectedPage = workflowPanel.Draw(selectedPage);
             else if (selectedPage == 6) itemSearchPanel.Draw();
+            else if (selectedPage == 7) storePanel.Draw();
             else if (selectedPage == 4)
             {
                 if (ImGui.BeginChild("FuelPage", new Vector2(0, 0))) fuelPanel.Draw();
@@ -110,9 +114,9 @@ public sealed class MainWindow : Window
         ImGui.Dummy(new Vector2(0, titleSize + TraderStyle.Px(10)));
         ImGui.TextDisabled("YOUR WORKSPACE");
         ImGui.Spacing();
-        string[] labels = ["Connection", "Jobs", "Review & run", "Activity", "Fuel & houses", "Advanced", "Item Search"];
-        string[] details = ["PCs & integrations", "Items & characters", "Ready to transfer", "Progress & diagnostics", "FC fuel queues", "Manual controls", "Across your inventories"];
-        int[] order = [0, 1, 2, 3, 6, 4, 5];
+        string[] labels = ["Connection", "Jobs", "Review & run", "Activity", "Fuel & houses", "Advanced", "Item Search", "Stores"];
+        string[] details = ["PCs & integrations", "Items & characters", "Ready to transfer", "Progress & diagnostics", "FC fuel queues", "Manual controls", "Across your inventories", "Your private catalogue"];
+        int[] order = [0, 1, 2, 3, 6, 7, 4, 5];
         // The page list can scroll at small window sizes; run status stays reachable below it.
         if (ImGui.BeginChild("NavigationPages", new Vector2(0, Math.Max(TraderStyle.Px(130), ImGui.GetContentRegionAvail().Y - TraderStyle.Px(82)))))
         {

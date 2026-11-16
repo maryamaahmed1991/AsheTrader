@@ -1,0 +1,13 @@
+{
+  "name": "ashe-private-catalogue",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --config wrangler.production.json"
+  },
+  "devDependencies": {
+    "wrangler": "4.163.0"
+  }
+}

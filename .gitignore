@@ -9,3 +9,10 @@ settings.json
 transfer-job.json
 worker-journal.json
 *.lock
+**/node_modules/
+**/.wrangler/
+**/.dev.vars*
+**/.env*
+services/catalogue/private/
+services/catalogue/wrangler.production.json
+store-credentials.json

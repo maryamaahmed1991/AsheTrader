@@ -19,6 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/AsheTrader.Core/AsheTrader.Core.csproj" />
     <Using Include="Xunit" />
+    <Compile Include="../../src/AsheTrader/Store/StoreCredentials.cs" Link="Production/StoreCredentials.cs" />
     <Compile Include="../../src/AsheTrader/Integrations/AutoRetainerRelogRequest.cs" Link="Production/AutoRetainerRelogRequest.cs" />
     <Compile Include="../../src/AsheTrader/Integrations/AllaganInventoryCache.cs" Link="Production/AllaganInventoryCache.cs" />
     <Compile Include="../../src/AsheTrader/Integrations/AllaganItemSearchParser.cs" Link="Production/AllaganItemSearchParser.cs" />

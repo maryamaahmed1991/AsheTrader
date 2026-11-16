@@ -27,6 +27,12 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.6.0.0
+
+**Stores** adds an optional private hosted catalogue. Select exact items and characters, preview cached bag/retainer totals, and publish them for invited friends to browse while you are offline. Each PC has separate publishing access; overlapping inventories and stale writes are rejected. Friend invitations are read-only and individually revocable. Automatic publishing is optional and defaults off. The public plugin contains no hosting credentials and uploads nothing until a store is connected and publishing is explicitly requested.
+
+See the [private-store guide](docs/private-store.md) for setup, sharing and first in-game checks, and [catalogue service](services/catalogue/README.md) for self-hosting. Existing transfers and fuel queues are unchanged.
+
 ## Version 0.5.2.0
 
 Fuel runs now keep the latest 100 completed/ended receipts on this PC under **Run overview → Run history**. Receipts include per-buyer outcomes, confirmed purchase costs, tanks bought/stored, destinations and elapsed time including pauses. Copy a receipt or retry only its skipped buyers using current setup; the retry creates a new queue without changing the saved buyer selection. An available older finished journal is imported with missing credit/timing information explicitly marked.

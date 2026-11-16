@@ -13,6 +13,12 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test private catalogue API
+        working-directory: services/catalogue
+        run: node --test test/*.test.mjs
       - name: Download Dalamud development libraries
         shell: pwsh
         run: |

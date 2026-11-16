@@ -15,6 +15,7 @@ public sealed class Configuration : IPluginConfiguration
     public WorkflowSettings Workflow { get; set; } = new();
     public FuelQueueSettings FuelSettings { get; set; } = new();
     public Dictionary<ulong, FuelAccessSnapshot> FuelAccessSnapshots { get; set; } = [];
+    public Core.Store.StorePreferences Store { get; set; } = new();
 
     public void Normalize()
     {
@@ -24,6 +25,9 @@ public sealed class Configuration : IPluginConfiguration
         Workflow ??= new();
         FuelSettings ??= new();
         FuelAccessSnapshots ??= [];
+        Store ??= new();
+        Store.Characters ??= [];
+        Store.Items ??= [];
         FuelSettings.Companies ??= [];
         foreach (var list in TradeLists) list.Items ??= [];
         foreach (var character in Characters) character.Fuel ??= new FuelPolicy();

@@ -38,6 +38,7 @@ public sealed class Plugin : IDalamudPlugin
     public FuelQueueService FuelQueue { get; }
     internal FuelAccessService FuelAccess { get; }
     public WorkflowService Workflow { get; }
+    internal Store.StoreService Store { get; }
     public string SettingsError { get; private set; } = string.Empty;
     public Queue<string> Activity { get; } = new();
     private readonly WindowSystem windows = new("AsheTrader");
@@ -62,6 +63,7 @@ public sealed class Plugin : IDalamudPlugin
         Workflow = new WorkflowService(this);
         FuelAccess = new FuelAccessService(this);
         FuelQueue = new FuelQueueService(this);
+        Store = new Store.StoreService(this);
         Trader.Diagnostic = Workflow.RecordTradeDiagnostic;
         Fuel.Diagnostic = message => Workflow.RecordDiagnostic("fuel purchase " + message);
         Save();
@@ -168,6 +170,8 @@ public sealed class Plugin : IDalamudPlugin
             Workflow.Update();
         }
         catch (Exception ex) { StopAll(); Record($"Operation stopped: {ex.Message}"); Log.Error(ex, "Runner update failed"); }
+        // Catalogue failures never interrupt gameplay automation, and credentials never enter diagnostics.
+        try { Store.Update(); } catch { Log.Warning("Private catalogue update failed; gameplay is unaffected."); }
         if (lastStatus != Trader.Status) { lastStatus = Trader.Status; Record(lastStatus); }
         if (lastFuelStatus != Fuel.Status) { lastFuelStatus = Fuel.Status; Record(lastFuelStatus); }
         if (lastFuelQueueStatus != FuelQueue.Status) { lastFuelQueueStatus = FuelQueue.Status; Record(lastFuelQueueStatus); }
@@ -198,6 +202,7 @@ public sealed class Plugin : IDalamudPlugin
         Trader.Dispose();
         FuelQueue.Shutdown();
         Workflow.Dispose();
+        Store.Dispose();
         Fuel.Stop();
         windows.RemoveAllWindows();
     }

@@ -1,0 +1,10 @@
+{
+  "name": "ashe-private-catalogue",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-11-16",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "ratelimits": [{ "name": "RATE_LIMITER", "namespace_id": "60001", "simple": { "limit": 120, "period": 60 } }],
+  "d1_databases": [{ "binding": "DB", "database_name": "ashe-private-catalogue", "database_id": "local", "migrations_dir": "migrations" }]
+}
