@@ -11,7 +11,9 @@ internal sealed class FuelPanel(Plugin plugin)
 {
     private string filter = "";
     private bool selectedOnly;
-    private bool housesPage;
+    private int page;
+    private string selectedCompany = "";
+    private bool wasRunning;
     private bool requestedRefresh;
     private long refreshAfter;
     private ulong selectedCharacter;
@@ -34,42 +36,46 @@ internal sealed class FuelPanel(Plugin plugin)
     internal void Draw()
     {
         if (Interlocked.Exchange(ref diagnosticsToCopy, null) is { } report)
-        {
-            ImGui.SetClipboardText(report);
-            diagnosticsCopied = true;
-        }
+        { ImGui.SetClipboardText(report); diagnosticsCopied = true; }
         if (!SettingsLocked && (!requestedRefresh || Environment.TickCount64 >= refreshAfter)) Refresh();
+        if (plugin.FuelQueue.Active && !wasRunning) page = 2;
+        wasRunning = plugin.FuelQueue.Active;
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(TraderStyle.Px(10), TraderStyle.Px(6)));
         DrawRunControls();
-        if (TraderStyle.SecondaryButton("Fuel queue", new(135, 32))) housesPage = false;
-        ImGui.SameLine();
-        if (TraderStyle.SecondaryButton("Workshop houses", new(170, 32))) housesPage = true;
-        ImGui.SameLine();
-        ImGui.BeginDisabled(SettingsLocked);
-        if (ImGui.SmallButton("Refresh setup")) Refresh();
-        ImGui.EndDisabled();
-        if (!string.IsNullOrWhiteSpace(plugin.FuelQueue.SetupStatus))
-            UiTone.Wrapped(TraderStyle.Muted, plugin.FuelQueue.SetupStatus);
-        ImGui.Spacing();
-
-        if (!housesPage && plugin.FuelQueue.HasUnfinishedRun)
+        if (ImGui.BeginTable("FuelViews", 3, ImGuiTableFlags.SizingStretchSame))
         {
-            DrawQueueProgress();
-            if (ImGui.CollapsingHeader("View saved queue setup"))
+            string[] titles = ["Buyers", "Destinations", "Run overview"];
+            string[] subtitles = ["Worlds & companies", "Your workshop library", "Queue & results"];
+            for (var i = 0; i < titles.Length; i++)
             {
-                ImGui.BeginDisabled();
-                DrawCharacters();
-                ImGui.EndDisabled();
+                ImGui.TableNextColumn();
+                if (TraderStyle.NavButton($"FuelView{i}", titles[i], subtitles[i], page == i)) page = i;
             }
-            return;
+            ImGui.EndTable();
         }
-
-        if (SettingsLocked)
-            UiTone.Wrapped(TraderStyle.Muted, "Setup is locked while a saved run is unfinished. Queue controls remain available above.");
-        ImGui.BeginDisabled(SettingsLocked);
-        if (housesPage) DrawHouses();
-        else DrawCharacters();
-        ImGui.EndDisabled();
-        if (!housesPage) DrawQueueProgress();
+        ImGui.Spacing();
+        if (ImGui.BeginChild("FuelViewContent", new Vector2(0, 0)))
+        {
+            if (page == 2) DrawQueueProgress();
+            else
+            {
+                if (SettingsLocked)
+                    UiTone.Wrapped(UiTone.Warning, "Viewing setup only. Finish the saved queue to edit buyers or destinations.");
+                if (page == 1)
+                { ImGui.BeginDisabled(SettingsLocked); DrawHouses(); ImGui.EndDisabled(); }
+                else DrawCharacters();
+            }
+            if (ImGui.CollapsingHeader("Setup details & refresh"))
+            {
+                UiTone.Wrapped(TraderStyle.Muted, plugin.FuelQueue.SetupStatus);
+                ImGui.BeginDisabled(SettingsLocked);
+                if (TraderStyle.SecondaryButton("Refresh setup")) Refresh();
+                ImGui.EndDisabled();
+                UiTone.Wrapped(TraderStyle.Muted, "Imports this PC's AutoRetainer roster and Lifestream houses. Access is learned on normal logins; refreshing never switches characters.");
+            }
+        }
+        ImGui.EndChild();
+        ImGui.PopStyleVar();
     }
 
     private void Refresh()
@@ -83,43 +89,51 @@ internal sealed class FuelPanel(Plugin plugin)
     {
         var queue = plugin.FuelQueue;
         var run = queue.Run;
-        var selected = plugin.Config.Characters.Count(character => character.Fuel.Enabled);
+        var preview = queue.Preview();
+        var selected = preview.Count;
+        var configured = preview.Count(entry => entry.Status != FuelQueueEntryStatus.Skipped);
+        var compact = ImGui.GetContentRegionAvail().Y < TraderStyle.Px(650);
         if (TraderStyle.BeginCard("FuelRunControls"))
         {
-            TraderStyle.Badge(queue.Active ? "RUNNING" : queue.HasUnfinishedRun ? "PAUSED" : "THIS PC", queue.Active ? TraderStyle.Accent : TraderStyle.Gold);
-            ImGui.SameLine();
-            ImGui.TextDisabled($"{selected:N0} selected character{(selected == 1 ? "" : "s")}");
-            UiTone.Status(queue.Status);
-            if (run != null)
+            TraderStyle.Badge(queue.Active ? "FUEL RUN ACTIVE" : queue.HasUnfinishedRun ? "RUN PAUSED" : "FUEL OPERATIONS",
+                queue.Active ? TraderStyle.Accent : queue.HasUnfinishedRun ? TraderStyle.Gold : TraderStyle.Accent);
+            ImGui.SameLine(); ImGui.TextDisabled("Independent queue · this PC");
+            if (ImGui.BeginTable("FuelMetrics", 3, ImGuiTableFlags.SizingStretchSame))
             {
-                var completed = run.Entries.Count(entry => entry.Status is FuelQueueEntryStatus.Completed or FuelQueueEntryStatus.Skipped or FuelQueueEntryStatus.StorageFull);
-                UiTone.Wrapped(TraderStyle.Muted, $"{completed:N0}/{run.Entries.Count:N0} characters  ·  {run.TotalPurchased:N0} tanks bought  ·  {run.TotalDeposited:N0} stored");
-                if (run.Entries.Count > 0) UiTone.Progress((float)completed / run.Entries.Count, new(-1, TraderStyle.Px(5)), run.Paused);
+                var complete = run?.Entries.Count(e => e.Status is FuelQueueEntryStatus.Completed or FuelQueueEntryStatus.Skipped or FuelQueueEntryStatus.StorageFull) ?? 0;
+                Metric(queue.HasUnfinishedRun ? "Processed" : "Selected", queue.HasUnfinishedRun ? $"{complete} / {run!.Entries.Count}" : $"{selected}", TraderStyle.Text, compact);
+                Metric(run == null ? "Companies" : "Purchased", run == null ? preview.Select(e => e.CompanyKey).Distinct().Count().ToString() : $"{run.TotalPurchased:N0}", TraderStyle.Accent, compact);
+                Metric(run == null ? "Workshops" : "Stored", run == null ? plugin.Config.Houses.Count.ToString() : $"{run.TotalDeposited:N0}", TraderStyle.Gold, compact);
+                ImGui.EndTable();
             }
-            ImGui.BeginDisabled(TransferLocked || plugin.Trader.IsRunning || plugin.Fuel.Active && !queue.Active || selected == 0 || queue.HasUnfinishedRun);
-            if (TraderStyle.PrimaryButton("Start selected", new(150, 34))) plugin.QueueAction(queue.Start);
-            ImGui.EndDisabled();
-            ImGui.SameLine();
-            ImGui.BeginDisabled(!queue.HasUnfinishedRun || TransferLocked || plugin.Trader.IsRunning);
-            if (queue.Active)
+            if (run != null && run.Entries.Count > 0)
             {
-                if (TraderStyle.SecondaryButton("Pause", new(90, 34))) plugin.QueueAction(() => queue.Pause());
+                var complete = run.Entries.Count(e => e.Status is FuelQueueEntryStatus.Completed or FuelQueueEntryStatus.Skipped or FuelQueueEntryStatus.StorageFull);
+                UiTone.Progress((float)complete / run.Entries.Count, new(-1, TraderStyle.Px(4)), run.Paused);
             }
-            else if (TraderStyle.SecondaryButton("Resume", new(90, 34))) plugin.QueueAction(queue.Resume);
-            ImGui.EndDisabled();
+            if (queue.HasUnfinishedRun || run is { Finished: true }) UiTone.Status(queue.Status);
+            else UiTone.Wrapped(TraderStyle.Muted, selected == 0 ? "Choose buyers, set their destination, then start your fuel run."
+                : $"{configured} of {selected} buyers configured · routes are verified before travel.");
+
+            if (queue.HasUnfinishedRun)
+            {
+                ImGui.BeginDisabled(TransferLocked || plugin.Trader.IsRunning);
+                if (TraderStyle.PrimaryButton(queue.Active ? "Pause run" : "Resume run", new(140, 32)))
+                    plugin.QueueAction(() => { if (queue.Active) queue.Pause(); else queue.Resume(); });
+                ImGui.EndDisabled(); ImGui.SameLine();
+                if (TraderStyle.DangerButton("End queue", new(110, 32))) plugin.QueueAction(queue.End);
+            }
+            else
+            {
+                ImGui.BeginDisabled(TransferLocked || plugin.Trader.IsRunning || plugin.Fuel.Active || configured == 0);
+                if (TraderStyle.PrimaryButton("Start fuel run", new(150, 32))) plugin.QueueAction(queue.Start);
+                ImGui.EndDisabled();
+            }
             ImGui.SameLine();
-            ImGui.BeginDisabled(!queue.HasUnfinishedRun);
-            if (TraderStyle.SecondaryButton("End queue", new(110, 34))) plugin.QueueAction(queue.End);
-            ImGui.EndDisabled();
-            if (TransferLocked)
-                UiTone.Wrapped(UiTone.Warning, "Finish or end the transfer job before starting a fuel queue on this PC.");
-            else if (selected == 0 && !queue.HasUnfinishedRun)
-                UiTone.Wrapped(TraderStyle.Muted, "Select fuel buyers below, choose their destinations, then start the queue.");
             ImGui.BeginDisabled(Volatile.Read(ref diagnosticCopyPending) != 0);
-            if (ImGui.SmallButton("Copy diagnostics"))
+            if (TraderStyle.SecondaryButton(diagnosticsCopied ? "Diagnostics copied" : "Copy diagnostics", new(165, 32)))
             {
-                diagnosticsCopied = false;
-                Interlocked.Exchange(ref diagnosticCopyPending, 1);
+                diagnosticsCopied = false; Interlocked.Exchange(ref diagnosticCopyPending, 1);
                 plugin.QueueAction(() =>
                 {
                     try { Volatile.Write(ref diagnosticsToCopy, plugin.Workflow.CaptureDiagnosticReport()); }
@@ -128,109 +142,138 @@ internal sealed class FuelPanel(Plugin plugin)
                 });
             }
             ImGui.EndDisabled();
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Copy this PC's fuel queue state and recent steps when reporting an issue. Includes character and retainer identifiers; excludes pairing keys and chat.");
-            if (diagnosticsCopied) { ImGui.SameLine(); ImGui.TextColored(UiTone.Good, "Copied for this PC."); }
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Copy this PC's queue state for troubleshooting. Includes character and retainer identifiers; excludes pairing keys and chat.");
+            if (TransferLocked) UiTone.Wrapped(UiTone.Warning, "Finish the transfer job before starting fuel purchases.");
         }
         TraderStyle.EndCard();
     }
 
+    private static void Metric(string label, string value, Vector4 tone, bool compact)
+    {
+        ImGui.TableNextColumn();
+        if (compact) { ImGui.TextColored(tone, value); ImGui.SameLine(); ImGui.TextDisabled(label.ToLowerInvariant()); }
+        else
+        {
+            ImGui.TextColored(TraderStyle.Muted, label.ToUpperInvariant());
+            var size = ImGui.GetFontSize() * 1.65f;
+            ImGui.GetWindowDrawList().AddText(ImGui.GetFont(), size, ImGui.GetCursorScreenPos(), ImGui.GetColorU32(tone), value);
+            ImGui.Dummy(new Vector2(0, size));
+        }
+    }
+
     private void DrawCharacters()
     {
-        if (TraderStyle.BeginCard("FuelRosterFilter"))
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputTextWithHint("##FuelRosterSearch", "Find a world, company or buyer...", ref filter, 200);
+        ImGui.Checkbox("Companies with selected buyers", ref selectedOnly);
+        var groups = plugin.Config.Characters.GroupBy(FuelQueuePlanner.CompanyKey)
+            .Where(g => (!selectedOnly || g.Any(c => c.Fuel.Enabled)) && (string.IsNullOrWhiteSpace(filter)
+                || g.Any(c => c.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                    || c.World.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                    || CompanyName(c).Contains(filter, StringComparison.OrdinalIgnoreCase))))
+            .OrderBy(g => g.First().World, StringComparer.OrdinalIgnoreCase).ThenBy(g => CompanyName(g.First()), StringComparer.OrdinalIgnoreCase).ToArray();
+        if (groups.Length == 0)
         {
-            ImGui.TextColored(TraderStyle.Gold, "CHOOSE YOUR FUEL BUYERS");
-            ImGui.SetNextItemWidth(-1);
-            ImGui.InputTextWithHint("##FuelRosterSearch", "Find a world, FC or character...", ref filter, 200);
-            ImGui.Checkbox("Selected characters only", ref selectedOnly);
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Characters run in world and FC order. If a buyer's storage fills, the next selected character in that FC can continue.");
-            UiTone.Wrapped(TraderStyle.Muted, "Route checks use each character's own observed unlocks and estate teleports. Unknown access is checked on login; setup never switches characters.");
-        }
-        TraderStyle.EndCard();
-
-        var all = plugin.Config.Characters.Where(character => (!selectedOnly || character.Fuel.Enabled)
-            && (string.IsNullOrWhiteSpace(filter) || character.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)
-                || character.World.Contains(filter, StringComparison.OrdinalIgnoreCase)
-                || CompanyName(character).Contains(filter, StringComparison.OrdinalIgnoreCase))).ToArray();
-        if (all.Length == 0)
-        {
-            UiTone.Wrapped(TraderStyle.Muted, plugin.Config.Characters.Count == 0
-                ? "No characters yet. Refresh setup to import this PC's AutoRetainer roster."
-                : "No characters match these filters.");
+            TraderStyle.Section("No buyers to show", plugin.Config.Characters.Count == 0
+                ? "Refresh setup below to import this PC's AutoRetainer characters." : "Try a different search or turn off the selected-company filter.");
             return;
         }
-
-        foreach (var world in all.GroupBy(character => character.World).OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
+        if (!groups.Any(g => g.Key == selectedCompany)) selectedCompany = groups[0].Key;
+        var wide = ImGui.GetContentRegionAvail().X >= TraderStyle.Px(800);
+        if (wide && ImGui.BeginTable("FuelCompanyWorkspace", 2, ImGuiTableFlags.SizingStretchProp))
         {
-            ImGui.PushID(world.Key);
-            var houseCount = HousesForWorld(world.Key).Count;
-            if (ImGui.CollapsingHeader($"{world.Key}  ·  {world.Count(character => character.Fuel.Enabled)}/{world.Count()} selected  ·  {houseCount} house{(houseCount == 1 ? "" : "s")}", ImGuiTreeNodeFlags.DefaultOpen))
-            {
-                if (houseCount == 0)
-                    UiTone.Wrapped(TraderStyle.Muted, "No house registered here. Choose a Resident Caretaker, or add a workshop under Workshop houses.");
-                foreach (var company in world.GroupBy(FuelQueuePlanner.CompanyKey).OrderBy(group => group.Key, StringComparer.Ordinal))
-                    DrawCompany(company.Key, company.OrderBy(character => character.Fuel.QueueOrder).ThenBy(character => character.Name, StringComparer.OrdinalIgnoreCase).ToArray());
-            }
-            ImGui.PopID();
+            ImGui.TableSetupColumn("Companies", ImGuiTableColumnFlags.WidthFixed, TraderStyle.Px(245));
+            ImGui.TableSetupColumn("Buyer setup", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableNextColumn(); DrawCompanyPicker(groups);
+            ImGui.TableNextColumn(); DrawSelectedCompany(groups);
+            ImGui.EndTable();
         }
+        else
+        {
+            ImGui.SetNextItemWidth(-1);
+            var current = groups.First(g => g.Key == selectedCompany).First();
+            if (ImGui.BeginCombo("##ActiveFuelCompany", $"{current.World} · {CompanyName(current)}"))
+            {
+                foreach (var world in groups.GroupBy(g => g.First().World))
+                {
+                    ImGui.TextColored(TraderStyle.Gold, world.Key);
+                    foreach (var group in world)
+                        if (ImGui.Selectable($"{CompanyName(group.First())} · {group.Count(c => c.Fuel.Enabled)}/{group.Count()} selected##{group.Key}", selectedCompany == group.Key))
+                            selectedCompany = group.Key;
+                }
+                ImGui.EndCombo();
+            }
+            DrawSelectedCompany(groups);
+        }
+    }
+
+    private void DrawCompanyPicker(IEnumerable<IGrouping<string, CharacterProfile>> groups)
+    {
+        foreach (var world in groups.GroupBy(g => g.First().World))
+        {
+            ImGui.TextColored(TraderStyle.Gold, world.Key.ToUpperInvariant());
+            foreach (var group in world)
+            {
+                var title = CompanyName(group.First());
+                // Keep the navigation label inside its narrow column; full names remain in the detail pane.
+                while (title.Length > 3 && ImGui.CalcTextSize(title).X > ImGui.GetContentRegionAvail().X - TraderStyle.Px(30)) title = title[..^2];
+                if (title != CompanyName(group.First())) title += "…";
+                if (TraderStyle.NavButton($"FC{group.Key}", title, $"{group.Count(c => c.Fuel.Enabled)} / {group.Count()} buyers selected", selectedCompany == group.Key))
+                    selectedCompany = group.Key;
+            }
+            ImGui.Spacing();
+        }
+    }
+
+    private void DrawSelectedCompany(IEnumerable<IGrouping<string, CharacterProfile>> groups)
+    {
+        var group = groups.First(g => g.Key == selectedCompany);
+        DrawCompany(group.Key, group.OrderBy(c => c.Fuel.QueueOrder).ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
     private void DrawCompany(string companyKey, IReadOnlyList<CharacterProfile> characters)
     {
         var first = characters[0];
         var rule = plugin.Config.FuelSettings.Companies.GetValueOrDefault(companyKey) ?? new FuelCompanyRule();
-        var title = CompanyName(first);
-        var selected = characters.Count(character => character.Fuel.Enabled);
         ImGui.PushID(companyKey);
         if (TraderStyle.BeginCard("FuelCompany"))
         {
-            if (ImGui.TreeNodeEx($"{title}  ·  {selected}/{characters.Count} selected##Company", ImGuiTreeNodeFlags.DefaultOpen))
+            TraderStyle.Section(CompanyName(first), $"{first.World} · {characters.Count(c => c.Fuel.Enabled)} of {characters.Count} buyers selected");
+            var snapshot = characters.Where(c => c.FreeCompanyCredits.HasValue).OrderByDescending(c => c.FreeCompanyCreditsObservedAt).FirstOrDefault();
+            if (snapshot != null)
             {
-                var creditSnapshot = characters.Where(character => character.FreeCompanyCredits.HasValue)
-                    .OrderByDescending(character => character.FreeCompanyCreditsObservedAt).FirstOrDefault();
-                if (creditSnapshot != null)
-                {
-                    var age = creditSnapshot.FreeCompanyCreditsObservedAt.HasValue
-                        ? $" · observed {creditSnapshot.FreeCompanyCreditsObservedAt.Value.ToLocalTime():g}" : "";
-                    UiTone.Wrapped(TraderStyle.Gold, $"{creditSnapshot.FreeCompanyCredits:N0} FC credits cached{age}");
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("All buyers in this FC share this balance. The current balance is checked at purchase time.");
-                }
-                else UiTone.Wrapped(TraderStyle.Muted, "FC credit balance will be checked when a buyer logs in.");
-                if (!first.FreeCompanyId.HasValue)
-                    UiTone.Wrapped(UiTone.Warning, "FC membership will be checked after login. Unknown characters stay separate until their FC is known.");
-                else if (first.FreeCompanyId == 0)
-                    UiTone.Wrapped(UiTone.Warning, "This character has no FC and will be skipped.");
-
-                var destination = plugin.Config.Houses.FirstOrDefault(house => house.Id == rule.HouseId);
-                UiTone.Wrapped(rule.UseCaretaker || destination != null ? TraderStyle.Muted : UiTone.Warning,
-                    rule.UseCaretaker ? $"Resident Caretaker · {LifestreamClient.DistrictName(rule.CaretakerCity)} · leave {rule.CreditReserve:N0} credits"
-                        : destination != null ? $"{destination.Name} · leave {rule.CreditReserve:N0} credits"
-                        : "Choose the FC destination below, or assign each buyer a house.");
-                if (ImGui.SmallButton("Select these characters"))
-                { foreach (var character in characters) Enable(character, true); plugin.Save(); }
-                ImGui.SameLine();
-                if (ImGui.SmallButton("Clear selection"))
-                { foreach (var character in characters) character.Fuel.Enabled = false; plugin.Save(); }
-                ImGui.Spacing();
-
-                foreach (var character in characters) DrawCharacter(character, characters, rule);
-                if (ImGui.TreeNode("FC destination & credit reserve"))
-                {
-                    var companyLabel = rule.NameOverride;
-                    ImGui.SetNextItemWidth(-1);
-                    if (ImGui.InputTextWithHint("##CompanyLabel", "Optional FC display name", ref companyLabel, 128))
-                    { rule.NameOverride = companyLabel; SaveRule(companyKey, rule); }
-                    DrawCompanyDestination(companyKey, first.World, rule);
-                    var reserve = rule.CreditReserve;
-                    ImGui.SetNextItemWidth(TraderStyle.Px(160));
-                    if (EditUInt("Credits to leave", ref reserve)) { rule.CreditReserve = reserve; SaveRule(companyKey, rule); }
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("Zero converts every affordable FC credit into Ceruleum Tanks. This reserve applies to all selected buyers in the FC.");
-                    ImGui.TreePop();
-                }
+                TraderStyle.Badge($"{snapshot.FreeCompanyCredits:N0} credits · cached", TraderStyle.Gold);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip($"Cached balance · {snapshot.FreeCompanyCreditsObservedAt?.ToLocalTime():g}. Live credits and spending permission are checked at the supplier.");
+            }
+            if (first.FreeCompanyId == 0) UiTone.Wrapped(UiTone.Warning, "No FC membership. These buyers will be skipped.");
+            else if (!first.FreeCompanyId.HasValue) UiTone.Wrapped(UiTone.Warning, "FC membership will be checked on login.");
+            ImGui.Spacing(); ImGui.TextColored(TraderStyle.Accent, "01  DESTINATION & BUDGET");
+            ImGui.BeginDisabled(SettingsLocked);
+            DrawCompanyDestination(companyKey, first.World, rule);
+            var reserve = rule.CreditReserve;
+            ImGui.SetNextItemWidth(TraderStyle.Px(150));
+            if (EditUInt("FC credits to keep", ref reserve)) { rule.CreditReserve = reserve; SaveRule(companyKey, rule); }
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Shared by every buyer in this FC. Set zero to spend all affordable credits.");
+            ImGui.EndDisabled();
+            ImGui.Spacing(); ImGui.Separator(); ImGui.Spacing();
+            ImGui.TextColored(TraderStyle.Accent, "02  BUYERS & PRIORITY");
+            UiTone.Wrapped(TraderStyle.Muted, "Buyers run from top to bottom. Select a name to edit its purchase and storage settings.");
+            ImGui.BeginDisabled(SettingsLocked);
+            if (ImGui.SmallButton("Select all in FC")) { foreach (var c in characters) Enable(c, true); plugin.Save(); }
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Clear FC selection")) { foreach (var c in characters) c.Fuel.Enabled = false; plugin.Save(); }
+            ImGui.EndDisabled();
+            foreach (var character in characters) DrawCharacter(character, characters, rule);
+            if (ImGui.TreeNode("Company display name"))
+            {
+                var label = rule.NameOverride; ImGui.SetNextItemWidth(-1);
+                ImGui.BeginDisabled(SettingsLocked);
+                if (ImGui.InputTextWithHint("##CompanyLabel", "Optional display name", ref label, 128)) { rule.NameOverride = label; SaveRule(companyKey, rule); }
+                ImGui.EndDisabled();
                 ImGui.TreePop();
             }
         }
-        TraderStyle.EndCard();
-        ImGui.PopID();
+        TraderStyle.EndCard(); ImGui.PopID();
     }
 
     private void DrawCharacter(CharacterProfile character, IReadOnlyList<CharacterProfile> siblings, FuelCompanyRule rule)
@@ -243,7 +286,9 @@ internal sealed class FuelPanel(Plugin plugin)
             ImGui.TableSetupColumn("Order", ImGuiTableColumnFlags.WidthFixed, TraderStyle.Px(115));
             ImGui.TableNextRow(); ImGui.TableNextColumn();
             var enabled = character.Fuel.Enabled;
+            ImGui.BeginDisabled(SettingsLocked);
             if (ImGui.Checkbox("##Enabled", ref enabled)) { Enable(character, enabled); plugin.Save(); }
+            ImGui.EndDisabled();
             ImGui.TableNextColumn();
             if (ImGui.Selectable($"{character.Name}##Details", selectedCharacter == character.ContentId))
                 selectedCharacter = selectedCharacter == character.ContentId ? 0 : character.ContentId;
@@ -257,16 +302,17 @@ internal sealed class FuelPanel(Plugin plugin)
             DrawAccess(character, detailed: false);
             ImGui.TableNextColumn();
             var index = siblings.ToList().FindIndex(profile => profile.ContentId == character.ContentId);
-            ImGui.BeginDisabled(index <= 0);
+            ImGui.BeginDisabled(SettingsLocked || index <= 0);
             if (ImGui.SmallButton("Up")) MoveCharacter(siblings, index, -1);
             ImGui.EndDisabled();
             ImGui.SameLine();
-            ImGui.BeginDisabled(index < 0 || index + 1 >= siblings.Count);
+            ImGui.BeginDisabled(SettingsLocked || index < 0 || index + 1 >= siblings.Count);
             if (ImGui.SmallButton("Down")) MoveCharacter(siblings, index, 1);
             ImGui.EndDisabled();
             ImGui.EndTable();
         }
-        if (selectedCharacter == character.ContentId) DrawCharacterOptions(character, rule);
+        if (selectedCharacter == character.ContentId)
+        { ImGui.BeginDisabled(SettingsLocked); DrawCharacterOptions(character, rule); ImGui.EndDisabled(); }
         ImGui.Separator();
         ImGui.PopID();
     }
@@ -275,7 +321,7 @@ internal sealed class FuelPanel(Plugin plugin)
     {
         var fuel = character.Fuel;
         ImGui.Indent(TraderStyle.Px(12));
-        ImGui.TextDisabled("Character settings");
+        TraderStyle.Section("Buyer preferences", character.Name);
         var overrideHouse = fuel.HouseId.HasValue;
         if (ImGui.Checkbox("Override the FC destination with a house", ref overrideHouse))
         {
@@ -294,14 +340,22 @@ internal sealed class FuelPanel(Plugin plugin)
                 ? $"Uses FC destination: Resident Caretaker · {LifestreamClient.DistrictName(rule.CaretakerCity)}"
                 : $"Uses FC destination: {house?.Name ?? "not selected"}");
         }
-        DrawAccess(character, detailed: true);
+        if (ImGui.TreeNode("Route details & access requirements"))
+        { DrawAccess(character, detailed: true); ImGui.TreePop(); }
+        ImGui.Spacing();
+        ImGui.TextColored(TraderStyle.Gold, "PURCHASE PLAN");
         var exhaust = fuel.ExhaustCredits;
-        if (ImGui.Checkbox("Convert all credits above the FC reserve", ref exhaust))
+        var changed = false;
+        if (ImGui.RadioButton("Use FC budget", exhaust)) { exhaust = true; changed = true; }
+        ImGui.SameLine();
+        if (ImGui.RadioButton("Restock to an amount", !exhaust)) { exhaust = false; changed = true; }
+        if (changed)
         {
             fuel.ExhaustCredits = exhaust;
             if (!exhaust && fuel.TargetQuantity == 0) { fuel.BuyBelow = 1; fuel.TargetQuantity = 999; }
             plugin.Save();
         }
+        if (exhaust) UiTone.Wrapped(TraderStyle.Muted, "Keep buying until the FC credit reserve is reached or storage is full.");
         if (!exhaust)
         {
             var below = fuel.BuyBelow;
@@ -311,6 +365,8 @@ internal sealed class FuelPanel(Plugin plugin)
             ImGui.SetNextItemWidth(TraderStyle.Px(160));
             if (EditUInt("Restock to", ref target)) { fuel.TargetQuantity = target; plugin.Save(); }
         }
+        ImGui.Spacing();
+        ImGui.TextColored(TraderStyle.Gold, "STORAGE");
         var deposit = fuel.DepositToRetainers;
         if (ImGui.Checkbox("Store fuel in retainers and continue buying", ref deposit)) { fuel.DepositToRetainers = deposit; plugin.Save(); }
         if (deposit)
@@ -366,15 +422,21 @@ internal sealed class FuelPanel(Plugin plugin)
         if (run is { Finished: true }) ImGui.Checkbox("Show last run instead of preview", ref showLastRun);
         var showingRun = run is { Finished: false } || run != null && showLastRun;
         var entries = showingRun ? run!.Entries : plugin.FuelQueue.Preview().ToList();
-        if (entries.Count == 0) return;
+        if (entries.Count == 0)
+        {
+            TraderStyle.Section("Your next fuel run", "Select buyers and destinations to build a queue. Each PC runs independently.");
+            if (TraderStyle.PrimaryButton("Choose buyers")) page = 0;
+            return;
+        }
         if (TraderStyle.BeginCard("FuelQueuePreview"))
         {
-            TraderStyle.Section(run is { Finished: false } ? "Current queue" : showingRun ? "Last run" : "Queue preview", "Each PC runs its own selected characters.");
+            TraderStyle.Section(run is { Finished: false } ? "Live itinerary" : showingRun ? "Last run results" : "Your next run",
+                "Grouped by world and company. When storage fills, the next buyer in that FC takes over.");
             if (ImGui.BeginTable("FuelQueueRows", 3, ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
             {
                 ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.WidthStretch);
                 ImGui.TableSetupColumn("Result", ImGuiTableColumnFlags.WidthFixed, TraderStyle.Px(105));
-                ImGui.TableSetupColumn("Tanks", ImGuiTableColumnFlags.WidthFixed, TraderStyle.Px(105));
+                ImGui.TableSetupColumn(showingRun ? "Tanks" : "Purchase plan", ImGuiTableColumnFlags.WidthFixed, TraderStyle.Px(145));
                 ImGui.TableHeadersRow();
                 foreach (var entry in entries)
                 {
@@ -396,8 +458,10 @@ internal sealed class FuelPanel(Plugin plugin)
                     };
                     ImGui.TextColored(tone, entry.Status == FuelQueueEntryStatus.StorageFull ? "Storage full" : entry.Status.ToString());
                     ImGui.TableNextColumn();
-                    ImGui.TextUnformatted($"{entry.Purchased:N0} bought");
-                    ImGui.TextDisabled($"{entry.Deposited:N0} stored");
+                    if (showingRun)
+                    { ImGui.TextColored(TraderStyle.Accent, $"{entry.Purchased:N0} bought"); ImGui.TextDisabled($"{entry.Deposited:N0} stored"); }
+                    else
+                    { ImGui.TextUnformatted(entry.ExhaustCredits ? "Use FC budget" : $"To {entry.TargetQuantity:N0}"); ImGui.TextDisabled(entry.DepositToRetainers ? "Retainer storage" : "Carry only"); }
                 }
                 ImGui.EndTable();
             }
@@ -409,11 +473,11 @@ internal sealed class FuelPanel(Plugin plugin)
     {
         if (TraderStyle.BeginCard("FuelHouseLibrary"))
         {
-            TraderStyle.Section("Workshop houses", "Imports Lifestream Address Book houses and registered FC houses. Add any other workshop you can access here.");
+            TraderStyle.Section("Your destination library", "Saved workshops are available to every buyer on the same world.");
             if (TraderStyle.PrimaryButton("Add a house", new(140, 32))) addingHouse = !addingHouse;
             ImGui.SameLine();
             if (TraderStyle.SecondaryButton("Record this workshop", new(190, 32))) plugin.QueueAction(plugin.FuelQueue.CaptureHouse);
-            ImGui.TextWrapped("Characters can only use houses on their home world. A saved address must have an accessible company workshop and fuel supplier.");
+            UiTone.Wrapped(TraderStyle.Muted, "Lifestream houses are imported automatically. No workshop? Choose Resident Caretaker in the Buyers view instead.");
             if (addingHouse) DrawHouseForm();
         }
         TraderStyle.EndCard();
@@ -426,10 +490,15 @@ internal sealed class FuelPanel(Plugin plugin)
                 foreach (var house in world)
                 {
                     ImGui.PushID(house.Id.ToString());
-                    var name = house.Name;
-                    ImGui.SetNextItemWidth(-1);
-                    if (ImGui.InputText("##HouseName", ref name, 128)) { house.Name = name; plugin.Save(); }
+                    ImGui.TextColored(TraderStyle.Text, house.Name);
                     UiTone.Wrapped(TraderStyle.Muted, AddressLabel(house));
+                    if (ImGui.TreeNode("Rename house"))
+                    {
+                        var name = house.Name;
+                        ImGui.SetNextItemWidth(-1);
+                        if (ImGui.InputText("##HouseName", ref name, 128)) { house.Name = name; plugin.Save(); }
+                        ImGui.TreePop();
+                    }
                     ImGui.Separator();
                     ImGui.PopID();
                 }

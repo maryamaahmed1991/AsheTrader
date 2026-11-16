@@ -1,5 +1,12 @@
 # Development build validation
 
+## 0.5.1.0 validation — 16 November 2026
+
+- Full build: **910 tests passed**, zero failures/skips. Release plugin compiled with zero warnings/errors.
+- Native ImGui fixture renders checked buyer setup, minimum 880×620 layout, wide company navigation, 125% scaling, buyer preferences, queue preview, active run, destination library and registration. These render the production FuelPanel with fixture services, not a live game session.
+- UI review checked same-world destination filtering, shared FC reserve and buyer order, existing settings locks, diagnostic actions, full-FC search results and text labels alongside status colours. Active queues allow navigation and preference inspection while edits remain locked.
+- Changes are limited to FuelPanel presentation, the plugin version and documentation. Purchase, travel, deposit, journal and network code are unchanged. Confirm in-game font scaling and scrolling after updating; existing configurations and pending queues remain compatible.
+
 ## 0.5.0.8 validation — 14 November 2026
 
 - Full build: **910 tests passed**, zero failures/skips; Release plugin compiled without warnings/errors.

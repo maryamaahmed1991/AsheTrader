@@ -27,6 +27,12 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.5.1.0
+
+The Fuel workspace now has three focused views: **Buyers**, **Destinations**, and **Run overview**. A persistent dashboard keeps Start/Pause/Resume, End queue, diagnostics and totals visible while the content scrolls. Wide windows show a world/FC navigator beside one company's setup; compact windows use a company selector. Destinations and the shared credit reserve are always above the buyer list. Select a buyer for purchase mode, storage preferences and route details.
+
+Cached balances, route availability and queue outcomes use distinct colours and text labels. The destination library supports workshop registration and Lifestream imports; Resident Caretakers remain selectable directly in buyer setup. Run overview shows purchase plans before starting and bought/stored totals during a run. Saved settings, journals, purchasing, travel and deposit behavior are unchanged.
+
 ## Version 0.5.0.8
 
 Resume and End queue now tally an exact saved fuel receipt directly from the original buyer's carried inventory before any supplier travel. A completed purchase can therefore be recovered while standing in a city, even when housing access is unavailable. Ending queues finish after that tally. Unchanged or ambiguous inventory retains its checkpoint rather than authorizing a blind repeat.
