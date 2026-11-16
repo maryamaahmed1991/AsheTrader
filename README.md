@@ -27,6 +27,14 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.5.2.0
+
+Fuel runs now keep the latest 100 completed/ended receipts on this PC under **Run overview → Run history**. Receipts include per-buyer outcomes, confirmed purchase costs, tanks bought/stored, destinations and elapsed time including pauses. Copy a receipt or retry only its skipped buyers using current setup; the retry creates a new queue without changing the saved buyer selection. An available older finished journal is imported with missing credit/timing information explicitly marked.
+
+Choose **Automatic** in an FC's destination dropdown to select reachable suppliers per buyer. Selection prefers the current location, a previously successful destination, a matching FC estate workshop, an estate-accessible caretaker, then registered workshop/caretaker city routes. Only same-world registered houses and supported caretakers are considered. This is a deterministic preference ranking, not a measured shortest-path optimizer. Offline previews use that character's cached access; live access is checked before travel. A different eligible destination can be selected if the previous one is no longer reachable. Unknown access waits for login; no verified live choice skips that buyer with a reason. Explicit buyer house overrides and existing manual assignments remain fixed.
+
+Supplier interaction failures still pause for diagnosis rather than abandoning an open menu or unresolved purchase. Pending purchases retain their original destination until tallied. No inventory publication or store hosting is included in this release.
+
 ## Version 0.5.1.0
 
 The Fuel workspace now has three focused views: **Buyers**, **Destinations**, and **Run overview**. A persistent dashboard keeps Start/Pause/Resume, End queue, diagnostics and totals visible while the content scrolls. Wide windows show a world/FC navigator beside one company's setup; compact windows use a company selector. Destinations and the shared credit reserve are always above the buyer list. Select a buyer for purchase mode, storage preferences and route details.

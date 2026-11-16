@@ -12,6 +12,9 @@ public enum FuelQueueStage { SelectCharacter, Login, Travel, Buying, CloseShop, 
 public sealed class FuelQueueRun
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+    public DateTimeOffset? StartedAtUtc { get; set; }
+    public DateTimeOffset? FinishedAtUtc { get; set; }
+    public bool FinishTimeEstimated { get; set; }
     public List<FuelQueueEntry> Entries { get; set; } = [];
     public int Index { get; set; }
     public bool Paused { get; set; } = true;
@@ -38,6 +41,9 @@ public sealed class FuelQueueService
 {
     private readonly Plugin plugin;
     private readonly SettingsFileStore file;
+    private readonly FuelRunHistoryStore history;
+    public IReadOnlyList<FuelRunReceipt> History => history.Records;
+    public string HistoryStatus => history.Error;
     private readonly GameWorkflowExecutor executor = new();
     private readonly FuelDestinationRunner destination = new();
     private readonly StorageRecoveryStability storageStability = new();
@@ -65,6 +71,8 @@ public sealed class FuelQueueService
 
     internal void CaptureDiagnosticSnapshot(string reason)
     {
+        if (Run != null && Run.Index < Run.Entries.Count)
+            plugin.Workflow.RecordDiagnostic($"fuel destination policy automatic={Entry.AutomaticDestination}; selected={FuelAutomaticDestination.Key(Entry)}; explanation={Entry.DestinationReason}; historyCount={History.Count}; historyError={HistoryStatus}");
         executor.CaptureDiagnosticSnapshot(reason);
         destination.CaptureDiagnosticSnapshot(reason);
         plugin.Fuel.CaptureDiagnosticSnapshot(reason);
@@ -93,6 +101,7 @@ public sealed class FuelQueueService
     {
         this.plugin = plugin;
         file = new(Path.Combine(Plugin.PluginInterface.ConfigDirectory.FullName, "fuel-queue.json"));
+        history = new(Path.Combine(Plugin.PluginInterface.ConfigDirectory.FullName, "fuel-history.json"));
         executor.Diagnostic = message => plugin.Workflow.RecordDiagnostic("fuel " + message);
         destination.Diagnostic = message => plugin.Workflow.RecordDiagnostic("fuel route " + message);
         executor.PersistStorageCheckpoint = checkpoint =>
@@ -116,6 +125,8 @@ public sealed class FuelQueueService
         try
         {
             Run = JsonConvert.DeserializeObject<FuelQueueRun>(file.Load() ?? "null");
+            if (Run is { Finished: true })
+            { if (Run.FinishedAtUtc == null) Run.FinishTimeEstimated = true; Save(); }
             if (HasUnfinishedRun)
             {
                 Run!.Paused = true;
@@ -170,11 +181,27 @@ public sealed class FuelQueueService
         plugin.Workflow.RecordDiagnostic("fuel workshop capture: " + house.Address);
     }
 
-    public IReadOnlyList<FuelQueueEntry> Preview() => FuelQueuePlanner.Build(plugin.Config.Characters,
-        plugin.Config.Houses, plugin.Config.FuelSettings, ResolveWorld);
+    public IReadOnlyList<FuelQueueEntry> Preview() => PrepareEntries(plugin.Config.Characters, false);
 
-    public FuelQueueEntry PreviewCharacter(CharacterProfile character) => FuelQueuePlanner.Build([character],
-        plugin.Config.Houses, plugin.Config.FuelSettings, ResolveWorld, includeUnselected: true)[0];
+    public FuelQueueEntry PreviewCharacter(CharacterProfile character) => PrepareEntries([character], true)[0];
+
+    private IReadOnlyList<FuelQueueEntry> PrepareEntries(IReadOnlyList<CharacterProfile> characters, bool includeUnselected)
+    {
+        var entries = FuelQueuePlanner.Build(characters, plugin.Config.Houses, plugin.Config.FuelSettings, ResolveWorld, includeUnselected);
+        foreach (var entry in entries.Where(e => e.AutomaticDestination && e.Status != FuelQueueEntryStatus.Skipped))
+        {
+            var character = characters.First(c => c.ContentId == entry.CharacterId);
+            var choice = FuelAutomaticDestination.Choose(FuelAutomaticDestination.Candidates(entry, ResolveWorld(entry.World) ?? 0, plugin.Config.Houses),
+                candidate => plugin.FuelAccess.Assess(character, candidate), PreviousDestination(entry));
+            if (choice != null) FuelAutomaticDestination.Apply(entry, choice);
+        }
+        return entries;
+    }
+
+    private string? PreviousDestination(FuelQueueEntry entry) => history.Records
+        .SelectMany(r => r.Buyers)
+        .FirstOrDefault(b => b.CharacterId == entry.CharacterId && b.FreeCompanyId == entry.FreeCompanyId
+            && b.World == entry.World && b.SupplierReached && b.Purchased > 0)?.DestinationKey;
 
     internal static uint? ResolveWorld(string name)
     {
@@ -186,9 +213,23 @@ public sealed class FuelQueueService
     {
         RequireAvailable();
         if (HasUnfinishedRun) throw new InvalidOperationException("Resume or end the saved fuel queue first.");
-        var entries = Preview();
+        StartEntries(Preview());
+    }
+
+    public void RetrySkipped(Guid receiptId)
+    {
+        RequireAvailable();
+        if (HasUnfinishedRun) throw new InvalidOperationException("Finish the saved fuel queue before retrying skipped buyers.");
+        var receipt = History.FirstOrDefault(r => r.Id == receiptId) ?? throw new InvalidOperationException("This receipt is no longer available.");
+        var ids = receipt.Buyers.Where(b => b.Status == FuelQueueEntryStatus.Skipped).Select(b => b.CharacterId).ToHashSet();
+        StartEntries(PrepareEntries(plugin.Config.Characters.Where(c => ids.Contains(c.ContentId)).ToArray(), true));
+    }
+
+    private void StartEntries(IReadOnlyList<FuelQueueEntry> entries)
+    {
         if (!entries.Any(x => x.Status == FuelQueueEntryStatus.Queued)) throw new InvalidOperationException("Select at least one character with a valid fuel destination.");
-        Run = new() { Entries = entries.ToList(), Paused = false, Status = "Starting the selected fuel queue…" };
+        if (Run is { Finished: true } && !ArchiveFinished()) throw new IOException(HistoryStatus + " The last run remains saved; it has not been replaced.");
+        Run = new() { Entries = entries.ToList(), StartedAtUtc = DateTimeOffset.UtcNow, Paused = false, Status = "Starting the selected fuel queue…" };
         stageStarted = Environment.TickCount64;
         Save();
     }
@@ -376,6 +417,7 @@ public sealed class FuelQueueService
             if (!destination.Success) throw new InvalidOperationException(destination.Error);
             if (!FuelDestinationRunner.IsExpectedLocation(Entry) || !NativeFuelShop.TryRead(out _, out _))
                 throw new InvalidOperationException("Fuel travel finished without the configured supplier shop. Resume after checking the destination.");
+            Entry.SupplierReached = true;
             Transition(FuelQueueStage.Buying, "Checking live fuel stock and FC credits…"); return;
         }
         if (!EnsureHomeWorld()) return;
@@ -385,7 +427,23 @@ public sealed class FuelQueueService
             throw new InvalidOperationException("Return to the interrupted purchase character before tallying its fuel.");
         if (!VerifyCharacterCompany()) return;
         if (FuelDestinationRunner.IsExpectedLocation(Entry) && NativeFuelShop.TryRead(out _, out _))
-        { Transition(FuelQueueStage.Buying, "Checking live fuel stock and FC credits…"); return; }
+        { Entry.SupplierReached = true; Transition(FuelQueueStage.Buying, "Checking live fuel stock and FC credits…"); return; }
+        if (Entry.AutomaticDestination && Run.PendingPurchase == null)
+        {
+            var choice = FuelAutomaticDestination.Choose(
+                FuelAutomaticDestination.Candidates(Entry, ResolveWorld(Entry.World) ?? 0, plugin.Config.Houses),
+                plugin.FuelAccess.AssessCurrent, Entry.SupplierReached ? FuelAutomaticDestination.Key(Entry) : PreviousDestination(Entry));
+            if (choice == null)
+            {
+                if (Environment.TickCount64 - stageStarted < 8000)
+                { SetStatus("Finding an accessible fuel destination for this buyer…"); return; }
+                FinishEntry(FuelQueueEntryStatus.Skipped, "Automatic destination: no verified reachable workshop or caretaker was found. Check this buyer's housing unlocks or choose a manual destination.");
+                return;
+            }
+            FuelAutomaticDestination.Apply(Entry, choice);
+            Save();
+            plugin.Workflow.RecordDiagnostic($"fuel automatic destination character={Entry.CharacterId}; destination={FuelAutomaticDestination.Key(Entry)}; reason={choice.Explanation}");
+        }
         var access = plugin.FuelAccess.AssessCurrent(Entry);
         if (access.Status == FuelAccessStatus.Unknown && access.Kind != FuelAccessRouteKind.Unavailable && Environment.TickCount64 - stageStarted < 8000)
         { SetStatus("Waiting for this character's travel access to load…"); return; }
@@ -589,6 +647,7 @@ public sealed class FuelQueueService
             : FuelCreditBudget.Begin(pending.FreeCompanyId, pending.CreditsBefore);
         budget.Acknowledge(pending);
         Run.CreditBudget = budget;
+        Entry.CreditsSpent = FuelRunHistory.AddPurchaseCost(Entry.CreditsSpent, Entry.Purchased, quantity, pending.UnitPrice);
         Entry.Purchased = purchased;
         Run.RemainingTarget = remaining;
         Run.PendingPurchase = null;
@@ -705,9 +764,14 @@ public sealed class FuelQueueService
     }
     private void Save()
     {
+        if (Run is { Finished: true }) Run.FinishedAtUtc ??= DateTimeOffset.UtcNow;
         if (!file.TrySave(JsonConvert.SerializeObject(Run, Formatting.Indented), out var error))
         { journalHealthy = false; setupStatus = error; throw new IOException(error); }
+        if (Run is { Finished: true }) ArchiveFinished();
     }
+
+    private bool ArchiveFinished() => Run is not { Finished: true } || history.Record(FuelRunHistory.Capture(
+        Run.Id, Run.StartedAtUtc, Run.FinishedAtUtc ?? DateTimeOffset.UtcNow, Run.EndRequested, Run.Entries, Run.FinishTimeEstimated));
     public void Shutdown()
     {
         try

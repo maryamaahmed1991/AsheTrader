@@ -13,6 +13,7 @@ public sealed class FuelCompanyRule
     public Guid? HouseId { get; set; }
     public uint CreditReserve { get; set; }
     public bool UseCaretaker { get; set; }
+    public bool AutomaticDestination { get; set; }
     public int CaretakerCity { get; set; } = 8;
 }
 
@@ -43,6 +44,10 @@ public sealed class FuelQueueEntry
     public string Note { get; set; } = string.Empty;
     public ulong Purchased { get; set; }
     public ulong Deposited { get; set; }
+    public ulong? CreditsSpent { get; set; }
+    public bool AutomaticDestination { get; set; }
+    public string DestinationReason { get; set; } = string.Empty;
+    public bool SupplierReached { get; set; }
 }
 
 /// <summary>Uses the same one-based ward/plot format as Lifestream's house address tuple.</summary>
@@ -107,6 +112,7 @@ public static class FuelQueuePlanner
             var key = CompanyKey(character);
             var rule = settings.Companies?.GetValueOrDefault(key);
             var fuel = character.Fuel;
+            var automatic = !fuel.HouseId.HasValue && rule?.AutomaticDestination == true;
             var useCaretaker = !fuel.HouseId.HasValue && rule?.UseCaretaker == true;
             var houseId = fuel.HouseId ?? (useCaretaker ? null : rule?.HouseId);
             var matches = houseId.HasValue ? houses.Where(house => house.Id == houseId.Value).ToArray() : [];
@@ -125,6 +131,7 @@ public static class FuelQueuePlanner
                 CreditReserve = rule?.CreditReserve ?? 0, KeepCarried = fuel.KeepCarried,
                 ExhaustCredits = fuel.ExhaustCredits, TargetQuantity = fuel.TargetQuantity, BuyBelow = fuel.BuyBelow,
                 DepositToRetainers = fuel.DepositToRetainers,
+                AutomaticDestination = automatic, CreditsSpent = 0,
             };
             entries.Add(entry);
             string? reason = null;
@@ -135,9 +142,9 @@ public static class FuelQueuePlanner
                 reason = "Choose credit exhaustion or a positive purchase threshold no greater than the target.";
             else if (resolveWorld(character.World) is not { } worldId || worldId == 0)
                 reason = "The character's home world is unknown. Refresh the roster before buying fuel.";
-            else if (useCaretaker && entry.CaretakerCity is not (2 or 8 or 9 or 70 or 111))
+            else if (!automatic && useCaretaker && entry.CaretakerCity is not (2 or 8 or 9 or 70 or 111))
                 reason = "Choose a valid housing district for the Resident Caretaker.";
-            else if (!useCaretaker)
+            else if (!automatic && !useCaretaker)
             {
                 if (!houseId.HasValue) reason = "Assign a registered workshop house on this character's home world, or choose a Resident Caretaker.";
                 else if (matches.Length != 1) reason = "The assigned workshop house is missing or duplicated. Choose a registered house.";

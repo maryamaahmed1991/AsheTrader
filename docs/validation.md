@@ -1,5 +1,13 @@
 # Development build validation
 
+## 0.5.2.0 validation — 16 November 2026
+
+- Full build: **928 tests passed**, zero failures/skips; Release plugin compiled with zero warnings/errors.
+- Automatic destination tests cover same-world and valid-address filtering, duplicate houses, unknown/unavailable access, current-location and previous-success ranking, blocked-house caretaker fallback, destination-only mutations, manual overrides and legacy settings.
+- Receipt tests cover restart persistence, duplicate archival, detached snapshots, 100-run retention, corrupt-file preservation, competing-client write rejection, legacy missing costs, confirmed spending and explicit legacy timing labels.
+- Native ImGui fixture renders inspected History and Automatic setup at wide and minimum window sizes. These are fixture renders, not live travel or purchases. In-game route selection and complete-run/reload history still require user testing.
+- Service review checks that pending receipts are reconciled before automatic selection, existing manual choices and character overrides remain fixed, finished journals are saved before archival, and archive failures retain the last run before replacement. No store hosting or inventory publishing is introduced.
+
 ## 0.5.1.0 validation — 16 November 2026
 
 - Full build: **910 tests passed**, zero failures/skips. Release plugin compiled with zero warnings/errors.

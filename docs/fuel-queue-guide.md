@@ -12,6 +12,16 @@ The dashboard and run controls stay above the scrollable view. Unfinished runs l
 
 ## Set up buyers
 
+### Automatic destinations and receipts (0.5.2.0)
+
+In **Buyers → 01 Destination & budget**, choose **Automatic** to let each buyer use a reachable supplier. The buyer row shows the cached recommendation; open its route details for the selection reason. No cached route means “checked on login,” not a permanent rejection. Live selection checks home-world access and prefers the current location, a successful previous supplier, and direct FC estate routes before city routes. Register any workshop houses you want considered under Destinations. Caretakers need no registration. Individual house overrides remain fixed. Existing queues retain their saved destination policy; enable Automatic after finishing the current queue.
+
+When a queue finishes or is ended after its pending movements are reconciled, open **Run overview → Run history**. The latest 100 receipts survive reloads in `fuel-history.json`. Spending totals come from confirmed quantity × unit price, rather than net changes in shared FC credits. Deposited totals can include fuel carried before the run. Elapsed time includes pauses and time offline. Older runs cannot be reconstructed beyond the last available journal; missing costs/times are labeled accordingly.
+
+**Retry skipped buyers** starts a new run for skipped characters still in the local roster, using their current destinations and budgets even if they are not currently selected. Completed and full-storage buyers are excluded. It does not replay purchases or change saved selections. Correct the reason for a skip before retrying; an exhausted FC will otherwise be skipped again.
+
+For a first test, select one buyer, use Automatic, and choose a small restock target. Verify the suggested route and final receipt, then reload the plugin and confirm the receipt remains. An unfinished old queue can still be resumed before testing Automatic in a new run.
+
 1. Update Ashe's Trader and open **Fuel & houses → Buyers**. Setup automatically refreshes AutoRetainer's character/FC data and imports Lifestream's saved houses. **Setup details & refresh → Refresh setup** repeats the import.
 2. Choose an FC in the world-grouped navigator (or the company dropdown in a compact window). Select the characters that may buy fuel and use **Up/Down** to order buyers within that FC. Characters run in world and FC groups. Unknown FC memberships remain separate until checked after login; a character known to have no FC is skipped.
 3. Under **01 Destination & budget** and choose either a registered workshop house or **Resident Caretaker**. The caretaker needs no company house; choose an accessible residential district on the character's home world. FC rank and credit-spending permissions still apply.
