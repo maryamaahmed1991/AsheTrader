@@ -13,6 +13,7 @@ public sealed class Configuration : IPluginConfiguration
     public List<HouseProfile> Houses { get; set; } = [];
     public bool OpenOnLoad { get; set; }
     public bool ShowMascotIllustrations { get; set; } = true;
+    public Core.Search.ItemSearchPreferences ItemSearch { get; set; } = new();
     public WorkflowSettings Workflow { get; set; } = new();
     public FuelQueueSettings FuelSettings { get; set; } = new();
     public Dictionary<ulong, FuelAccessSnapshot> FuelAccessSnapshots { get; set; } = [];
@@ -23,6 +24,8 @@ public sealed class Configuration : IPluginConfiguration
         TradeLists ??= [];
         Characters ??= [];
         Houses ??= [];
+        ItemSearch ??= new();
+        ItemSearch.Normalize();
         Workflow ??= new();
         FuelSettings ??= new();
         FuelAccessSnapshots ??= [];

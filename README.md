@@ -27,6 +27,12 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.6.3.0
+
+Item Search remembers the last query and quantity sort preference on each PC. Opening the page after a reload reruns that query against the available caches. Use **Save list** for named comma-separated searches, the saved-search picker to run them again, and **Edit list** to rename or update the selected list. Deleted lists can be restored with **Undo deletion** until another search or action replaces the notice. Lists are local to each PC and do not store inventory snapshots.
+
+Search controls now have clearer labels, right-aligned quantity columns, and expandable source details. Selected-item storage has its own scrolling table with frozen headers. Wide workspaces show results and locations side by side; smaller windows stack them. Guidance stays behind the page's **i** button.
+
 ## Version 0.6.2.1
 
 Illustrated guidance now opens only when you click the round **i** button beside a page heading. The normal workspace has no mascot portraits or expanded welcome cards. Close help with **Got it**, Escape or a click outside it. The illustration preference now applies inside help popups; all status, error and stop controls remain visible.
