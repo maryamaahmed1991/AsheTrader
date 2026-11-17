@@ -27,6 +27,10 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.6.1.1
+
+Adds the Gil Wink chibi mascot as the plugin installer icon, with a transparent 512 × 512 PNG included in the package. This is a branding-only update.
+
 ## Version 0.6.1.0
 
 **Trusted PCs** reconnect automatically after one-time setup, retain a private inventory snapshot for offline Item Search, and allow transfer jobs to wait for the other PC to become ready. Existing pairings migrate without replacing their identities. New pairs can use an owner-created, ten-minute one-use invitation; the hosted service supplies connection metadata only. Inventory and game commands remain on the encrypted LAN connection. Saved jobs never start merely because a plugin reloads, and brief disconnects enter the existing reconciliation flow when recovery is enabled.
