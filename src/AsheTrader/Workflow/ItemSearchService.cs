@@ -58,6 +58,7 @@ public sealed partial class WorkflowService
                 throw new ArgumentException("That search matches too many item names. Add a longer item-name fragment.");
             searchId = Guid.NewGuid();
             var ids = searchMatches.Select(x => x.ItemId).ToList();
+            remoteSearchSource = OfflineInventory(ids);
             localSearch = new AllaganItemSearch(ids, plugin.Config.Characters);
             localSearchSource = Source(localSearch, Settings.PeerId, Settings.PeerName);
             nextLocalSearchProgress = 0;
@@ -103,7 +104,7 @@ public sealed partial class WorkflowService
         {
             ItemSearch = new(itemSearchQuery, localSearch != null || waitingForSearchPeer, localSearchSource, remoteSearchSource,
                 ItemSearchAggregation.Build(searchMatches, localSearchSource ?? new(Settings.PeerId, Settings.PeerName, false, "", [], null, [], 0, 0),
-                    Connected && HasAcceptedConnection ? remoteSearchSource : null), error, Connected && HasAcceptedConnection);
+                    remoteSearchSource), error, remoteSearchSource != null || Connected && HasAcceptedConnection);
         }
         catch (Exception ex)
         {

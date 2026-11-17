@@ -14,6 +14,8 @@ The preview includes NQ and HQ quantities separately. Equipped items, armoury st
 
 ## Second PC
 
+Trusted-PC pairing under Transfers is separate from store publishing. It reconnects game clients and syncs private offline inventory automatically; see [Trusted PCs](trusted-pcs.md). A device invitation does not give a friend access to your private account inventories or grant catalogue publishing.
+
 Give a name to **Authorize another PC**, copy the resulting publisher code, and connect it in the other PC's Access tab. Select separate characters on each PC. Overlapping physical inventories are rejected by the server using opaque, store-specific inventory identifiers; native character/retainer IDs and their names are never uploaded. Publishers replace only their own snapshots, with revision checks to prevent stale retries from overwriting newer stock.
 
 ## Invite friends

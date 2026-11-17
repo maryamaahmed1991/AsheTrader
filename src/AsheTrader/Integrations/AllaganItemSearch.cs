@@ -22,6 +22,7 @@ internal sealed class AllaganItemSearch
     private bool ownerDiscoveryStopped;
     private bool labelDiscoveryAttempted;
     private bool labelsUnavailable;
+    private readonly bool registeredOwnersOnly;
 
     public bool Complete { get; private set; }
     public int CheckedItems { get; private set; }
@@ -32,8 +33,9 @@ internal sealed class AllaganItemSearch
     // This is cache retrieval time, never a claim about the game's last observation time.
     public DateTimeOffset RetrievedAt { get; } = DateTimeOffset.UtcNow;
 
-    public AllaganItemSearch(IReadOnlyList<uint> itemIds, IReadOnlyList<CharacterProfile> knownCharacters)
+    public AllaganItemSearch(IReadOnlyList<uint> itemIds, IReadOnlyList<CharacterProfile> knownCharacters, bool registeredOwnersOnly = false)
     {
+        this.registeredOwnersOnly = registeredOwnersOnly;
         this.itemIds = itemIds.Where(id => id != 0).Distinct().ToArray();
         requestedItems = this.itemIds.ToHashSet();
         foreach (var character in knownCharacters.Where(character => character.ContentId != 0))
@@ -41,7 +43,9 @@ internal sealed class AllaganItemSearch
             var name = CleanLabel(character.Name, $"Character {character.ContentId}");
             labels[character.ContentId] = new(name, name, CleanLabel(character.World));
             labelCharacters.Enqueue(character.ContentId);
+            if (registeredOwnersOnly) expectedOwners.TryAdd(character.ContentId, []);
         }
+        if (registeredOwnersOnly) { ownerDiscoveryStopped = true; CheckedItems = this.itemIds.Length; }
         if (this.itemIds.Length == 0) Complete = true;
     }
 
@@ -68,7 +72,7 @@ internal sealed class AllaganItemSearch
             ReadItemOwners(itemIds[CheckedItems++]);
             return;
         }
-        if (expectedOwners.Count == 0) { Complete = true; return; }
+        if (expectedOwners.Count == 0 && !registeredOwnersOnly) { Complete = true; return; }
         if (!labelDiscoveryAttempted)
         {
             labelDiscoveryAttempted = true;
@@ -77,12 +81,15 @@ internal sealed class AllaganItemSearch
             {
                 var registered = Plugin.PluginInterface.GetIpcSubscriber<List<ulong>>("AutoRetainer.GetRegisteredCIDs").InvokeFunc();
                 foreach (var id in (registered ?? []).Where(id => id != 0).Distinct())
+                {
                     if (!labelCharacters.Contains(id)) labelCharacters.Enqueue(id);
+                    if (registeredOwnersOnly) expectedOwners.TryAdd(id, []);
+                }
             }
             catch (Exception ex) { Plugin.Log.Debug(ex, "Item Search: optional AutoRetainer name lookup unavailable"); labelsUnavailable = true; }
             return;
         }
-        if (!labelsUnavailable && labelCharacters.Count > 0 && expectedOwners.Keys.Any(owner => !labels.ContainsKey(owner)))
+        if (!labelsUnavailable && labelCharacters.Count > 0 && (registeredOwnersOnly || expectedOwners.Keys.Any(owner => !labels.ContainsKey(owner))))
         {
             ReadCharacterLabels(labelCharacters.Dequeue());
             return;
@@ -136,6 +143,7 @@ internal sealed class AllaganItemSearch
                 if (retainer.RetainerID == 0 || retainer.RetainerID == characterId) continue;
                 var name = CleanLabel(retainer.Name, $"Retainer {retainer.RetainerID}");
                 labels.TryAdd(retainer.RetainerID, new(name, characterName, world));
+                if (registeredOwnersOnly) expectedOwners.TryAdd(retainer.RetainerID, []);
             }
         }
         catch (Exception ex)

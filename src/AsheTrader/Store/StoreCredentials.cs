@@ -18,14 +18,18 @@ internal sealed class StoreCredentialFile(string path)
 {
     private readonly SettingsFileStore file = new(path);
     public StoreCredentials Load()
+        => LoadValue<StoreCredentials>() ?? new();
+    public T? LoadValue<T>()
     {
         var encoded = file.Load();
-        if (encoded == null) return new();
+        if (encoded == null) return default;
         var plain = Transform(Convert.FromBase64String(encoded), false);
-        try { return JsonSerializer.Deserialize<StoreCredentials>(plain) ?? throw new InvalidDataException(); }
+        try { return JsonSerializer.Deserialize<T>(plain); }
         finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(plain); }
     }
     public void Save(StoreCredentials credentials)
+        => SaveValue(credentials);
+    public void SaveValue<T>(T credentials)
     {
         var plain = JsonSerializer.SerializeToUtf8Bytes(credentials);
         try

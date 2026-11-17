@@ -1,4 +1,5 @@
-// Private, single-store API. No public registration, inventory endpoints or HTML pages.
+import {devices} from './devices.mjs';
+// Private catalogue and owner-authorized device rendezvous. No public registration.
 const headers = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
 const reply = (data, status=200) => new Response(JSON.stringify(data), {status, headers});
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
@@ -43,6 +44,7 @@ export default {
       if(env.RATE_LIMITER && !(await env.RATE_LIMITER.limit({key:request.headers.get('CF-Connecting-IP') || 'unknown'})).success) return reply({error:'Too many requests. Try again shortly.'},429);
       const authorization=request.headers.get('authorization') || '';
       if(!/^Bearer [a-f0-9]{64}$/.test(authorization)) fail(401,'Access denied.');
+      if(path.startsWith('/v1/device-link')) return await devices(request,env,path,authorization.slice(7),{reply,fail,digest,token,body,label});
       const credential=await env.DB.prepare('SELECT id, role, source_id FROM credentials WHERE hash=?').bind(await digest(authorization.slice(7))).first();
       if(!credential) fail(401,'Access denied.');
       const owner=()=>{if(credential.role!=='owner') fail(403,'Owner access required.');};
@@ -98,10 +100,11 @@ export default {
         const json=JSON.stringify(snapshot), now=new Date().toISOString();
         // Single conditional statement: atomic revision check, overlap check and replacement.
         const result=await env.DB.prepare(`UPDATE sources SET snapshot=?, revision=revision+1, published_at=? WHERE id=? AND revision=? AND NOT EXISTS (
-          SELECT 1 FROM sources other, json_each(other.snapshot,'$.owners') existing, json_each(?,'$.owners') incoming
-          WHERE other.id != ? AND json_extract(existing.value,'$.key')=json_extract(incoming.value,'$.key'))
+          SELECT 1 FROM sources other, json_each(other.snapshot,'$.owners') existing
+          WHERE other.id != ? AND json_extract(existing.value,'$.key') IN
+            (SELECT json_extract(value,'$.key') FROM json_each(?,'$.owners')))
           AND EXISTS(SELECT 1 FROM credentials WHERE id=? AND role='publisher')`)
-          .bind(json,now,credential.source_id,input.revision,json,credential.source_id,credential.id).run();
+          .bind(json,now,credential.source_id,input.revision,credential.source_id,json,credential.id).run();
         if(!result.meta.changes) fail(409,'Stock changed, access was revoked, or these inventories are already published by another PC. Refresh; use separate character selections on each PC.');
         return reply({revision:input.revision+1,publishedAt:now});
       }

@@ -27,6 +27,12 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.6.1.0
+
+**Trusted PCs** reconnect automatically after one-time setup, retain a private inventory snapshot for offline Item Search, and allow transfer jobs to wait for the other PC to become ready. Existing pairings migrate without replacing their identities. New pairs can use an owner-created, ten-minute one-use invitation; the hosted service supplies connection metadata only. Inventory and game commands remain on the encrypted LAN connection. Saved jobs never start merely because a plugin reloads, and brief disconnects enter the existing reconciliation flow when recovery is enabled.
+
+Update both PCs and see the [trusted-PC guide](docs/trusted-pcs.md) for setup and testing. Live trades still need a reachable local network. Store friend/publisher access remains separate from device trust.
+
 ## Version 0.6.0.0
 
 **Stores** adds an optional private hosted catalogue. Select exact items and characters, preview cached bag/retainer totals, and publish them for invited friends to browse while you are offline. Each PC has separate publishing access; overlapping inventories and stale writes are rejected. Friend invitations are read-only and individually revocable. Automatic publishing is optional and defaults off. The public plugin contains no hosting credentials and uploads nothing until a store is connected and publishing is explicitly requested.

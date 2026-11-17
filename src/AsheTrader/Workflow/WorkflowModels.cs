@@ -14,6 +14,9 @@ public sealed class WorkflowSettings
     public string PairingKey { get; set; } = "";
     public Guid? ExpectedRemotePeerId { get; set; }
     public bool AllowRemoteControl { get; set; }
+    public bool? RememberedHost { get; set; }
+    public bool AutoConnect { get; set; } = true;
+    public bool ResumeAfterReconnect { get; set; } = true;
     public List<SavedTransferJob> Jobs { get; set; } = [];
     public Dictionary<ulong, TravelLocation> StorageRoutes { get; set; } = [];
     public Dictionary<ulong, ulong[]> AllowedRetainers { get; set; } = [];
@@ -31,6 +34,7 @@ public sealed class SavedTransferJob
 
 public sealed class PeerRoster
 {
+    public int ProtocolVersion { get; set; }
     public Guid PeerId { get; set; }
     public string Name { get; set; } = "";
     public bool ControlEnabled { get; set; }

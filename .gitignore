@@ -16,3 +16,6 @@ worker-journal.json
 services/catalogue/private/
 services/catalogue/wrangler.production.json
 store-credentials.json
+trusted-device-credentials.json
+trusted-pc-inventory.json
+waiting-transfer.json

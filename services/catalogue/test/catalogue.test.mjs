@@ -11,6 +11,7 @@ function d1(db) {
 }
 async function fixture(){
   const db=new DatabaseSync(':memory:');db.exec(readFileSync(new URL('../migrations/0001_catalogue.sql',import.meta.url),'utf8'));
+  db.exec(readFileSync(new URL('../migrations/0002_devices.sql',import.meta.url),'utf8'));
   const owner=token();db.prepare('INSERT INTO store VALUES(1,?,?)').run("Ashe's store",token());
   db.prepare('INSERT INTO credentials VALUES(?,?,?,?,?,?)').run('owner',await digest(owner),'owner','Owner',null,new Date().toISOString());
   const env={DB:d1(db)};
@@ -78,4 +79,51 @@ test('rate limit and unexpected service failures do not leak credentials or SQL'
  const f=await fixture();f.env.RATE_LIMITER={async limit(){return {success:false};}};
  assert.equal((await f.call('/v1/catalogue')).status,429);
  delete f.env.RATE_LIMITER;f.db.close();const response=await f.call('/v1/catalogue');assert.equal(response.status,503);assert.ok(!response.body.error.includes('SELECT'));
+});
+
+test('trusted PCs have one-use invitations and cannot inherit catalogue permissions',async()=>{
+ const f=await fixture(),reader=await f.key(),publisher=await f.key('publisher'),host=crypto.randomUUID(),guest=crypto.randomUUID();
+ for(const access of [reader.token,publisher.token])assert.equal((await f.call('/v1/device-links',access,'POST',{peerId:host,name:'Main'})).status,403);
+ const created=await f.call('/v1/device-links',f.owner,'POST',{peerId:host,name:'Main'});assert.equal(created.status,201);
+ const {token:hostToken,invite}=created.body;
+ assert.equal((await f.call('/v1/device-link',invite)).status,401);
+ assert.equal((await f.call('/v1/device-link',reader.token)).status,401);
+ assert.equal((await f.call('/v1/catalogue',hostToken)).status,401);
+ const joined=await f.call('/v1/device-links/redeem',invite,'POST',{peerId:guest,name:'Second'});assert.equal(joined.status,201);
+ assert.equal(joined.body.hostPeerId,host);
+ assert.equal((await f.call('/v1/device-links/redeem',invite,'POST',{peerId:crypto.randomUUID(),name:'Third'})).status,401);
+ const state=await f.call('/v1/device-link',hostToken);assert.equal(state.body.guestPeerId,guest);
+ assert.ok(!JSON.stringify(state.body).includes(joined.body.token));
+ const raw=JSON.stringify(f.db.prepare('SELECT * FROM device_links').all());
+ for(const secret of [invite,hostToken,joined.body.token])assert.ok(!raw.includes(secret));
+ assert.equal((await f.call('/v1/source',joined.body.token,'PUT',stock())).status,401);
+});
+
+test('device rendezvous restricts endpoint updates to coordinator and private IPv4; revocation disconnects both',async()=>{
+ const f=await fixture(),host=crypto.randomUUID(),guest=crypto.randomUUID();
+ const created=(await f.call('/v1/device-links',f.owner,'POST',{peerId:host,name:'Main'})).body;
+ const joined=(await f.call('/v1/device-links/redeem',created.invite,'POST',{peerId:guest,name:'Second'})).body;
+ for(const address of ['8.8.8.8','127.0.0.1','169.254.169.254','10.0.0.999','https://evil.example','192.168.1.01'])
+   assert.equal((await f.call('/v1/device-link',created.token,'PUT',{address,port:45874})).status,400);
+ assert.equal((await f.call('/v1/device-link',created.token,'PUT',{address:'192.168.1.20',port:45874})).status,200);
+ const seen=await f.call('/v1/device-link',joined.token,'PUT',{address:'192.168.1.66',port:1});
+ assert.equal(seen.body.address,'192.168.1.20');assert.equal(seen.body.port,45874);assert.ok(seen.body.hostSeen);assert.ok(seen.body.guestSeen);
+ await f.call('/v1/device-link',created.token,'DELETE');
+ for(const secret of [created.token,joined.token])assert.equal((await f.call('/v1/device-link',secret)).status,401);
+});
+
+test('expired device invitation and duplicated PC identity are rejected',async()=>{
+ const f=await fixture(),host=crypto.randomUUID();
+ const created=(await f.call('/v1/device-links',f.owner,'POST',{peerId:host,name:'Main'})).body;
+ assert.equal((await f.call('/v1/device-links/redeem',created.invite,'POST',{peerId:host,name:'Clone'})).status,409);
+ f.db.prepare('UPDATE device_links SET invite_expires=?').run('2000-01-01T00:00:00.000Z');
+ assert.equal((await f.call('/v1/device-links/redeem',created.invite,'POST',{peerId:crypto.randomUUID(),name:'Late'})).status,401);
+});
+
+test('concurrent invite claims yield exactly one trusted worker',async()=>{
+ const f=await fixture(),host=crypto.randomUUID();
+ const created=(await f.call('/v1/device-links',f.owner,'POST',{peerId:host,name:'Main'})).body;
+ const results=await Promise.all([1,2].map(i=>f.call('/v1/device-links/redeem',created.invite,'POST',{peerId:crypto.randomUUID(),name:`Guest ${i}`})));
+ assert.equal(results.filter(x=>x.status===201).length,1);
+ assert.equal(f.db.prepare('SELECT count(*) AS n FROM device_links WHERE guest_peer IS NOT NULL').get().n,1);
 });

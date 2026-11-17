@@ -20,6 +20,15 @@ The owner material under `private/` is sensitive. After setup, keep an encrypted
 
 ## API and limits
 
+Apply migration `0002_devices.sql` before deploying 0.6.1. Device trust uses separate credentials/tables; catalogue readers and publishers cannot create or use device links.
+
+- `POST /v1/device-links`: owner creates a coordinator credential and a ten-minute one-use invitation (maximum eight links).
+- `POST /v1/device-links/redeem`: invitation claims exactly one worker identity atomically and returns its own device credential.
+- `GET/PUT /v1/device-link`: linked devices read rendezvous metadata/update presence; only the coordinator can update a private IPv4 endpoint.
+- `DELETE /v1/device-link`: either linked device revokes the entire pair.
+
+No inventory or command relay is hosted by these endpoints. Device tokens cannot call the catalogue endpoints, and store tokens cannot act as a paired device. Cloud outages do not disable an already trusted local pairing; revocations are learned on successful authenticated service polls.
+
 - `GET /v1/catalogue`: owner, publisher or reader. Aggregated NQ/HQ stock and publication timestamps only.
 - `GET /v1/manage`: owner. Sources and revocable credential metadata (no plaintext secrets).
 - `POST /v1/keys`: owner. Create reader/publisher; the new 256-bit secret is returned once.

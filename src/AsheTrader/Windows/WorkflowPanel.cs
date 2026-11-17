@@ -33,7 +33,7 @@ public sealed partial class WorkflowPanel(Plugin plugin)
     private bool LocalActionRunning => Service.Busy || plugin.Trader.IsRunning || (plugin.Fuel.Active || plugin.FuelQueue.HasUnfinishedRun);
     private bool EditingLocked => LocalActionRunning || HasUnfinishedJob;
     private bool ReadyConnection => Service.Connected && Service.RemoteRoster != null;
-    private bool CoordinatorRole => HasUnfinishedJob || (Service.PairingEnabled ? Service.IsHost : coordinatorRole ?? !Settings.AllowRemoteControl);
+    private bool CoordinatorRole => HasUnfinishedJob || (Service.PairingEnabled ? Service.IsHost : coordinatorRole ?? Settings.RememberedHost ?? !Settings.AllowRemoteControl);
     private IEnumerable<PendingCommand> PendingStorage => Service.Run is { Paused: true, TradeOperationId: null } run
         ? run.Pending.Where(pending => StorageReconciliation.IsStorage(pending.Command)) : [];
     private bool NeedsStorageRecovery => PendingStorage.Any(pending => pending.Response is { Ambiguous: true });
@@ -49,7 +49,7 @@ public sealed partial class WorkflowPanel(Plugin plugin)
             notice = "Diagnostics copied for this PC. Include the report when reporting the issue; also copy the other PC's report if it was running the stuck operation.";
         }
         ImGui.PushID("AsheWorkflowPanel");
-        if (LocalActionRunning || HasUnfinishedJob)
+        if (LocalActionRunning || HasUnfinishedJob || Service.HasQueuedTransfer || Service.WaitingForPeer)
         {
             if (TraderStyle.BeginCard("RunControls"))
             {
@@ -100,6 +100,12 @@ public sealed partial class WorkflowPanel(Plugin plugin)
 
     private void DrawRunControls()
     {
+        if (Service.HasQueuedTransfer || Service.WaitingForPeer)
+        {
+            ImGui.TextWrapped(Service.WaitingForPeer ? "This run will start or reconcile when both trusted PCs are ready." : "Saved queued transfer. Press Start waiting to arm it for this session.");
+            if (!Service.WaitingForPeer && TraderStyle.PrimaryButton("Start waiting")) plugin.QueueAction(Service.ResumeWhenReady);
+            if (TraderStyle.SecondaryButton("Cancel waiting")) plugin.QueueAction(Service.CancelWaitingTransfer);
+        }
         if (Service.Busy)
         {
             if (TraderStyle.SecondaryButton("Pause workflow"))
@@ -108,9 +114,9 @@ public sealed partial class WorkflowPanel(Plugin plugin)
         if (Service.Run is { Paused: true, Step: not CoordinatorStep.Finished })
         {
             var needsRecovery = NeedsStorageRecovery || NeedsTradeRecovery;
-            ImGui.BeginDisabled(!Service.IsHost || !Service.Connected || LocalActionRunning);
-            if (TraderStyle.PrimaryButton("Resume / tally inventories"))
-                plugin.QueueAction(Service.Resume);
+            ImGui.BeginDisabled(!Service.IsHost || (!Service.Connected && !Service.CanQueueTransfer) || LocalActionRunning);
+            if (TraderStyle.PrimaryButton(Service.Connected ? "Resume / tally inventories" : "Resume when PC is ready"))
+                plugin.QueueAction(Service.ResumeWhenReady);
             ImGui.EndDisabled();
             ImGui.SameLine();
             ImGui.BeginDisabled(LocalActionRunning || needsRecovery);
@@ -124,6 +130,7 @@ public sealed partial class WorkflowPanel(Plugin plugin)
     {
         TraderStyle.Section("Your two PCs, connected", "Pair once. Build jobs on the coordinator and let both PCs work together.");
         var coordinator = CoordinatorRole;
+        DrawTrustedDevices();
         if (TraderStyle.BeginCard("ConnectionOverview"))
         {
             TraderStyle.Badge(ReadyConnection ? "CONNECTED" : Service.PairingEnabled ? "WAITING FOR PEER" : "NOT CONNECTED", ReadyConnection ? UiTone.Good : UiTone.Warning);
@@ -137,6 +144,7 @@ public sealed partial class WorkflowPanel(Plugin plugin)
                 ImGui.TableNextColumn();
                 ImGui.TextColored(TraderStyle.Gold, "PAIRED PC");
                 ImGui.TextWrapped(Service.RemoteRoster?.Name ?? "Waiting for connection");
+                if (!Service.Connected && Service.RemoteRoster != null) ImGui.TextDisabled("Saved roster · PC offline");
                 ImGui.TextWrapped(Service.RemoteRoster is { } remote ? $"{remote.Characters.Count} characters · Control {(remote.ControlEnabled ? "enabled" : "disabled")}" : "Connect with the same pairing key");
                 ImGui.EndTable();
             }
@@ -168,6 +176,8 @@ public sealed partial class WorkflowPanel(Plugin plugin)
             }
         }
         TraderStyle.EndCard();
+        if (!Service.HasHostedDeviceLink && ImGui.CollapsingHeader("Manual LAN pairing (advanced)"))
+        {
         if (TraderStyle.BeginCard("PairingSettings"))
         {
             if (ImGui.CollapsingHeader(ReadyConnection ? "Pairing & connection settings" : "Connect this PC", ReadyConnection ? ImGuiTreeNodeFlags.None : ImGuiTreeNodeFlags.DefaultOpen))
@@ -236,6 +246,7 @@ public sealed partial class WorkflowPanel(Plugin plugin)
             }
         }
         TraderStyle.EndCard();
+        }
         if (TraderStyle.BeginCard("Readiness"))
         {
             TraderStyle.Section("Characters & integrations", "Characters come from AutoRetainer on each PC. Refresh after adding an alt.");
@@ -293,9 +304,7 @@ public sealed partial class WorkflowPanel(Plugin plugin)
             ImGui.BeginDisabled(Service.PairingEnabled || EditingLocked);
             if (ImGui.Button("Forget paired PC"))
             {
-                Settings.ExpectedRemotePeerId = null;
-                plugin.Save();
-                notice = "Paired identity cleared. Generate a new key when replacing a PC.";
+                plugin.QueueAction(Service.ForgetTrustedPc);
             }
             ImGui.EndDisabled();
         }
@@ -530,18 +539,18 @@ public sealed partial class WorkflowPanel(Plugin plugin)
             if (!ready)
                 foreach (var reason in scanBlockers.Concat(transferBlockers).Distinct()) UiTone.Wrapped(UiTone.Warning, reason);
             else
-                ImGui.TextWrapped("Both PCs are connected and this plan is ready. You can pause at any time.");
+                ImGui.TextWrapped(Service.Connected ? "Both PCs are connected and this plan is ready. You can pause at any time." : "This plan is ready to queue. It will wait for your trusted PC to connect and allow coordinator control.");
             ImGui.BeginDisabled(!ready);
-            if (TraderStyle.PrimaryButton("Start transfer", new Vector2(-1, 44)))
+            if (TraderStyle.PrimaryButton(Service.Connected ? "Start transfer" : "Start when other PC is ready", new Vector2(-1, 44)))
             {
-                plugin.QueueAction(() => Service.StartJob(job));
+                plugin.QueueAction(() => Service.StartWhenReady(job));
                 page = 3;
             }
             ImGui.EndDisabled();
             ImGui.BeginDisabled(scanBlockers.Count > 0);
             if (TraderStyle.SecondaryButton("Check cached inventories only", new Vector2(-1, 0)))
             {
-                plugin.QueueAction(() => Service.ScanJob(job));
+                plugin.QueueAction(() => Service.StartWhenReady(job, true));
                 page = 3;
             }
             ImGui.EndDisabled();
@@ -647,8 +656,9 @@ public sealed partial class WorkflowPanel(Plugin plugin)
         var reasons = new List<string>();
         if (LocalActionRunning) reasons.Add("Pause the current action before starting another job.");
         if (HasUnfinishedJob) reasons.Add("Resume the saved job, or resolve and end it before starting a new one.");
-        if (!Service.IsHost || !Service.Connected || Service.RemoteRoster == null) reasons.Add("Connect both PCs with this PC hosting on the Connection page.");
-        if (Service.RemoteRoster is not { ControlEnabled: true }) reasons.Add("Allow coordinator control on the other PC on the Connection page.");
+        if (Service.HasQueuedTransfer) reasons.Add("Cancel or start the queued transfer before adding another.");
+        if ((!Service.IsHost || !Service.Connected || Service.RemoteRoster == null) && !Service.CanQueueTransfer) reasons.Add("Pair this coordinator with your other PC on the Connection page.");
+        if (Service.Connected && Service.RemoteRoster is not { ControlEnabled: true }) reasons.Add("Allow coordinator control on the other PC on the Connection page.");
         var definitions = job.ItemDefinitions.ToArray();
         if (definitions.Any(x => x.Id == Guid.Empty) || definitions.Select(x => x.Id).Distinct().Count() != definitions.Length)
             reasons.Add("This saved setup has missing or repeated item identities. Recreate its item lines in a new job before running.");

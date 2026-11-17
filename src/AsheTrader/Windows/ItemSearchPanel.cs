@@ -96,7 +96,7 @@ internal sealed class ItemSearchPanel(Plugin plugin)
                 if (TraderStyle.SecondaryButton("Clear", new(80, 32))) { query = ""; SubmitSearch(); }
             }
             ImGui.SameLine();
-            TraderStyle.Badge(view.Paired ? "BOTH PC CACHES" : "THIS PC'S CACHE", view.Paired ? TraderStyle.Accent : UiTone.Info);
+            TraderStyle.Badge(view.Paired ? plugin.Workflow.Connected ? "BOTH PC CACHES" : "INCLUDES OFFLINE PC" : "THIS PC'S CACHE", view.Paired ? TraderStyle.Accent : UiTone.Info);
             ImGui.Spacing();
             DrawSourceStatus(view.Local, "This PC", view.Busy);
             if (view.Paired) DrawSourceStatus(view.Remote, "Paired PC", view.Busy);
