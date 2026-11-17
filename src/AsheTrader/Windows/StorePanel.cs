@@ -41,13 +41,8 @@ internal sealed class StorePanel(Plugin plugin)
         var service=plugin.Store;var settings=plugin.Config.Store;
         if(service.Publisher==null)
         {
-            MascotGuide.Card("AsheStoreGuide", plugin.Config.ShowMascotIllustrations ? plugin.Mascot.Get(MascotPose.Parcel) : null,
-                "Your little shop starts here", "Connect your store in Access & invitations, then choose the items and characters you want to share. You can preview your stock before publishing.", plugin.Config.ShowMascotIllustrations);
-            if(TraderStyle.BeginCard("PublisherWelcome"))
-            {
-                TraderStyle.Section("Your stock, on your terms", "Pick the items your friends can see. Your character and retainer names stay on this PC.");
-                ImGui.TextWrapped("Open Access & invitations to connect your owner code, then authorize this PC. On your other PC, connect a publishing code from the same store.");
-            }TraderStyle.EndCard();return;
+            ImGui.TextWrapped("Connect this PC in Access & invitations to publish stock.");
+            return;
         }
         if(TraderStyle.BeginCard("PublishSelection"))
         {

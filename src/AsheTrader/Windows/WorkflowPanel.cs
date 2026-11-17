@@ -128,9 +128,6 @@ public sealed partial class WorkflowPanel(Plugin plugin)
 
     private void DrawPairing()
     {
-        if (!Service.PairingEnabled && !Service.Connected)
-            MascotGuide.Card("AsheConnectionGuide", plugin.Config.ShowMascotIllustrations ? plugin.Mascot.Get(MascotPose.Welcome) : null,
-                "Let's bring your PCs together", "Add your other PC with a one-time invitation below. Already have a code? Paste it into Trusted-PC invitation. Once paired, your PCs can reconnect automatically.", plugin.Config.ShowMascotIllustrations);
         TraderStyle.Section("Your two PCs, connected", "Pair once. Build jobs on the coordinator and let both PCs work together.");
         var coordinator = CoordinatorRole;
         DrawTrustedDevices();
@@ -346,8 +343,7 @@ public sealed partial class WorkflowPanel(Plugin plugin)
         if (EditingLocked) UiTone.Wrapped(UiTone.Warning, "This setup is read-only while a job is unfinished. Resume it from Activity, or end it before editing.");
         if (job == null)
         {
-            MascotGuide.Card("NoJobs", plugin.Config.ShowMascotIllustrations ? plugin.Mascot.Get(MascotPose.Parcel) : null,
-                "A home for every item", "Choose + New job above, then add your recipients and the items each one needs. Your PCs handle providers, relays and retainer storage; you decide who gets what.", plugin.Config.ShowMascotIllustrations);
+            ImGui.TextWrapped("No saved jobs. Choose + New job above to get started.");
             return;
         }
         ImGui.BeginDisabled(EditingLocked);

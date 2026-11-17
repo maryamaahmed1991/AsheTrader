@@ -39,6 +39,17 @@ public sealed class MainWindow : Window
         "Find your items across characters and connected PCs.",
         "Share selected stock with friends, even while you are offline.",
     ];
+    private static readonly string[] PageHelp =
+    [
+        "Add your other PC with a one-time invitation, or paste a code into Trusted-PC invitation. Once paired, your PCs can reconnect automatically. Live transfers need a reachable local network; friend store access is separate.",
+        "Choose + New job, then add recipients and the items each one needs. Your PCs handle providers, relays and retainer storage; you decide who gets what.",
+        "Review the recipient assignments and route before starting. Both PCs must be ready for live transfers. You can queue a job to wait for a trusted PC; saved jobs need you to resume them after a plugin reload.",
+        "Follow the current step and confirmed deliveries here. Resume tallies inventories before continuing. If something stops unexpectedly, use Copy diagnostics on the affected PC and include the other PC's report if it was involved.",
+        "Select buyers, choose a same-world destination, then start the fuel queue. Automatic selects an eligible registered supplier for each character. Your selected credit reserve is preserved, and purchased tanks can be deposited into retainers. Each PC runs its own queue.",
+        "Manual trades, character profiles and local preferences live here. Automatic jobs lock conflicting controls while unfinished. You can hide the illustrations inside these help popups under Preferences & local log.",
+        "Try coke, ceruleum, sap. Partial names work too. Each matching item appears once with a combined count; select it to see the characters and retainers holding it. Counts come from Allagan Tools' cache. Pair your other PC to include its inventories; shared FC and housing storage are excluded.",
+        "Connect your store in Access & invitations, then choose the items and characters to share. Preview your stock before publishing. Your friends can browse the last published catalogue while you are offline; your character and retainer names stay private.",
+    ];
 
     public MainWindow(Plugin plugin) : base("Ashe's Trader###AsheTraderMain")
     {
@@ -107,11 +118,6 @@ public sealed class MainWindow : Window
     private void DrawNavigation()
     {
         ImGui.Spacing();
-        if (plugin.Config.ShowMascotIllustrations)
-        {
-            MascotGuide.Portrait(plugin.Mascot.Get(MascotPose.Coin), 48);
-            ImGui.SameLine();
-        }
         ImGui.BeginGroup();
         UiTone.Wrapped(TraderStyle.Gold, "A S H E ' S");
         var titlePosition = ImGui.GetCursorScreenPos();
@@ -119,7 +125,6 @@ public sealed class MainWindow : Window
         ImGui.GetWindowDrawList().AddText(ImGui.GetFont(), titleSize, titlePosition, ImGui.GetColorU32(TraderStyle.Text), "Trader");
         ImGui.Dummy(new Vector2(0, titleSize + TraderStyle.Px(10)));
         ImGui.EndGroup();
-        ImGui.TextDisabled("A little less busywork");
         ImGui.Spacing();
         string[] labels = ["Connection", "Jobs", "Review & run", "Activity", "Fuel & houses", "Advanced", "Item Search", "Stores"];
         string[] details = ["PCs & integrations", "Items & characters", "Ready to transfer", "Progress & diagnostics", "FC fuel queues", "Manual controls", "Across your inventories", "Your private catalogue"];
@@ -146,20 +151,16 @@ public sealed class MainWindow : Window
 
     private void DrawPageHeader()
     {
-        var showArt = plugin.Config.ShowMascotIllustrations;
-        if (ImGui.BeginTable("PageHeader", showArt ? 3 : 2, ImGuiTableFlags.SizingStretchProp))
+        if (ImGui.BeginTable("PageHeader", 3, ImGuiTableFlags.SizingStretchProp))
         {
-            if (showArt) ImGui.TableSetupColumn("Ashe", ImGuiTableColumnFlags.WidthFixed, TraderStyle.Px(68));
             ImGui.TableSetupColumn("Title", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Help", ImGuiTableColumnFlags.WidthFixed, TraderStyle.Px(32));
             ImGui.TableSetupColumn("Controls", ImGuiTableColumnFlags.WidthFixed, TraderStyle.Px(125));
             ImGui.TableNextRow(); ImGui.TableNextColumn();
-            if (showArt)
-            {
-                var pose = selectedPage switch { 0 => MascotPose.Welcome, 1 or 2 => MascotPose.Parcel, 4 => MascotPose.Fuel, 7 => MascotPose.Coin, _ => MascotPose.Cozy };
-                MascotGuide.Portrait(plugin.Mascot.Get(pose), 64);
-                ImGui.TableNextColumn();
-            }
             TraderStyle.Section(PageTitles[selectedPage], PageDescriptions[selectedPage]);
+            ImGui.TableNextColumn();
+            var pose = selectedPage switch { 0 => MascotPose.Welcome, 1 or 2 => MascotPose.Parcel, 4 => MascotPose.Fuel, 7 => MascotPose.Coin, _ => MascotPose.Cozy };
+            MascotGuide.HelpButton($"PageHelp{selectedPage}", () => plugin.Mascot.Get(pose), PageTitles[selectedPage], PageHelp[selectedPage], plugin.Config.ShowMascotIllustrations);
             ImGui.TableNextColumn();
             ImGui.BeginDisabled(!plugin.Trader.IsRunning && !plugin.Fuel.Active && !plugin.Workflow.Busy && !plugin.FuelQueue.Active);
             if (TraderStyle.DangerButton("STOP ALL", new Vector2(-1, 34))) plugin.QueueAction(plugin.StopAll);
@@ -340,8 +341,8 @@ public sealed class MainWindow : Window
     private void DrawActivity()
     {
         var showArt = plugin.Config.ShowMascotIllustrations;
-        if (ImGui.Checkbox("Show Ashe's helper illustrations", ref showArt)) { plugin.Config.ShowMascotIllustrations = showArt; plugin.Save(); }
-        ImGui.TextDisabled("Help text stays available with illustrations hidden.");
+        if (ImGui.Checkbox("Show illustrations in help popups", ref showArt)) { plugin.Config.ShowMascotIllustrations = showArt; plugin.Save(); }
+        ImGui.TextDisabled("Use the i button beside a page heading to open help.");
         var open = plugin.Config.OpenOnLoad;
         if (ImGui.Checkbox("Open this window when the plugin loads", ref open)) { plugin.Config.OpenOnLoad = open; plugin.Save(); }
         ImGui.TextWrapped("No run resumes automatically after reload. /ashetrader stop stops the current operation.");

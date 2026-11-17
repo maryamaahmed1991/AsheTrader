@@ -27,6 +27,12 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.6.2.1
+
+Illustrated guidance now opens only when you click the round **i** button beside a page heading. The normal workspace has no mascot portraits or expanded welcome cards. Close help with **Got it**, Escape or a click outside it. The illustration preference now applies inside help popups; all status, error and stop controls remain visible.
+
+The installer icon URL and installed manifest were verified. Dalamud can retain a cached missing icon after an update in the same game session; restarting the game clears that session cache.
+
 ## Version 0.6.2.0
 
 A warmer plum, rose, cream, mint and gold workspace with rounded cards, pill badges and softer navigation. Ashe's chibi illustrations accompany page headers and explain connection setup, first searches, store setup and fuel buyer selection. Artwork is bundled locally and loaded on demand. Hide it under Advanced → Preferences & local log → Show Ashe's helper illustrations; help text remains available. Status labels and stop controls remain prominent.
