@@ -27,6 +27,10 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.6.2.0
+
+A warmer plum, rose, cream, mint and gold workspace with rounded cards, pill badges and softer navigation. Ashe's chibi illustrations accompany page headers and explain connection setup, first searches, store setup and fuel buyer selection. Artwork is bundled locally and loaded on demand. Hide it under Advanced → Preferences & local log → Show Ashe's helper illustrations; help text remains available. Status labels and stop controls remain prominent.
+
 ## Version 0.6.1.1
 
 Adds the Gil Wink chibi mascot as the plugin installer icon, with a transparent 512 × 512 PNG included in the package. This is a branding-only update.

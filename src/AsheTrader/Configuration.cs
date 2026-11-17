@@ -12,6 +12,7 @@ public sealed class Configuration : IPluginConfiguration
     public List<CharacterProfile> Characters { get; set; } = [];
     public List<HouseProfile> Houses { get; set; } = [];
     public bool OpenOnLoad { get; set; }
+    public bool ShowMascotIllustrations { get; set; } = true;
     public WorkflowSettings Workflow { get; set; } = new();
     public FuelQueueSettings FuelSettings { get; set; } = new();
     public Dictionary<ulong, FuelAccessSnapshot> FuelAccessSnapshots { get; set; } = [];

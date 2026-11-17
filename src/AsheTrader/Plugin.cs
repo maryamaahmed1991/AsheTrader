@@ -29,8 +29,10 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] public static ICondition Condition { get; private set; } = null!;
     [PluginService] public static IPluginLog Log { get; private set; } = null!;
     [PluginService] public static IChatGui ChatGui { get; private set; } = null!;
+    [PluginService] public static ITextureProvider TextureProvider { get; private set; } = null!;
 
     public Configuration Config { get; private set; }
+    internal MascotArt Mascot { get; } = new();
     public TradeRunner Trader { get; }
     internal AutoRetainerClient AutoRetainer { get; }
     internal LifestreamClient Lifestream { get; }

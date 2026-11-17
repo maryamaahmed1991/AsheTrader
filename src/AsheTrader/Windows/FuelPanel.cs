@@ -26,6 +26,7 @@ internal sealed class FuelPanel(Plugin plugin)
     private bool addingHouse;
     private bool showLastRun;
     private bool showHistory;
+    private bool hasSelectedBuyers;
     private Guid selectedReceipt;
     private string? diagnosticsToCopy;
     private int diagnosticCopyPending;
@@ -58,6 +59,9 @@ internal sealed class FuelPanel(Plugin plugin)
         ImGui.Spacing();
         if (ImGui.BeginChild("FuelViewContent", new Vector2(0, 0)))
         {
+            if (page == 0 && !SettingsLocked && !hasSelectedBuyers)
+                MascotGuide.Card("AsheFuelGuide", plugin.Config.ShowMascotIllustrations ? plugin.Mascot.Get(MascotPose.Fuel) : null,
+                    "Let's stock up on fuel", "Select your buyers below, choose a same-world destination, then start the queue. Automatic picks an eligible registered supplier for each character.", plugin.Config.ShowMascotIllustrations);
             if (page == 2) DrawRunOverview();
             else
             {
@@ -93,6 +97,7 @@ internal sealed class FuelPanel(Plugin plugin)
         var run = queue.Run;
         var preview = queue.Preview();
         var selected = preview.Count;
+        hasSelectedBuyers = selected > 0;
         var configured = preview.Count(entry => entry.Status != FuelQueueEntryStatus.Skipped);
         var compact = ImGui.GetContentRegionAvail().Y < TraderStyle.Px(650);
         if (TraderStyle.BeginCard("FuelRunControls"))

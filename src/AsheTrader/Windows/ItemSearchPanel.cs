@@ -133,13 +133,13 @@ internal sealed class ItemSearchPanel(Plugin plugin)
         }
     }
 
-    private static void DrawIntroduction()
+    private void DrawIntroduction()
     {
+        MascotGuide.Card("AsheSearchGuide", plugin.Config.ShowMascotIllustrations ? plugin.Mascot.Get(MascotPose.Cozy) : null,
+            "Let's find your hidden stock", "Try coke, ceruleum, sap. Partial names work too. Pick a result to see which characters and retainers have it.", plugin.Config.ShowMascotIllustrations);
         if (TraderStyle.BeginCard("SearchIntroduction"))
         {
-            TraderStyle.Section("One search, all your characters", "Find what you already own without logging into each character.");
-            UiTone.Wrapped(TraderStyle.Accent, "Try: coke, ceruleum, sap");
-            ImGui.TextWrapped("Each matching item appears once, with a combined count. Select an item to see which characters and retainers hold it.");
+            TraderStyle.Section("One search, all your characters", "Each matching item appears once, with a combined count.");
             ImGui.Spacing();
             ImGui.TextDisabled("Includes personal storage cached by Allagan Tools.");
             ImGui.TextWrapped("Pair your other PC to include its inventories automatically. Free company and housing storage are excluded.");

@@ -107,12 +107,19 @@ public sealed class MainWindow : Window
     private void DrawNavigation()
     {
         ImGui.Spacing();
+        if (plugin.Config.ShowMascotIllustrations)
+        {
+            MascotGuide.Portrait(plugin.Mascot.Get(MascotPose.Coin), 48);
+            ImGui.SameLine();
+        }
+        ImGui.BeginGroup();
         UiTone.Wrapped(TraderStyle.Gold, "A S H E ' S");
         var titlePosition = ImGui.GetCursorScreenPos();
         var titleSize = ImGui.GetFontSize() * 1.7f;
         ImGui.GetWindowDrawList().AddText(ImGui.GetFont(), titleSize, titlePosition, ImGui.GetColorU32(TraderStyle.Text), "Trader");
         ImGui.Dummy(new Vector2(0, titleSize + TraderStyle.Px(10)));
-        ImGui.TextDisabled("YOUR WORKSPACE");
+        ImGui.EndGroup();
+        ImGui.TextDisabled("A little less busywork");
         ImGui.Spacing();
         string[] labels = ["Connection", "Jobs", "Review & run", "Activity", "Fuel & houses", "Advanced", "Item Search", "Stores"];
         string[] details = ["PCs & integrations", "Items & characters", "Ready to transfer", "Progress & diagnostics", "FC fuel queues", "Manual controls", "Across your inventories", "Your private catalogue"];
@@ -139,11 +146,19 @@ public sealed class MainWindow : Window
 
     private void DrawPageHeader()
     {
-        if (ImGui.BeginTable("PageHeader", 2, ImGuiTableFlags.SizingStretchProp))
+        var showArt = plugin.Config.ShowMascotIllustrations;
+        if (ImGui.BeginTable("PageHeader", showArt ? 3 : 2, ImGuiTableFlags.SizingStretchProp))
         {
+            if (showArt) ImGui.TableSetupColumn("Ashe", ImGuiTableColumnFlags.WidthFixed, TraderStyle.Px(68));
             ImGui.TableSetupColumn("Title", ImGuiTableColumnFlags.WidthStretch);
             ImGui.TableSetupColumn("Controls", ImGuiTableColumnFlags.WidthFixed, TraderStyle.Px(125));
             ImGui.TableNextRow(); ImGui.TableNextColumn();
+            if (showArt)
+            {
+                var pose = selectedPage switch { 0 => MascotPose.Welcome, 1 or 2 => MascotPose.Parcel, 4 => MascotPose.Fuel, 7 => MascotPose.Coin, _ => MascotPose.Cozy };
+                MascotGuide.Portrait(plugin.Mascot.Get(pose), 64);
+                ImGui.TableNextColumn();
+            }
             TraderStyle.Section(PageTitles[selectedPage], PageDescriptions[selectedPage]);
             ImGui.TableNextColumn();
             ImGui.BeginDisabled(!plugin.Trader.IsRunning && !plugin.Fuel.Active && !plugin.Workflow.Busy && !plugin.FuelQueue.Active);
@@ -324,6 +339,9 @@ public sealed class MainWindow : Window
 
     private void DrawActivity()
     {
+        var showArt = plugin.Config.ShowMascotIllustrations;
+        if (ImGui.Checkbox("Show Ashe's helper illustrations", ref showArt)) { plugin.Config.ShowMascotIllustrations = showArt; plugin.Save(); }
+        ImGui.TextDisabled("Help text stays available with illustrations hidden.");
         var open = plugin.Config.OpenOnLoad;
         if (ImGui.Checkbox("Open this window when the plugin loads", ref open)) { plugin.Config.OpenOnLoad = open; plugin.Save(); }
         ImGui.TextWrapped("No run resumes automatically after reload. /ashetrader stop stops the current operation.");
