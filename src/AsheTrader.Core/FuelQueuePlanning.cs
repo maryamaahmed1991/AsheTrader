@@ -4,6 +4,7 @@ namespace AsheTrader.Core;
 
 public sealed class FuelQueueSettings
 {
+    public bool EnableAutoRetainerAfterCompletion { get; set; }
     public Dictionary<string, FuelCompanyRule> Companies { get; set; } = [];
 }
 

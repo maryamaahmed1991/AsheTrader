@@ -11,6 +11,7 @@ public enum FuelQueueStage { SelectCharacter, Login, Travel, Buying, CloseShop, 
 
 public sealed class FuelQueueRun
 {
+    public bool EnableAutoRetainerAfterCompletion { get; set; }
     public Guid Id { get; set; } = Guid.NewGuid();
     public DateTimeOffset? StartedAtUtc { get; set; }
     public DateTimeOffset? FinishedAtUtc { get; set; }
@@ -229,7 +230,7 @@ public sealed class FuelQueueService
     {
         if (!entries.Any(x => x.Status == FuelQueueEntryStatus.Queued)) throw new InvalidOperationException("Select at least one character with a valid fuel destination.");
         if (Run is { Finished: true } && !ArchiveFinished()) throw new IOException(HistoryStatus + " The last run remains saved; it has not been replaced.");
-        Run = new() { Entries = entries.ToList(), StartedAtUtc = DateTimeOffset.UtcNow, Paused = false, Status = "Starting the selected fuel queue…" };
+        Run = new() { EnableAutoRetainerAfterCompletion = plugin.Config.FuelSettings.EnableAutoRetainerAfterCompletion, Entries = entries.ToList(), StartedAtUtc = DateTimeOffset.UtcNow, Paused = false, Status = "Starting the selected fuel queue…" };
         stageStarted = Environment.TickCount64;
         Save();
     }
@@ -378,6 +379,7 @@ public sealed class FuelQueueService
         Run.Finished = true; Run.Paused = true; Run.Stage = FuelQueueStage.Finished;
         Run.Status = $"Fuel queue complete: {Run.TotalPurchased:N0} tanks purchased; {Run.TotalDeposited:N0} deposited. Review any skipped or full-storage characters below.";
         Save();
+        if (Run.EnableAutoRetainerAfterCompletion) plugin.CompletionHandoff.Request("Fuel queue");
     }
 
     private static string CompanyKey(FuelQueueEntry entry) => FuelQueueDecisions.CompanyBudgetKey(entry);

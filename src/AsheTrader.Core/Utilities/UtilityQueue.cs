@@ -10,6 +10,8 @@ public sealed class UtilityEntry
 }
 public sealed class UtilityRun
 {
+    public bool EnableAutoRetainerAfterCompletion { get; set; }
+    public bool CompletedNormally { get; set; }
     public List<UtilityEntry> Entries { get; set; } = [];
     public int Index { get; set; }
     public UtilityStage Stage { get; set; }
@@ -59,7 +61,7 @@ public sealed class UtilityQueue(UtilityRun run, IUtilityRuntime runtime, Action
     {
         if (!Active) return;
         if (run.Index >= run.Entries.Count)
-        { run.Stage = UtilityStage.Finished; run.Status = "Saddlebag quest queue complete."; persist(); return; }
+        { run.Stage = UtilityStage.Finished; run.CompletedNormally = true; run.Status = "Saddlebag quest queue complete."; persist(); return; }
         var entry = run.Entries[run.Index];
         switch (run.Stage)
         {

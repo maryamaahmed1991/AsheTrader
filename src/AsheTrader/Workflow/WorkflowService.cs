@@ -207,7 +207,7 @@ public sealed partial class WorkflowService : IDisposable
 
     public PeerRoster LocalRoster() => new()
     {
-        ProtocolVersion = 3,
+        ProtocolVersion = 4,
         PeerId = Settings.PeerId, Name = Settings.PeerName, ControlEnabled = host || Settings.AllowRemoteControl,
         Characters = plugin.Config.Characters.Select(x => new CharacterProfile
         {
@@ -272,7 +272,10 @@ public sealed partial class WorkflowService : IDisposable
                         Ambiguous = result.MovementUncertain, Observation = result, Quantity = result.MovedQuantity });
             }
             UpdateWorkerTrade();
+            var wasRunning = RunningJob;
             if (RunningJob) AdvanceCoordinator();
+            if (wasRunning && Run is { Step: CoordinatorStep.Finished, CompletedNormally: true }) BeginCompletionHandoff();
+            UpdateCompletionHandoff(now);
         }
         catch (Exception ex)
         {
@@ -353,9 +356,9 @@ public sealed partial class WorkflowService : IDisposable
             || command.Operation.CharacterId == 0
             || command.Operation.Kind == GameOperationKind.ReadCachedInventory && command.Kind != WorkerCommandKind.Game)
             throw new InvalidDataException("Invalid worker command.");
-        if (command.Kind == WorkerCommandKind.Game && MultiItemTradeEvidence.IsVector(command))
+        if (command.Kind is WorkerCommandKind.Game or WorkerCommandKind.EnableAutoRetainer && MultiItemTradeEvidence.IsVector(command))
             throw new InvalidDataException("Native storage/travel commands cannot contain a trade item batch.");
-        if (command.Kind != WorkerCommandKind.Game) _ = MultiItemTradeEvidence.Lines(command);
+        if (command.Kind is not (WorkerCommandKind.Game or WorkerCommandKind.EnableAutoRetainer)) _ = MultiItemTradeEvidence.Lines(command);
         var fingerprint = JsonConvert.SerializeObject(command);
         if (workerRecords.TryGetValue(command.Id, out var previous))
         {
@@ -407,6 +410,12 @@ public sealed partial class WorkflowService : IDisposable
                     SaveWorkers();
                 }
                 if (!executor.Execute(command.Operation)) throw new InvalidOperationException("The local executor did not accept the operation.");
+                return;
+            }
+            if (command.Kind == WorkerCommandKind.EnableAutoRetainer)
+            {
+                CompleteWorker(new() { CommandId = command.Id, Success = true });
+                plugin.CompletionHandoff.Request("Paired transfer");
                 return;
             }
             if (Plugin.PlayerState.ContentId != character.ContentId) throw new InvalidOperationException("The wrong local character is logged in.");
@@ -534,6 +543,8 @@ public sealed partial class WorkflowService : IDisposable
     public void Pause(string reason, bool notify = true)
     {
         trustedRun.Cancel();
+        CancelCompletionHandoff();
+        plugin.CompletionHandoff?.Cancel();
         error = reason;
         if (Run != null) { Run.Paused = true; Run.Status = reason; TrySaveRun(); }
         if (Plugin.Framework.IsInFrameworkUpdateThread && !Plugin.Framework.IsFrameworkUnloading) executor.Stop(reason);

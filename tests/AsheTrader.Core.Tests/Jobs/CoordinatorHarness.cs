@@ -31,6 +31,8 @@ public sealed partial class WorkflowService
     private uint armedBefore;
     private readonly bool host = true;
     private readonly bool journalHealthy = true;
+    private bool HasAcceptedConnection => Connected;
+    public Dictionary<Guid, int> AutoRetainerRequests { get; } = [];
     private readonly object? activeWorker = null;
     private string error = string.Empty;
     private WorkflowSettings Settings => settings;
@@ -95,15 +97,20 @@ public sealed partial class WorkflowService
         plugin.Config.Characters = initialCharacters.Where(character => character.PeerId == localPeer).Select(Profile).ToList();
         RemoteRoster = new()
         {
-            PeerId = remotePeer, Name = "Worker", ControlEnabled = true, ProtocolVersion = 3,
+            PeerId = remotePeer, Name = "Worker", ControlEnabled = true, ProtocolVersion = 4,
             Characters = initialCharacters.Where(character => character.PeerId == remotePeer).Select(Profile).ToList(),
         };
     }
 
     public void Tick()
     {
-        if (Run is not { Paused: false, Step: not CoordinatorStep.Finished }) return;
-        try { AdvanceCoordinator(); }
+        if (Run is not { Paused: false, Step: not CoordinatorStep.Finished }) { UpdateCompletionHandoff(Environment.TickCount64); return; }
+        try
+        {
+            AdvanceCoordinator();
+            if (Run is { Step: CoordinatorStep.Finished, CompletedNormally: true }) BeginCompletionHandoff();
+            UpdateCompletionHandoff(Environment.TickCount64);
+        }
         catch (Exception exception) { Pause(exception.Message); }
     }
 
@@ -132,6 +139,7 @@ public sealed partial class WorkflowService
 
     public void SimulateCoordinatorRestart(bool interruptArmedReceiver = false)
     {
+        CancelCompletionHandoff();
         Run = Decode<CoordinatorRun>(SavedJson);
         Run.Paused = true;
         error = string.Empty;
@@ -155,6 +163,7 @@ public sealed partial class WorkflowService
     }
 
     public void PauseForTest(string reason = "Test pause") => Pause(reason);
+    public void PumpCompletionForTest() => UpdateCompletionHandoff(Environment.TickCount64 + 2000);
 
     public void FailTradeForTest(WorkerCommandKind kind, string failure)
     {
@@ -176,6 +185,7 @@ public sealed partial class WorkflowService
     private void SaveRun() => SavedJson = JsonConvert.SerializeObject(Run);
     private void Pause(string reason)
     {
+        CancelCompletionHandoff();
         error = reason;
         if (Run != null) { Run.Paused = true; Run.Status = reason; SaveRun(); }
         StopTradeForTally();
@@ -233,6 +243,12 @@ public sealed partial class WorkflowService
             return;
         }
 
+        if (command.Kind == WorkerCommandKind.EnableAutoRetainer)
+        {
+            AutoRetainerRequests[owner] = AutoRetainerRequests.GetValueOrDefault(owner) + 1;
+            Deliver(owner, new() { CommandId = command.Id, Success = true });
+            return;
+        }
         if (loggedIn.GetValueOrDefault(owner) != character.Id) throw new InvalidOperationException("Trade ran on the wrong active character.");
         if (command.TradeItems.Count != 0)
         {
@@ -632,6 +648,7 @@ public sealed partial class WorkflowService
 
     private sealed class HarnessPlugin
     {
+        public void Record(string message) { }
         public HarnessConfig Config { get; } = new();
         public HarnessTrader Trader { get; } = new();
         public HarnessFuel Fuel { get; } = new();

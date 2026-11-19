@@ -35,6 +35,7 @@ public sealed class Plugin : IDalamudPlugin
     internal MascotArt Mascot { get; } = new();
     public TradeRunner Trader { get; }
     internal AutoRetainerClient AutoRetainer { get; }
+    internal CompletionHandoffService CompletionHandoff { get; }
     internal LifestreamClient Lifestream { get; }
     public FuelRunner Fuel { get; }
     public FuelQueueService FuelQueue { get; }
@@ -67,6 +68,7 @@ public sealed class Plugin : IDalamudPlugin
         FuelAccess = new FuelAccessService(this);
         FuelQueue = new FuelQueueService(this);
         Utilities = new Utilities.UtilityService(this);
+        CompletionHandoff = new(this);
         Store = new Store.StoreService(this);
         Trader.Diagnostic = Workflow.RecordTradeDiagnostic;
         Fuel.Diagnostic = message => Workflow.RecordDiagnostic("fuel purchase " + message);
@@ -122,7 +124,7 @@ public sealed class Plugin : IDalamudPlugin
         Config = LoadSettings();
     }
 
-    public void StopAll() { Utilities.Pause(); FuelQueue.Pause(); Trader.Stop(); Fuel.Stop(); Workflow.Pause("Paused by user."); }
+    public void StopAll() { CompletionHandoff.Cancel(); Utilities.Pause(); FuelQueue.Pause(); Trader.Stop(); Fuel.Stop(); Workflow.Pause("Paused by user."); }
     public void Open() => mainWindow.IsOpen = true;
     public void Record(string message)
     {
@@ -173,6 +175,7 @@ public sealed class Plugin : IDalamudPlugin
             FuelQueue.Update();
             Utilities.Update();
             Workflow.Update();
+            CompletionHandoff.Update();
         }
         catch (Exception ex) { StopAll(); Record($"Operation stopped: {ex.Message}"); Log.Error(ex, "Runner update failed"); }
         // Catalogue failures never interrupt gameplay automation, and credentials never enter diagnostics.
@@ -192,7 +195,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             FuelQueue.Pause("Unexpected logout; fuel queue paused.");
             Fuel.Stop();
-            if (!Workflow.ExpectsLogout) Workflow.Pause("Unexpected logout; job paused.");
+            if (Workflow.Busy && !Workflow.ExpectsLogout) Workflow.Pause("Unexpected logout; job paused.");
         }
     }
 

@@ -530,6 +530,9 @@ public sealed partial class WorkflowPanel(Plugin plugin)
         var ready = scanBlockers.Count == 0 && transferBlockers.Count == 0;
         if (TraderStyle.BeginCard("LaunchChecklist"))
         {
+            var enableAr = job.EnableAutoRetainerAfterCompletion;
+            if (CompletionOption.Draw(ref enableAr, EditingLocked, true)) { job.EnableAutoRetainerAfterCompletion = enableAr; plugin.Save(); }
+            CompletionOption.Status(plugin);
             TraderStyle.Badge(ready ? "READY TO START" : "SETUP INCOMPLETE", ready ? UiTone.Good : UiTone.Warning);
             if (!ready)
                 foreach (var reason in scanBlockers.Concat(transferBlockers).Distinct()) UiTone.Wrapped(UiTone.Warning, reason);

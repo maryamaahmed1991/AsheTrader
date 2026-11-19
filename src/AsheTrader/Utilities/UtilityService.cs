@@ -70,7 +70,7 @@ public sealed class UtilityService : IUtilityRuntime
         var selected = plugin.Config.Characters.Where(c => plugin.Config.UtilityCharacters.Contains(c.ContentId))
             .OrderBy(c => c.World).ThenBy(c => c.Name).ToArray();
         if (selected.Length == 0) throw new InvalidOperationException("Select at least one character on this PC.");
-        Run = new() { Entries = selected.Select(c => new UtilityEntry { CharacterId = c.ContentId, Name = c.Name, World = c.World }).ToList() };
+        Run = new() { EnableAutoRetainerAfterCompletion = plugin.Config.UtilityEnableAutoRetainer, Entries = selected.Select(c => new UtilityEntry { CharacterId = c.ContentId, Name = c.Name, World = c.World }).ToList() };
         queue = new(Run, this, Save); Error = ""; queue.Resume();
     }
     public void Resume() { RequireAvailable(); Error = ""; loginIssued = false; queue?.Resume(); }
@@ -96,6 +96,8 @@ public sealed class UtilityService : IUtilityRuntime
                     throw new InvalidOperationException("AutoRetainer is no longer idle; Utilities paused.");
             }
             queue!.Tick(Environment.TickCount64);
+            if (Run is { CompletedNormally: true, EnableAutoRetainerAfterCompletion: true })
+                plugin.CompletionHandoff.Request("Utilities queue");
         }
         catch (Exception ex) { Pause(ex.Message); plugin.Record("Utilities: " + ex.Message); }
     }

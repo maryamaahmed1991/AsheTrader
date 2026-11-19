@@ -49,11 +49,12 @@ public sealed partial class WorkflowService
         header.Add("Session", $"Role={(IsHost ? "coordinator" : "worker")}; connected={Connected}; paired={HasAcceptedConnection}; remoteControl={Settings.AllowRemoteControl}; journalHealthy={journalHealthy}");
         header.Add("Game", $"loggedIn={Plugin.ClientState.IsLoggedIn}; characterId={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; language={Plugin.ClientState.ClientLanguage}");
         header.Add("Status", Status);
+        header.Add("AutoRetainerHandoff", plugin.CompletionHandoff.Status);
         if (plugin.Utilities.Run is { } utility)
-            header.Add("Utilities", $"stage={utility.Stage}; index={utility.Index}/{utility.Entries.Count}; paused={utility.Paused}; status={utility.Status}; error={plugin.Utilities.Error}");
+            header.Add("Utilities", $"stage={utility.Stage}; index={utility.Index}/{utility.Entries.Count}; paused={utility.Paused}; enableARAfterCompletion={utility.EnableAutoRetainerAfterCompletion}; status={utility.Status}; error={plugin.Utilities.Error}");
         if (plugin.FuelQueue.Run is { } fuel)
         {
-            header.Add("FuelQueue", $"id={fuel.Id}; stage={fuel.Stage}; index={fuel.Index}/{fuel.Entries.Count}; paused={fuel.Paused}; finished={fuel.Finished}; ending={fuel.EndRequested}; purchased={fuel.TotalPurchased}; deposited={fuel.TotalDeposited}; status={fuel.Status}");
+            header.Add("FuelQueue", $"id={fuel.Id}; stage={fuel.Stage}; index={fuel.Index}/{fuel.Entries.Count}; paused={fuel.Paused}; finished={fuel.Finished}; ending={fuel.EndRequested}; enableARAfterCompletion={fuel.EnableAutoRetainerAfterCompletion}; purchased={fuel.TotalPurchased}; deposited={fuel.TotalDeposited}; status={fuel.Status}");
             if (fuel.Index < fuel.Entries.Count)
             {
                 var entry = fuel.Entries[fuel.Index];
@@ -74,7 +75,7 @@ public sealed partial class WorkflowService
         }
         if (Run is { } run)
         {
-            header.Add("Coordinator", $"job={run.Job.Definition.Id}; step={run.Step}; paused={run.Paused}; itemIndex={run.ActiveItemIndex}; discoveryIndex={run.DiscoveryIndex}/{run.DiscoveryOrder.Count}; pending={run.Pending.Count}");
+            header.Add("Coordinator", $"job={run.Job.Definition.Id}; step={run.Step}; paused={run.Paused}; itemIndex={run.ActiveItemIndex}; discoveryIndex={run.DiscoveryIndex}/{run.DiscoveryOrder.Count}; pending={run.Pending.Count}; enableARAfterCompletion={run.Job.EnableAutoRetainerAfterCompletion}; handoffReplies={run.CompletionCommands.Count(p => p.Response != null)}/{run.CompletionCommands.Count}");
             if (run.VisitMode)
                 header.Add("Visits", $"planningComplete={run.VisitPlanningComplete}; itemPlans={run.VisitItems.Count}; completedItems={run.CompletedItems.Count}; mixedBatchItems={run.VisitBatch?.Lines.Count ?? 0}");
             foreach (var item in run.VisitItems.Values)

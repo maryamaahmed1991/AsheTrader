@@ -24,6 +24,7 @@ public sealed class WorkflowSettings
 
 public sealed class SavedTransferJob
 {
+    public bool EnableAutoRetainerAfterCompletion { get; set; }
     public TransferJobDefinition Definition { get; set; } = new();
     // Keep the original first-item field so saved single-item jobs need no destructive migration.
     public List<TransferJobDefinition> AdditionalItems { get; set; } = [];
@@ -41,7 +42,7 @@ public sealed class PeerRoster
     public List<CharacterProfile> Characters { get; set; } = [];
 }
 
-public enum WorkerCommandKind { Game, PreviewBatch, ReceiveBatch, SendBatch }
+public enum WorkerCommandKind { Game, PreviewBatch, ReceiveBatch, SendBatch, EnableAutoRetainer }
 
 public sealed class WorkerCommand
 {
@@ -130,6 +131,8 @@ public sealed class TransferPreparation
 
 public sealed class CoordinatorRun
 {
+    public bool CompletedNormally { get; set; }
+    public List<PendingCommand> CompletionCommands { get; set; } = [];
     // Legacy journals leave this false and finish through their original recovery path.
     public bool VisitMode { get; set; }
     public bool PreserveLegacyItemOrder { get; set; }

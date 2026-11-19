@@ -25,7 +25,7 @@ public sealed class UtilityQueueTests
     {
         var run = Run(2); var runtime = new Runtime { Complete = complete, Eligible = eligible }; var q = new UtilityQueue(run, runtime, () => { });
         q.Resume(); for (var i = 0; i < 5; i++) q.Tick(i);
-        Assert.Equal(UtilityStage.Finished, run.Stage); Assert.Equal(0, runtime.Starts);
+        Assert.Equal(UtilityStage.Finished, run.Stage); Assert.True(run.CompletedNormally); Assert.Equal(0, runtime.Starts);
         Assert.All(run.Entries, e => Assert.Equal(result, e.Result));
     }
     [Fact]
@@ -52,7 +52,7 @@ public sealed class UtilityQueueTests
         q.Resume(); q.Tick(0); q.Tick(1); Assert.Equal(0, runtime.Starts);
         runtime.Ready = true; q.Tick(2); runtime.Running = false; q.Tick(3);
         Assert.Throws<InvalidOperationException>(() => q.Tick(10_004));
-        q.Pause("Stopped"); Assert.False(q.Active); q.End(); Assert.Equal(UtilityStage.Finished, run.Stage);
+        q.Pause("Stopped"); Assert.False(q.Active); q.End(); Assert.Equal(UtilityStage.Finished, run.Stage); Assert.False(run.CompletedNormally);
     }
     [Fact]
     public void CannotDispatchBeforeIntentIsSaved()

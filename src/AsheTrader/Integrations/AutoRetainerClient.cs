@@ -28,7 +28,7 @@ internal sealed record AutoRetainerStatus(bool Ready, bool? Busy, bool? MultiMod
 
 /// <summary>
 /// Optional AutoRetainer integration. Call from a framework update or through IFramework.RunOnFrameworkThread.
-/// The adapter never changes AutoRetainer configuration and never retains its mutable objects.
+/// Uses explicit IPC for the optional completion handoff; never edits AR configuration or retains mutable objects.
 /// </summary>
 internal sealed class AutoRetainerClient(
     IDalamudPluginInterface pluginInterface,
@@ -200,6 +200,25 @@ internal sealed class AutoRetainerClient(
             error = "Could not request the AutoRetainer character switch. Check AutoRetainer and the plugin log.";
             return false;
         }
+    }
+
+    public bool TryEnableMultiMode(out string error)
+    {
+        if (!CanCall(out error)) return false;
+        var status = GetStatus();
+        if (!status.Ready || status.Busy != false || status.MultiModeEnabled == null)
+        { error = status.Error ?? "AutoRetainer is not ready and idle."; return false; }
+        try
+        {
+            if (pluginInterface.GetIpcSubscriber<bool>("AutoRetainer.GetSuppressed").InvokeFunc())
+            { error = "AutoRetainer is still suppressed by another operation."; return false; }
+            if (status.MultiModeEnabled != true)
+                pluginInterface.GetIpcSubscriber<bool, object>("AutoRetainer.SetMultiModeEnabled").InvokeAction(true);
+            if (!pluginInterface.GetIpcSubscriber<bool>("AutoRetainer.GetMultiModeEnabled").InvokeFunc())
+            { error = "AutoRetainer did not enable Multi Mode."; return false; }
+            error = ""; return true;
+        }
+        catch (Exception ex) { log.Warning(ex, "AutoRetainer completion handoff failed"); error = "AutoRetainer IPC could not enable Multi Mode."; return false; }
     }
 
     private bool CanCall(out string error)

@@ -117,6 +117,9 @@ internal sealed class FuelPanel(Plugin plugin)
             else UiTone.Wrapped(TraderStyle.Muted, selected == 0 ? "Choose buyers, set their destination, then start your fuel run."
                 : $"{configured} of {selected} buyers configured · routes are verified before travel.");
 
+            var enableAr = queue.HasUnfinishedRun ? queue.Run!.EnableAutoRetainerAfterCompletion : plugin.Config.FuelSettings.EnableAutoRetainerAfterCompletion;
+            if (CompletionOption.Draw(ref enableAr, queue.HasUnfinishedRun, false)) { plugin.Config.FuelSettings.EnableAutoRetainerAfterCompletion = enableAr; plugin.Save(); }
+            CompletionOption.Status(plugin);
             if (queue.HasUnfinishedRun)
             {
                 ImGui.BeginDisabled(TransferLocked || plugin.Trader.IsRunning);

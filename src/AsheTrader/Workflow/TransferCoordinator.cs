@@ -20,6 +20,8 @@ public sealed partial class WorkflowService
         if (job.Definition is null || job.AdditionalItems is null || job.AdditionalItems.Any(item => item is null))
             throw new ArgumentException("Every job item needs a complete transfer definition.", nameof(job));
         var saved = Clone(job);
+        if (!discoveryOnly && saved.EnableAutoRetainerAfterCompletion && RemoteRoster!.ProtocolVersion < 4)
+            throw new InvalidOperationException("Update both PCs to use the AutoRetainer completion option.");
         var definitions = saved.ItemDefinitions.ToArray();
         foreach (var definition in definitions)
         {
@@ -89,6 +91,7 @@ public sealed partial class WorkflowService
         {
             run.CompletedItems = completed;
             run.Step = CoordinatorStep.Finished;
+            run.CompletedNormally = !run.DiscoveryOnly && !run.HasShortages;
             run.Paused = run.HasShortages;
             run.Status = run.DiscoveryOnly
                 ? run.HasSkippedCharacters
@@ -302,7 +305,7 @@ public sealed partial class WorkflowService
 
     private void AcceptResponse(Guid sourcePeer, WorkerResponse response)
     {
-        var pending = Run?.Pending.FirstOrDefault(x => x.Command.Id == response.CommandId && x.PeerId == sourcePeer);
+        var pending = Run?.Pending.Concat(Run.CompletionCommands).FirstOrDefault(x => x.Command.Id == response.CommandId && x.PeerId == sourcePeer);
         if (pending == null) return;
         if (response.Ready) pending.Ready = true;
         else

@@ -20,6 +20,9 @@ internal sealed class UtilitiesPanel(Plugin plugin)
                 ImGui.TextWrapped("Requires level 30 on the active class/job and My Little Chocobo. Eligibility is checked after login. Questionable handles this quest using your existing combat and navigation setup.");
                 if (!string.IsNullOrEmpty(service.Error)) UiTone.Wrapped(UiTone.Error, service.Error);
                 if (service.Run != null) UiTone.Status(service.Run.Status);
+                var enableAr = service.HasUnfinishedRun ? service.Run!.EnableAutoRetainerAfterCompletion : plugin.Config.UtilityEnableAutoRetainer;
+                if (CompletionOption.Draw(ref enableAr, service.HasUnfinishedRun, false)) { plugin.Config.UtilityEnableAutoRetainer = enableAr; plugin.Save(); }
+                CompletionOption.Status(plugin);
                 if (service.HasUnfinishedRun)
                 {
                     if (service.Active)
