@@ -1,6 +1,6 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>0.6.3.0</Version>
+    <Version>0.6.3.1</Version>
     <IconUrl>https://raw.githubusercontent.com/maryamaahmed1991/AsheTrader/v0.6.1.1/icon.png</IconUrl>
     <Name>Ashe's Trader</Name>
     <Author>Ashe</Author>

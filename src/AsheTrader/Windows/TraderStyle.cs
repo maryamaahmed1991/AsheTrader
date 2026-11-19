@@ -7,17 +7,19 @@ namespace AsheTrader.Windows;
 /// <summary>Shared native UI surfaces and controls. Every pushed style has an explicit matching scope.</summary>
 internal static class TraderStyle
 {
-    internal static readonly Vector4 Background = new(.090f, .063f, .110f, 1);
-    internal static readonly Vector4 Sidebar = new(.122f, .082f, .145f, 1);
-    internal static readonly Vector4 Surface = new(.157f, .110f, .180f, 1);
-    internal static readonly Vector4 Elevated = new(.220f, .157f, .247f, 1);
-    internal static readonly Vector4 Border = new(.357f, .247f, .376f, 1);
-    internal static readonly Vector4 Text = new(.992f, .949f, .906f, 1);
-    internal static readonly Vector4 Muted = new(.765f, .690f, .780f, 1);
-    internal static readonly Vector4 Accent = new(.525f, .878f, .776f, 1);
-    internal static readonly Vector4 Rose = new(1f, .655f, .745f, 1);
-    internal static readonly Vector4 Gold = new(1f, .820f, .537f, 1);
-    internal static readonly Vector4 Danger = new(.980f, .459f, .482f, 1);
+    internal static readonly Vector4 Background = new(.945f, .918f, .957f, 1);
+    internal static readonly Vector4 Sidebar = new(.875f, .827f, .910f, 1);
+    internal static readonly Vector4 Surface = new(1f, .980f, .961f, 1);
+    internal static readonly Vector4 Elevated = new(.902f, .859f, .925f, 1);
+    internal static readonly Vector4 Border = new(.620f, .525f, .663f, 1);
+    internal static readonly Vector4 Text = new(.204f, .149f, .255f, 1);
+    internal static readonly Vector4 Muted = new(.365f, .294f, .412f, 1);
+    internal static readonly Vector4 Accent = new(.055f, .384f, .314f, 1);
+    internal static readonly Vector4 Rose = new(.596f, .176f, .365f, 1);
+    internal static readonly Vector4 Gold = new(.490f, .310f, .055f, 1);
+    internal static readonly Vector4 Danger = new(.663f, .137f, .204f, 1);
+    private static readonly Vector4 Hover = new(.880f, .820f, .910f, 1);
+    private static readonly Vector4 Active = new(.860f, .800f, .900f, 1);
     internal static float Scale => ImGuiHelpers.GlobalScale;
     internal static float Px(float value) => value * Scale;
     private static readonly Dictionary<uint, float> CardHeights = [];
@@ -77,13 +79,13 @@ internal static class TraderStyle
     }
 
     internal static bool PrimaryButton(string label, Vector2 size = default)
-        => Button(label, size, Rose, new(1f, .76f, .82f, 1), new(.91f, .53f, .65f, 1), Background);
+        => Button(label, size, Rose, new(.520f, .137f, .310f, 1), new(.443f, .102f, .263f, 1), Surface);
 
     internal static bool SecondaryButton(string label, Vector2 size = default)
-        => Button(label, size, Elevated, new(.31f, .22f, .34f, 1), new(.37f, .24f, .36f, 1), Text);
+        => Button(label, size, Elevated, Hover, Active, Text);
 
     internal static bool DangerButton(string label, Vector2 size = default)
-        => Button(label, size, new(.28f, .13f, .17f, 1), new(.42f, .16f, .20f, 1), new(.52f, .18f, .23f, 1), Danger);
+        => Button(label, size, new(1f, .875f, .875f, 1), new(.980f, .780f, .800f, 1), new(.945f, .690f, .733f, 1), Danger);
 
     private static bool Button(string label, Vector2 size, Vector4 normal, Vector4 hovered, Vector4 active, Vector4 text)
     {
@@ -115,7 +117,7 @@ internal static class TraderStyle
         var hovered = ImGui.IsItemHovered();
         var draw = ImGui.GetWindowDrawList();
         if (selected || hovered)
-            draw.AddRectFilled(position, position + actual, ImGui.GetColorU32(selected ? new Vector4(.30f, .17f, .28f, 1) : Elevated), Px(14));
+            draw.AddRectFilled(position, position + actual, ImGui.GetColorU32(selected ? new Vector4(.980f, .843f, .890f, 1) : Elevated), Px(14));
         if (selected)
             draw.AddRectFilled(position + new Vector2(0, Px(12)), position + new Vector2(Px(3), actual.Y - Px(12)), ImGui.GetColorU32(Gold), Px(2));
         draw.AddText(position + new Vector2(Px(14), Px(9)), ImGui.GetColorU32(selected ? Rose : Text), label);
@@ -134,16 +136,16 @@ internal static class TraderStyle
             Color(ImGuiCol.WindowBg, Background); Color(ImGuiCol.ChildBg, Background); Color(ImGuiCol.PopupBg, Surface);
             Color(ImGuiCol.Text, Text); Color(ImGuiCol.TextDisabled, Muted); Color(ImGuiCol.Border, Border);
             Color(ImGuiCol.TitleBg, Sidebar); Color(ImGuiCol.TitleBgActive, Sidebar); Color(ImGuiCol.TitleBgCollapsed, Sidebar);
-            Color(ImGuiCol.FrameBg, Background); Color(ImGuiCol.FrameBgHovered, Elevated); Color(ImGuiCol.FrameBgActive, new(.30f, .19f, .29f, 1));
-            Color(ImGuiCol.Button, Elevated); Color(ImGuiCol.ButtonHovered, new(.31f, .22f, .34f, 1)); Color(ImGuiCol.ButtonActive, new(.37f, .24f, .36f, 1));
-            Color(ImGuiCol.Header, Elevated); Color(ImGuiCol.HeaderHovered, new(.31f, .20f, .32f, 1)); Color(ImGuiCol.HeaderActive, new(.38f, .23f, .35f, 1));
+            Color(ImGuiCol.FrameBg, Surface); Color(ImGuiCol.FrameBgHovered, Elevated); Color(ImGuiCol.FrameBgActive, Hover);
+            Color(ImGuiCol.Button, Elevated); Color(ImGuiCol.ButtonHovered, Hover); Color(ImGuiCol.ButtonActive, Active);
+            Color(ImGuiCol.Header, Elevated); Color(ImGuiCol.HeaderHovered, Hover); Color(ImGuiCol.HeaderActive, Active);
             Color(ImGuiCol.CheckMark, Accent); Color(ImGuiCol.SliderGrab, Accent); Color(ImGuiCol.SliderGrabActive, Gold);
             Color(ImGuiCol.Separator, Border); Color(ImGuiCol.SeparatorHovered, Accent); Color(ImGuiCol.SeparatorActive, Accent);
             Color(ImGuiCol.ScrollbarBg, Background); Color(ImGuiCol.ScrollbarGrab, Border); Color(ImGuiCol.ScrollbarGrabHovered, Muted); Color(ImGuiCol.ScrollbarGrabActive, Accent);
-            Color(ImGuiCol.TableHeaderBg, Elevated); Color(ImGuiCol.TableBorderStrong, Border); Color(ImGuiCol.TableBorderLight, new(.23f, .16f, .26f, 1));
-            Color(ImGuiCol.TableRowBg, new(0, 0, 0, 0)); Color(ImGuiCol.TableRowBgAlt, new(.45f, .30f, .40f, .15f));
-            Color(ImGuiCol.TextSelectedBg, new(1f, .655f, .745f, .25f)); Color(ImGuiCol.PlotHistogram, Accent);
-            Color(ImGuiCol.Tab, Surface); Color(ImGuiCol.TabHovered, new(.38f, .23f, .35f, 1));
+            Color(ImGuiCol.TableHeaderBg, Elevated); Color(ImGuiCol.TableBorderStrong, Border); Color(ImGuiCol.TableBorderLight, new(.76f, .69f, .79f, 1));
+            Color(ImGuiCol.TableRowBg, new(0, 0, 0, 0)); Color(ImGuiCol.TableRowBgAlt, new(1f, .98f, .96f, .60f));
+            Color(ImGuiCol.TextSelectedBg, new(.75f, .49f, .64f, .30f)); Color(ImGuiCol.PlotHistogram, new(.60f, .82f, .73f, 1));
+            Color(ImGuiCol.Tab, Surface); Color(ImGuiCol.TabHovered, Hover);
             Color(ImGuiCol.TabActive, Elevated); Color(ImGuiCol.TabUnfocused, Sidebar); Color(ImGuiCol.TabUnfocusedActive, Elevated);
             Variable(ImGuiStyleVar.WindowPadding, new Vector2(Px(18), Px(16)));
             Variable(ImGuiStyleVar.FramePadding, new Vector2(Px(12), Px(8)));
