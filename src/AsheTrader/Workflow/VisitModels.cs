@@ -12,6 +12,7 @@ public sealed class VisitItemState
     public Dictionary<ulong, JobCharacterSnapshot> Snapshots { get; set; } = [];
     public Dictionary<ulong, ulong> Withdrawn { get; set; } = [];
     public Dictionary<ulong, ulong> Deposited { get; set; } = [];
+    public Dictionary<ulong, uint> PackedCargo { get; set; } = [];
     public Dictionary<Guid, ulong> AutomaticRelays { get; set; } = [];
     public Dictionary<ulong, uint> RelayCapacity { get; set; } = [];
     public List<CollectionRouteStop>? CollectionRoute { get; set; }
@@ -20,7 +21,8 @@ public sealed class VisitItemState
     public ulong? RelayFlushCharacterId { get; set; }
 }
 
-public enum VisitPreparationStage { Login, Inspect, Withdraw, Deposit, Travel, FinalInspect, Ready }
+public enum VisitPreparationStage { Login, Inspect, Withdraw, Deposit, Travel, FinalInspect, Ready, Saddlebag, PackingInspect, DepositInspect }
+public enum CargoPurpose { Pickup, Sending, Receiving, Depositing }
 
 public sealed class VisitParticipantPreparation
 {
@@ -29,6 +31,12 @@ public sealed class VisitParticipantPreparation
     public int? StorageItemIndex { get; set; }
     public uint StorageQuantity { get; set; }
     public HashSet<int> AttemptedDeposits { get; set; } = [];
+    public HashSet<int> AttemptedPacking { get; set; } = [];
+    public HashSet<int> ExhaustedPickups { get; set; } = [];
+    public CargoPurpose CargoPurpose { get; set; }
+    public uint CargoExpectedTotal { get; set; }
+    public uint SaddlebagBefore { get; set; }
+    public uint PackedCargoBefore { get; set; }
 }
 
 /// <summary>One eligible allocation contribution; quantities remain item-specific.</summary>
@@ -44,6 +52,8 @@ public sealed class VisitWorkLine
     public uint ReceiverBagCapacity { get; set; }
     public uint? SenderFreeBagSlots { get; set; }
     public uint? ReceiverFreeBagSlots { get; set; }
+    public uint SenderSaddlebagCapacity { get; set; }
+    public uint ReceiverSaddlebagCapacity { get; set; }
 }
 
 /// <summary>One pinned pair and destination, prepared on both PCs before an agreed mixed-item trade.</summary>

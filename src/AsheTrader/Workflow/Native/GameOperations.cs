@@ -2,7 +2,7 @@ using System.Numerics;
 
 namespace AsheTrader.Workflow.Native;
 
-public enum GameOperationKind { Login, Inspect, TravelMeeting, ScanRetainers, Withdraw, Deposit, ReadCachedInventory }
+public enum GameOperationKind { Login, Inspect, TravelMeeting, ScanRetainers, Withdraw, Deposit, ReadCachedInventory, ArrangeSaddlebags }
 
 public sealed class TravelLocation
 {
@@ -27,6 +27,12 @@ public sealed class GameOperation
     public uint Quantity { get; set; }
     public TravelLocation? Destination { get; set; }
     public ulong[] AllowedRetainerIds { get; set; } = [];
+    public bool UseSaddlebags { get; set; }
+    // Absolute goal for ArrangeSaddlebags: Quantity is the desired saddlebag count.
+    // Persisted intent plus conserved total makes recovery safe without replaying a delta.
+    public uint CargoExpectedTotal { get; set; }
+    public uint SaddlebagBefore { get; set; }
+    public uint PackedCargoBefore { get; set; }
 }
 
 public sealed record RetainerInventorySnapshot(ulong RetainerId, string Name, uint Quantity, bool Verified);
@@ -44,6 +50,11 @@ public sealed class GameOperationResult
     // Shared physical empty slots, used to avoid counting the same space once per item.
     public uint? FreeBagSlots { get; set; }
     public uint StackSize { get; set; }
+    public bool SaddlebagsAvailable { get; set; }
+    public bool PremiumSaddlebagsAvailable { get; set; }
+    public uint SaddlebagQuantity { get; set; }
+    public uint SaddlebagCapacity { get; set; }
+    public uint FreeSaddlebagSlots { get; set; }
     public uint MovedQuantity { get; set; }
     public bool MovementUncertain { get; set; }
     public StorageMovementCheckpoint? StorageCheckpoint { get; set; }

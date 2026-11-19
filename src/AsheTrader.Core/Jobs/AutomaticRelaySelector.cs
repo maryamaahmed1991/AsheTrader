@@ -16,13 +16,16 @@ public static class AutomaticRelaySelector
                 && !rejected.Contains(entry.Character.ContentId))
             .Select(entry => entry.Character)
             .DistinctBy(character => character.ContentId)
-            .OrderBy(character => EstimatedLoads(character.InventoryFreeSlots!.Value, requiredQuantity, stackSize))
+            .OrderBy(character => EstimatedLoads(CargoSlots(character), requiredQuantity, stackSize))
             .ThenBy(character => string.IsNullOrWhiteSpace(preferredWorld)
                 || string.Equals(character.World, preferredWorld, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .ThenByDescending(character => character.InventoryFreeSlots!.Value)
+            .ThenByDescending(CargoSlots)
             .ThenBy(character => character.ContentId)
             .ToArray();
     }
+
+    public static uint CargoSlots(CharacterProfile character) => checked((character.InventoryFreeSlots ?? 0)
+        + (character.UseSaddlebags ? character.SaddlebagFreeSlots ?? 0 : 0));
 
     /// <summary>Empty slots are a cached lower-bound capacity hint; actual merge capacity is checked on the chosen relay.</summary>
     public static ulong EstimatedLoads(uint freeSlots, ulong requiredQuantity, uint stackSize)

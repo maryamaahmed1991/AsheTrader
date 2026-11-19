@@ -237,6 +237,18 @@ Settings and journals live under Dalamud's `pluginConfigs/AsheTrader` directory:
 
 ## Build and distribution
 
+### Saddlebag cargo and Utilities (0.6.4)
+
+Update both PCs before testing saddlebag cargo. Each character has **Use spare saddlebag space for trade cargo** under its storage settings. It is enabled by default. Providers can pack collected items before another retainer pickup; relays and recipients can pack received job items to extend a trip. Outgoing trades still use ordinary inventory, so cargo is unpacked as room becomes available. Premium slots are included only when the current character has premium access and those native containers have loaded. Unrelated contents are preserved. Packing uses whole stacks or matching-stack merges within the job allowance; it does not force a stack split or guarantee that every spare slot can be used. Existing saddlebag contents are not added to source discovery. Activity shows quantities packed by the job.
+
+Cargo operations save an absolute saddlebag target and a conserved bag-plus-saddlebag total before movement. Resume waits for pending native operations, checks both inventories and reconciles the original target rather than repeating a quantity. Keep the affected character logged in if a cargo operation is interrupted. Losing premium access while it holds job cargo pauses that cargo rather than treating it as missing.
+
+**Utilities → Unlock saddlebags** runs **My Feisty Little Chocobo** for selected local AutoRetainer characters. Use **Refresh AutoRetainer characters**, **Select All / Select None**, or individual checkboxes, then **Start selected characters**. Questionable must already be installed with working navigation/combat dependencies. The queue uses its `StartSingleQuest("1162")` IPC and leaves its priority list unchanged. The installed Questionable 15.756.3.60 IPC signatures were checked directly; older versions without these endpoints must be updated. After login, completed characters are skipped, while level/prerequisite failures are listed with a reason. This utility does not level characters, complete unrelated prerequisite quests, or grant premium saddlebag access.
+
+Utilities is independent on each PC and excludes simultaneous local fuel/transfer work. **Pause**, **Resume**, **End queue**, and **Copy diagnostics** are available in the tab. Reloaded queues remain paused; resume rechecks live quest completion. Queue progress is stored in `utility-queue.json` beside the existing journals.
+
+First live validation: select one already-unlocked character and one eligible level-30 character in Utilities; confirm the first is skipped and Questionable completes only the specified quest for the second. Then test a small transfer that exceeds one character's ordinary free space, checking Activity's packed counts and final totals. Repeat with a premium character, a relay, and pause/resume during cargo preparation. Automated tests cover queue sequencing and simulated cargo movement; live game callbacks still need this validation.
+
 The solution is `AsheTrader.slnx`. `scripts/Build.ps1` runs tests, builds against the local Dalamud development libraries, and produces a package under `artifacts/`. The GitHub workflow performs the same checks and uploads build artifacts; it does not publish releases automatically.
 
 Once a GitHub repository exists:

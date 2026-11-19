@@ -34,7 +34,7 @@ public sealed partial class WorkflowService
             throw new ArgumentException("Each job item needs its own stable ID. Remove and re-add the duplicate item line.", nameof(job));
         if (!discoveryOnly && (job.Meeting.TerritoryId == 0 || job.Meeting.AetheryteId == 0))
             throw new InvalidOperationException("Capture an outdoor meeting point and choose its main aetheryte before starting.");
-        Run = new() { Job = saved, VisitMode = !discoveryOnly && definitions.Length > 1, DiscoveryOnly = discoveryOnly, DiscoveryOrder = DiscoveryCharacters(saved.Definition), Step = CoordinatorStep.DiscoverCache,
+        Run = new() { Job = saved, VisitMode = !discoveryOnly && (definitions.Length > 1 || AllCharacters().Any(c => c.Character.UseSaddlebags && CanUseCargo(c.Character.ContentId))), DiscoveryOnly = discoveryOnly, DiscoveryOrder = DiscoveryCharacters(saved.Definition), Step = CoordinatorStep.DiscoverCache,
             Status = "Reading Allagan Tools inventories from both PCs…" };
         error = "";
         SaveRun();
@@ -107,7 +107,7 @@ public sealed partial class WorkflowService
     {
         RequirePair();
         if (!journalHealthy) throw new InvalidOperationException("Repair the saved journal before resuming.");
-        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || (plugin.Fuel.Active || plugin.FuelQueue.HasUnfinishedRun))
+        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || (plugin.Fuel.Active || (plugin.FuelQueue.HasUnfinishedRun || plugin.Utilities.HasUnfinishedRun)))
             throw new InvalidOperationException("Wait for the local operation to stop before resuming.");
         if (Run is not { Paused: true, Step: not CoordinatorStep.Finished }) return;
         error = "";
@@ -526,7 +526,7 @@ public sealed partial class WorkflowService
             }
         }
         if (run.Paused) return;
-        if (!run.VisitMode && !run.PreserveLegacyItemOrder && !run.DiscoveryOnly && run.TotalItemCount > 1
+        if (!run.VisitMode && !run.PreserveLegacyItemOrder && !run.DiscoveryOnly && (run.TotalItemCount > 1 || AllCharacters().Any(c => CanUseCargo(c.Character.ContentId)))
             && run.Step == CoordinatorStep.SelectLeg && run.Pending.Count == 0 && !run.TradeOperationId.HasValue)
         {
             UpgradeLegacyItemRun();
@@ -877,7 +877,7 @@ public sealed partial class WorkflowService
         if (Run is not { Paused: true, TradeOperationId: null } || Run.Pending.Count != 1
             || Run.Journal != null && new TransferJobLedger(Run.Journal).HasPendingOperation)
             throw new InvalidOperationException("Pause the job and reconcile any pending trade before reviewing storage.");
-        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || (plugin.Fuel.Active || plugin.FuelQueue.HasUnfinishedRun))
+        if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || (plugin.Fuel.Active || (plugin.FuelQueue.HasUnfinishedRun || plugin.Utilities.HasUnfinishedRun)))
             throw new InvalidOperationException("Wait for active work to stop before reviewing storage.");
         var pending = Run.Pending.Single();
         if (pending.Command.Id != commandId || !StorageReconciliation.IsStorage(pending.Command)

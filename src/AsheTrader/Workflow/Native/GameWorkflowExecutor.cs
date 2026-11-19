@@ -13,13 +13,14 @@ namespace AsheTrader.Workflow.Native;
 /// Native state is touched exclusively from Update/Execute on the framework thread.
 /// Retainer actions require in-game validation against the installed client version.
 /// </summary>
-public sealed class GameWorkflowExecutor
+public sealed partial class GameWorkflowExecutor
 {
     private enum Stage
     {
         Idle, Begin, WaitLogin, StartWorld, WaitWorld, StartTeleport, WaitTerritory, StartPosition, WaitPosition,
         StartStorage, WaitInn, ApproachBell, WaitBellWalk, WaitList, SelectRetainer, WaitRetainer,
         OpenInventory, WaitInventory, Inventory, WaitNumeric, WaitMove, CloseInventory, QuitRetainer, WaitListAgain, CloseList, WaitClosed,
+        Saddlebags,
     }
 
     private readonly Queue<GameOperationResult> results = new();
@@ -82,11 +83,14 @@ public sealed class GameWorkflowExecutor
             Id = command.Id, Kind = command.Kind, CharacterId = command.CharacterId, CharacterName = command.CharacterName,
             World = command.World, ItemId = command.ItemId, HighQuality = command.HighQuality, Quantity = command.Quantity,
             Destination = Copy(command.Destination), AllowedRetainerIds = command.AllowedRetainerIds?.Distinct().ToArray() ?? [],
+            UseSaddlebags = command.UseSaddlebags, CargoExpectedTotal = command.CargoExpectedTotal,
+            SaddlebagBefore = command.SaddlebagBefore, PackedCargoBefore = command.PackedCargoBefore,
         };
         roster = []; observed.Clear(); rosterLoaded = false; moved = 0; retainerIndex = 0; movementIssued = false;
         movementConfirmation = null;
         storageCheckpoint = null;
         pendingMoveSource = null;
+        ResetSaddlebags();
         ownsLifestream = ownsNavigation = ownsRelog = restoreArSuppression = false;
         relogIdleSince = null;
         worldTravelIdleSince = null;
@@ -164,6 +168,8 @@ public sealed class GameWorkflowExecutor
         if (!Plugin.Framework.IsFrameworkUnloading && Plugin.Framework.IsInFrameworkUpdateThread)
         {
             StopNavigation();
+            if (ownsSaddlebagWindow) NativeSaddlebags.Close();
+            else if (previousSaddlebagTab.HasValue) NativeSaddlebags.Tab = previousSaddlebagTab;
             StopOwnedRelog();
             if (ownsLifestream)
             {
@@ -227,6 +233,7 @@ public sealed class GameWorkflowExecutor
                 stageStarted += pausedFor.Value;
                 actionAfter += pausedFor.Value;
                 movementConfirmation?.Suspend(pausedFor.Value);
+                saddlebagConfirmation?.Suspend(pausedFor.Value);
                 teleportRequest.Suspend(pausedFor.Value);
                 if (relogIdleSince.HasValue) relogIdleSince += pausedFor.Value;
                 if (worldTravelIdleSince.HasValue) worldTravelIdleSince += pausedFor.Value;
@@ -253,6 +260,7 @@ public sealed class GameWorkflowExecutor
 
             switch (stage)
             {
+                case Stage.Saddlebags: UpdateSaddlebags(); break;
                 case Stage.Begin: Begin(); break;
                 case Stage.WaitLogin:
                     if (conditionalInnSkipMode && Plugin.PluginInterface.GetIpcSubscriber<bool>("AutoRetainer.GetMultiModeEnabled").InvokeFunc())
@@ -437,6 +445,8 @@ public sealed class GameWorkflowExecutor
             throw new InvalidOperationException("Close existing trade, retainer, and confirmation windows before starting this operation.");
         var state = ar.GetStatus();
         if (state.Ready && (state.Busy != false || state.MultiModeEnabled != false)) throw new InvalidOperationException("Pause AutoRetainer and wait for its current tasks to finish.");
+        if (operation.Kind == GameOperationKind.ArrangeSaddlebags || operation.Kind == GameOperationKind.Inspect && operation.UseSaddlebags)
+        { Transition(Stage.Saddlebags, "Checking saddlebag cargo…"); return; }
         if (operation.Kind == GameOperationKind.Inspect) { Finish(true); return; }
         if (operation.Kind is GameOperationKind.Withdraw or GameOperationKind.Deposit)
             SaveStorageCheckpoint(NativeRetainers.ReadBags(operation.ItemId, operation.HighQuality).Quantity, 0, 0);
@@ -748,6 +758,8 @@ public sealed class GameWorkflowExecutor
             && (movementIssued || stage is Stage.WaitNumeric or Stage.WaitMove);
         if (movementUncertain)
             error += " A retainer movement may already have completed. Resume to tally the current inventory against its saved movement checkpoint before any remaining amount is attempted.";
+        if (!success && op.Kind == GameOperationKind.ArrangeSaddlebags && movementIssued)
+        { movementUncertain = true; error += " Resume to reconcile ordinary inventory and saddlebag cargo against the saved target."; }
         StopNavigation();
         if (!success) StopOwnedRelog();
         else ownsRelog = false;
@@ -765,6 +777,7 @@ public sealed class GameWorkflowExecutor
             RetainerRosterVerified = success && rosterLoaded && observed.Count == roster.Count && (op.Kind != GameOperationKind.Deposit || op.AllowedRetainerIds.Length == 0),
             Retainers = observed.ToList(), ObservedAt = DateTimeOffset.UtcNow,
         };
+        ApplySaddlebagResult(result);
         if (Plugin.PlayerState.ContentId == op.CharacterId && Plugin.ClientState.IsLoggedIn)
             result.CurrentWorldId = CurrentWorld;
         if (Plugin.PlayerState.ContentId == op.CharacterId && Plugin.ClientState.IsLoggedIn && op.ItemId != 0)
@@ -898,6 +911,8 @@ public sealed class GameWorkflowExecutor
         try
         {
             Trace($"snapshot reason={NativeRetainers.DiagnosticText(reason)}; stage={stage}; stageElapsedMs={(operation == null ? 0 : now - stageStarted)}; operationElapsedMs={(operation == null ? 0 : now - operationStarted)}; loggedIn={Plugin.ClientState.IsLoggedIn}; currentCharacter={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; currentWorld={CurrentWorld}; homeWorld={HomeWorld}; playerReady={PlayerReady}; moved={moved}; movementIssued={movementIssued}; ownsAR={ownsRelog}; suppressesAR={restoreArSuppression}; ownsLS={ownsLifestream}; ownsNav={ownsNavigation}");
+            if (stage == Stage.Saddlebags)
+                Trace($"saddlebags unlocked={NativeSaddlebags.Unlocked}; open={NativeSaddlebags.Open}; loaded={NativeSaddlebags.Loaded}; premium={NativeSaddlebags.Premium}; pending={NativeSaddlebags.Pending}; target={operation?.Quantity}; conservedTotal={operation?.CargoExpectedTotal}; observed={saddlebagObservation?.Quantity}; waitingMove={saddlebagConfirmation != null}");
             var expected = operation != null && retainerIndex >= 0 && retainerIndex < roster.Count ? CurrentRetainer : null;
             uint? menuRow = stage is Stage.QuitRetainer or Stage.WaitListAgain ? 2383U
                 : stage is Stage.WaitRetainer or Stage.OpenInventory or Stage.WaitInventory ? 2378U : null;

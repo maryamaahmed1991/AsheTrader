@@ -95,7 +95,7 @@ public sealed partial class WorkflowService
         plugin.Config.Characters = initialCharacters.Where(character => character.PeerId == localPeer).Select(Profile).ToList();
         RemoteRoster = new()
         {
-            PeerId = remotePeer, Name = "Worker", ControlEnabled = true,
+            PeerId = remotePeer, Name = "Worker", ControlEnabled = true, ProtocolVersion = 3,
             Characters = initialCharacters.Where(character => character.PeerId == remotePeer).Select(Profile).ToList(),
         };
     }
@@ -388,6 +388,19 @@ public sealed partial class WorkflowService
         uint moved = 0;
         switch (operation.Kind)
         {
+            case GameOperationKind.ArrangeSaddlebags:
+                if ((ulong)stock.Bags + stock.Saddle != operation.CargoExpectedTotal) throw new InvalidOperationException("Cargo total changed.");
+                for (var i = 0; i < 300 && stock.Saddle != operation.Quantity; i++)
+                {
+                    var packing = stock.Saddle < operation.Quantity;
+                    var allowance = packing ? operation.Quantity - stock.Saddle : stock.Saddle - operation.Quantity;
+                    var move = SaddlebagCargoPolicy.NextMove(character.CargoSlots(operation.ItemId, operation.HighQuality, !packing),
+                        character.CargoSlots(operation.ItemId, operation.HighQuality, packing), operation.ItemId, operation.HighQuality, allowance);
+                    if (move == null) break;
+                    if (packing) { stock.Bags -= move.Quantity; stock.Saddle += move.Quantity; }
+                    else { stock.Saddle -= move.Quantity; stock.Bags += move.Quantity; }
+                }
+                break;
             case GameOperationKind.ScanRetainers: character.Location = "home"; character.CurrentWorldId = character.HomeWorldId; break;
             case GameOperationKind.Withdraw:
                 character.Location = "home";
@@ -589,6 +602,10 @@ public sealed partial class WorkflowService
             CurrentWorldId = character.CurrentWorldId,
             BagCapacity = character.CapacityFor(operation.ItemId, operation.HighQuality), StackSize = stock.StackSize, MovedQuantity = moved,
             FreeBagSlots = character.FreeBagSlots,
+            SaddlebagsAvailable = character.SaddleSlotLimit > 0 && (operation.UseSaddlebags || operation.Kind == GameOperationKind.ArrangeSaddlebags),
+            SaddlebagQuantity = stock.Saddle,
+            SaddlebagCapacity = character.SaddleCapacity(operation.ItemId, operation.HighQuality),
+            FreeSaddlebagSlots = character.FreeSaddleSlots,
             RetainerRosterVerified = character.ScanVerified,
             Retainers = stock.Retainers.Select(pair => new RetainerInventorySnapshot(pair.Key, $"Retainer {pair.Key}", pair.Value, character.ScanVerified)).ToList(),
             ObservedAt = DateTimeOffset.UtcNow,
@@ -609,6 +626,7 @@ public sealed partial class WorkflowService
     private static CharacterProfile Profile(SimulatedCharacter character) => new()
     {
         ContentId = character.Id, Name = $"Character {character.Id}", World = character.WorldName,
+        UseSaddlebags = character.SaddleSlotLimit > 0, SaddlebagFreeSlots = character.FreeSaddleSlots,
         InventoryFreeSlots = character.FreeBagSlots ?? Math.Min(140U, character.BagSpace), InventorySlotsRetrievedAt = DateTimeOffset.UtcNow
     };
 
@@ -618,6 +636,7 @@ public sealed partial class WorkflowService
         public HarnessTrader Trader { get; } = new();
         public HarnessFuel Fuel { get; } = new();
         public HarnessFuelQueue FuelQueue { get; } = new();
+        public HarnessFuelQueue Utilities { get; } = new();
     }
     private sealed class HarnessConfig { public List<CharacterProfile> Characters { get; set; } = []; }
     private sealed class HarnessTrader { public bool IsRunning => false; }
@@ -636,6 +655,26 @@ public sealed class SimulatedCharacter : SimulatedItemInventory
     public uint CurrentWorldId { get; set; }
     public uint BagLimit { get; init; } = 999;
     public uint? BagSlotLimit { get; init; }
+    public uint SaddleSlotLimit { get; init; }
+    public uint FreeSaddleSlots => (uint)Math.Max(0, (long)SaddleSlotLimit - ItemInventories.Sum(i => ((long)i.Saddle + i.StackSize - 1) / i.StackSize));
+    public uint SaddleCapacity(uint itemId, bool hq)
+    {
+        if (SaddleSlotLimit == 0) return 0;
+        var stock = Inventory(itemId, hq); var partial = stock.Saddle % stock.StackSize;
+        return FreeSaddleSlots * stock.StackSize + (partial == 0 ? 0 : stock.StackSize - partial);
+    }
+    public IEnumerable<CargoSlot> CargoSlots(uint itemId, bool hq, bool saddle)
+    {
+        var stock = Inventory(itemId, hq); var quantity = saddle ? stock.Saddle : stock.Bags;
+        ushort index = 0;
+        while (quantity > 0)
+        {
+            var amount = Math.Min(stock.StackSize, quantity); quantity -= amount;
+            yield return new(saddle ? 4000U : 0U, index++, itemId, hq, amount, stock.StackSize, true);
+        }
+        var free = saddle ? FreeSaddleSlots : FreeBagSlots ?? BagSpace / stock.StackSize;
+        for (uint i = 0; i < free; i++) yield return new(saddle ? 4000U : 0U, index++, 0, false, 0, 1, false);
+    }
     public uint StorageLimit { get; init; } = 1_000_000;
     public bool ScanVerified { get; set; } = true;
     public bool CacheAvailable { get; set; } = true;
@@ -684,6 +723,7 @@ public sealed class SimulatedCharacter : SimulatedItemInventory
 public class SimulatedItemInventory
 {
     public uint Bags { get; set; }
+    public uint Saddle { get; set; }
     public uint StackSize { get; init; } = 99;
     public Dictionary<ulong, uint> Retainers { get; init; } = [];
     public uint RetainerTotal => checked((uint)Retainers.Values.Aggregate(0UL, (sum, value) => sum + value));

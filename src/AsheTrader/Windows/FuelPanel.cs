@@ -33,7 +33,7 @@ internal sealed class FuelPanel(Plugin plugin)
     private List<(uint Id, string Name)>? worlds;
 
     private bool TransferLocked => plugin.Workflow.Busy || plugin.Workflow.Run is { Step: not Workflow.CoordinatorStep.Finished };
-    private bool SettingsLocked => TransferLocked || plugin.FuelQueue.HasUnfinishedRun || plugin.Trader.IsRunning || plugin.Fuel.Active;
+    private bool SettingsLocked => TransferLocked || (plugin.FuelQueue.HasUnfinishedRun || plugin.Utilities.HasUnfinishedRun) || plugin.Trader.IsRunning || plugin.Fuel.Active;
 
     internal void Draw()
     {

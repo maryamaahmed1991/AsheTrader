@@ -96,10 +96,17 @@ public sealed partial class WorkflowService
             if (lane.Stage == VisitPreparationStage.Ready || run.Pending.Any(pending => pending.PeerId == peerId)) continue;
             var itemIndex = VisitCommandItem(visit, lane);
             var kind = VisitOperationKind(lane.Stage);
-            var quantity = kind is GameOperationKind.Withdraw or GameOperationKind.Deposit ? lane.StorageQuantity : 0;
-            Issue(peerId, Command(characterId, kind, quantity,
-                kind == GameOperationKind.TravelMeeting ? visit.Meeting : null, item: run.VisitItems[itemIndex].Definition),
-                inventoryItemIndex: itemIndex);
+            var quantity = kind is GameOperationKind.Withdraw or GameOperationKind.Deposit or GameOperationKind.ArrangeSaddlebags ? lane.StorageQuantity : 0;
+            var command = Command(characterId, kind, quantity,
+                kind == GameOperationKind.TravelMeeting ? visit.Meeting : null, item: run.VisitItems[itemIndex].Definition);
+            command.Operation.UseSaddlebags = CanUseCargo(characterId) && kind == GameOperationKind.Inspect;
+            if (kind == GameOperationKind.ArrangeSaddlebags)
+            {
+                command.Operation.CargoExpectedTotal = lane.CargoExpectedTotal;
+                command.Operation.SaddlebagBefore = lane.SaddlebagBefore;
+                command.Operation.PackedCargoBefore = lane.PackedCargoBefore;
+            }
+            Issue(peerId, command, inventoryItemIndex: itemIndex);
             if (run.Pending.Any(pending => pending.Response is { Success: false })) break;
         }
         run.Status = $"{Character(visit.SenderId).Character.Name}: {VisitStageLabel(visit.Sender)} · "
@@ -252,7 +259,11 @@ public sealed partial class WorkflowService
     {
         var characterId = sender ? visit.SenderId : visit.ReceiverId;
         if (lane.Stage == VisitPreparationStage.Login)
-        { lane.Stage = VisitPreparationStage.Inspect; lane.LineIndex = 0; return; }
+        {
+            lane.Stage = VisitPreparationStage.Inspect; lane.LineIndex = 0;
+            if (!sender) TryInspectPacking(visit, lane);
+            return;
+        }
         if (lane.Stage == VisitPreparationStage.Travel)
         {
             if (result.CurrentWorldId != visit.Meeting.WorldId) throw new InvalidDataException("A character arrived on the wrong visit world.");
@@ -260,6 +271,9 @@ public sealed partial class WorkflowService
         }
         if (lane.Stage == VisitPreparationStage.Deposit)
         {
+            var depositingItem = lane.StorageItemIndex!.Value;
+            if (result.MovedQuantity > 0 && Run!.VisitItems[depositingItem].PackedCargo.GetValueOrDefault(characterId) > 0)
+                lane.AttemptedDeposits.Remove(depositingItem);
             lane.StorageItemIndex = null;
             // An overflow trip can store all final-delivered job items while the same
             // character is at its bell, instead of returning once per item type.
@@ -268,6 +282,7 @@ public sealed partial class WorkflowService
             lane.LineIndex = 0;
             return;
         }
+        if (ApplyCargoVisitResult(visit, lane, sender, result)) return;
         var line = visit.Lines[lane.LineIndex];
         var state = Run!.VisitItems[line.ItemIndex];
         if (result.StackSize == 0) throw new InvalidDataException("A visit inventory observation omitted the item stack size.");
@@ -276,25 +291,47 @@ public sealed partial class WorkflowService
             line.SenderBagQuantity = result.BagQuantity;
             line.SenderBagCapacity = result.BagCapacity;
             line.SenderFreeBagSlots = result.FreeBagSlots;
+            line.SenderSaddlebagCapacity = result.SaddlebagCapacity;
             line.StackSize = result.StackSize;
         }
         else
         {
             line.ReceiverBagCapacity = result.BagCapacity;
             line.ReceiverFreeBagSlots = result.FreeBagSlots;
+            line.ReceiverSaddlebagCapacity = result.SaddlebagCapacity;
         }
         if (state.Journal!.Plan.Allocations.Any(allocation => allocation.Legs.Count == 2 && allocation.Legs[0].ReceiverId == characterId))
-            state.RelayCapacity[characterId] = result.BagCapacity;
+            state.RelayCapacity[characterId] = (uint)Math.Min(uint.MaxValue, (ulong)result.BagCapacity + result.SaddlebagCapacity);
         if (lane.Stage == VisitPreparationStage.Withdraw)
         {
             lane.StorageItemIndex = null;
-            if (result.BagQuantity == 0 && result.MovedQuantity == 0)
+            if (result.MovedQuantity == 0) lane.ExhaustedPickups.Add(line.ItemIndex);
+            if (result.BagQuantity == 0 && result.MovedQuantity == 0 && state.PackedCargo.GetValueOrDefault(characterId) == 0)
                 throw new InvalidOperationException("The provider no longer has the planned item in bags or accessible retainers. Other confirmed progress is preserved.");
-            AdvanceVisitLine(visit, lane, sender);
+            if (CanUseCargo(characterId) && (!lane.ExhaustedPickups.Contains(line.ItemIndex) || state.PackedCargo.GetValueOrDefault(characterId) > 0))
+                lane.Stage = VisitPreparationStage.Inspect;
+            else AdvanceVisitLine(visit, lane, sender);
             return;
         }
+        var packed = state.PackedCargo.GetValueOrDefault(characterId);
+        if (packed > 0 && !result.SaddlebagsAvailable && CanUseCargo(characterId))
+            throw new InvalidOperationException("This character has saved saddlebag cargo but its saddlebags are currently unavailable. Cargo was preserved; restore access and resume.");
+        if (sender && result.SaddlebagsAvailable)
+        {
+            // Fill spare saddlebag space before making another retainer pickup. Carried
+            // stock counts towards the visit budget even while temporarily packed.
+            if (lane.Stage == VisitPreparationStage.Inspect && line.LegIndex == 0
+                && !lane.ExhaustedPickups.Contains(line.ItemIndex) && (ulong)result.BagQuantity + packed < line.MaximumQuantity
+                && result.BagCapacity < result.StackSize && result.SaddlebagCapacity > 0
+                && !lane.AttemptedPacking.Contains(line.ItemIndex)
+                && ArrangeCargo(lane, state, characterId, result, true, result.BagQuantity, CargoPurpose.Pickup)) return;
+            if (packed > 0 && result.BagCapacity > 0 && (line.LegIndex > 0 || (ulong)result.BagQuantity + packed >= line.MaximumQuantity || lane.ExhaustedPickups.Contains(line.ItemIndex))
+                && !lane.AttemptedPacking.Contains(line.ItemIndex)
+                && ArrangeCargo(lane, state, characterId, result, false, packed, CargoPurpose.Sending)) return;
+        }
         if (sender && lane.Stage == VisitPreparationStage.Inspect && line.LegIndex == 0
-            && result.BagQuantity < line.MaximumQuantity && result.BagCapacity > 0)
+            && (ulong)result.BagQuantity + packed < line.MaximumQuantity && result.BagCapacity > 0
+            && !lane.ExhaustedPickups.Contains(line.ItemIndex))
         {
             // Keep physical slots for other item types in this same visit instead of
             // letting the first large request fill every free slot by itself.
@@ -307,10 +344,15 @@ public sealed partial class WorkflowService
                 var reservedCapacity = (ulong)reserve * result.StackSize;
                 pickupCapacity = result.BagCapacity > reservedCapacity ? (uint)(result.BagCapacity - reservedCapacity) : 0;
             }
-            if (pickupCapacity == 0) { AdvanceVisitLine(visit, lane, sender); return; }
+            if (pickupCapacity == 0)
+            {
+                if (!lane.AttemptedPacking.Contains(line.ItemIndex) && ArrangeCargo(lane, state, characterId, result,
+                    true, result.BagQuantity, CargoPurpose.Pickup)) return;
+                AdvanceVisitLine(visit, lane, sender); return;
+            }
             lane.StorageItemIndex = line.ItemIndex;
             lane.StorageQuantity = (uint)Math.Min(uint.MaxValue,
-                Math.Min(line.MaximumQuantity - result.BagQuantity, pickupCapacity));
+                Math.Min(line.MaximumQuantity - result.BagQuantity - packed, pickupCapacity));
             lane.Stage = VisitPreparationStage.Withdraw;
             return;
         }
@@ -405,11 +447,11 @@ public sealed partial class WorkflowService
                     var ownSlots = (needsNew + line.StackSize - 1) / line.StackSize;
                     var mergeAfter = quantity <= mergeBefore ? mergeBefore - quantity : ownSlots * line.StackSize - needsNew;
                     state.RelayCapacity[visit.ReceiverId] = (uint)Math.Min(uint.MaxValue,
-                        mergeAfter + (freeBefore.Value - occupiedSlots) * line.StackSize);
+                        mergeAfter + (freeBefore.Value - occupiedSlots) * line.StackSize + line.ReceiverSaddlebagCapacity);
                 }
             }
             if (state.Journal.Plan.Allocations.Any(allocation => allocation.Legs.Count == 2 && allocation.Legs[0].ReceiverId == visit.SenderId))
-                state.RelayCapacity[visit.SenderId] = (uint)Math.Min(uint.MaxValue, (ulong)line.SenderBagCapacity + quantity);
+                state.RelayCapacity[visit.SenderId] = (uint)Math.Min(uint.MaxValue, (ulong)line.SenderBagCapacity + quantity + line.SenderSaddlebagCapacity);
         }
     }
 
@@ -427,7 +469,8 @@ public sealed partial class WorkflowService
             lane.AttemptedDeposits.Add(index);
             lane.StorageItemIndex = index;
             lane.StorageQuantity = (uint)Math.Min(uint.MaxValue, delivered - stored);
-            lane.Stage = VisitPreparationStage.Deposit;
+            lane.Stage = CanUseCargo(characterId) || state.PackedCargo.GetValueOrDefault(characterId) > 0
+                ? VisitPreparationStage.DepositInspect : VisitPreparationStage.Deposit;
             return true;
         }
         return false;
@@ -443,7 +486,8 @@ public sealed partial class WorkflowService
     private static GameOperationKind VisitOperationKind(VisitPreparationStage stage) => stage switch
     {
         VisitPreparationStage.Login => GameOperationKind.Login,
-        VisitPreparationStage.Inspect or VisitPreparationStage.FinalInspect => GameOperationKind.Inspect,
+        VisitPreparationStage.Inspect or VisitPreparationStage.FinalInspect or VisitPreparationStage.PackingInspect or VisitPreparationStage.DepositInspect => GameOperationKind.Inspect,
+        VisitPreparationStage.Saddlebag => GameOperationKind.ArrangeSaddlebags,
         VisitPreparationStage.Withdraw => GameOperationKind.Withdraw,
         VisitPreparationStage.Deposit => GameOperationKind.Deposit,
         VisitPreparationStage.Travel => GameOperationKind.TravelMeeting,
@@ -458,6 +502,9 @@ public sealed partial class WorkflowService
         VisitPreparationStage.Login => "logging in",
         VisitPreparationStage.Withdraw => "collecting assigned items from retainers",
         VisitPreparationStage.Deposit => "storing delivered items",
+        VisitPreparationStage.Saddlebag => "arranging saddlebag cargo",
+        VisitPreparationStage.PackingInspect => "checking room for received cargo",
+        VisitPreparationStage.DepositInspect => "preparing carried and saddlebag items for storage",
         VisitPreparationStage.Travel => "travelling to meet the other character",
         VisitPreparationStage.Ready => "ready with assigned items",
         _ => "checking this visit's carried items",
@@ -490,6 +537,12 @@ public sealed partial class WorkflowService
             if (pending.Response == null || !ResolvePreparationStorage(pending)) continue;
             if (StorageReconciliation.IsStorage(pending.Command) && !pending.Response!.NeverStarted && pending.Response.Observation == null)
                 throw new InvalidOperationException("An interrupted item pickup or deposit has no matching inventory observation. Keep the original character logged in and resume tallying.");
+            if (pending.Command.Operation.Kind == GameOperationKind.ArrangeSaddlebags && !pending.Response!.NeverStarted)
+            {
+                if (!pending.Response.Success || pending.Response.Observation is not { SaddlebagsAvailable: true } cargo)
+                    throw new InvalidOperationException(pending.Response.Error.Length > 0 ? pending.Response.Error : "Waiting for saddlebag cargo evidence.");
+                ApplyRecoveredCargo(pending);
+            }
             Run.Pending.Remove(pending);
             SaveRun();
         }

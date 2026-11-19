@@ -232,6 +232,13 @@ public sealed partial class WorkflowService
         var run = Run!;
         if (run.VisitBatch != null || run.Pending.Any(pending => pending.Response == null || pending.Response.Ambiguous))
             RefuseToEndPausedJob("Resume to tally the pending visit before ending this job.");
+        foreach (var pending in run.Pending.Where(p => p.Command.Operation.Kind == GameOperationKind.ArrangeSaddlebags))
+        {
+            if (pending.Response?.NeverStarted == true) continue;
+            if (pending.Response is not { Success: true, Observation.SaddlebagsAvailable: true })
+                RefuseToEndPausedJob("Resume to reconcile the interrupted saddlebag move before ending this job.");
+            ApplyRecoveredCargo(pending);
+        }
         foreach (var pending in run.Pending.Where(pending => StorageReconciliation.IsStorage(pending.Command)))
             AccountStorageMovement(pending, pending.Command.Operation.CharacterId);
         foreach (var item in run.VisitItems.Values.Where(item => item.Journal != null))

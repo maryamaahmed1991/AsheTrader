@@ -100,7 +100,7 @@ public sealed partial class WorkflowService
                 run.Snapshots[chosen.ContentId] = new()
                 {
                     CharacterId = chosen.ContentId, PeerId = peerId, Name = chosen.Name, World = chosen.World,
-                    BagCapacity = (uint)Math.Min(uint.MaxValue, (ulong)chosen.InventoryFreeSlots!.Value * PlanningItemStackSize()),
+                    BagCapacity = (uint)Math.Min(uint.MaxValue, (ulong)AutomaticRelaySelector.CargoSlots(chosen) * PlanningItemStackSize()),
                     Verification = InventoryVerification.Cached,
                 };
         }

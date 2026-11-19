@@ -7,6 +7,8 @@ public sealed class CharacterProfile
     public string World { get; set; } = string.Empty;
     public string AccountLabel { get; set; } = string.Empty;
     public int ServiceAccount { get; set; }
+    public bool UseSaddlebags { get; set; } = true;
+    public uint? SaddlebagFreeSlots { get; set; }
     /// <summary>AutoRetainer's cached empty bag slots. Null means no registered character snapshot is available.</summary>
     public uint? InventoryFreeSlots { get; set; }
     /// <summary>When the AutoRetainer cache was read, not when the character's inventory was observed.</summary>

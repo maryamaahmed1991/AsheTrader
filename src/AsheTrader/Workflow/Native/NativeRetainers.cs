@@ -200,6 +200,8 @@ internal static unsafe class NativeRetainers
         return Read(RetainerBags, itemId, hq);
     }
 
+    internal static ItemInventory ReadContainers(InventoryType[] containers, uint itemId, bool hq) => Read(containers, itemId, hq);
+
     private static ItemInventory Read(InventoryType[] containers, uint itemId, bool hq)
     {
         var manager = InventoryManager.Instance();

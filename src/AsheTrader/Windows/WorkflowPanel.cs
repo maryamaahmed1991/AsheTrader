@@ -30,7 +30,7 @@ public sealed partial class WorkflowPanel(Plugin plugin)
     private WorkflowService Service => plugin.Workflow;
     private WorkflowSettings Settings => plugin.Config.Workflow;
     private bool HasUnfinishedJob => Service.Run is { Step: not CoordinatorStep.Finished };
-    private bool LocalActionRunning => Service.Busy || plugin.Trader.IsRunning || (plugin.Fuel.Active || plugin.FuelQueue.HasUnfinishedRun);
+    private bool LocalActionRunning => Service.Busy || plugin.Trader.IsRunning || (plugin.Fuel.Active || (plugin.FuelQueue.HasUnfinishedRun || plugin.Utilities.HasUnfinishedRun));
     private bool EditingLocked => LocalActionRunning || HasUnfinishedJob;
     private bool ReadyConnection => Service.Connected && Service.RemoteRoster != null;
     private bool CoordinatorRole => HasUnfinishedJob || (Service.PairingEnabled ? Service.IsHost : coordinatorRole ?? Settings.RememberedHost ?? !Settings.AllowRemoteControl);
@@ -731,6 +731,10 @@ public sealed partial class WorkflowPanel(Plugin plugin)
             ImGui.PushID($"storage{character.ContentId}");
             if (ImGui.CollapsingHeader(CharacterName(character)))
             {
+                var saddlebags = character.UseSaddlebags;
+                if (ImGui.Checkbox("Use spare saddlebag space for trade cargo", ref saddlebags))
+                { character.UseSaddlebags = saddlebags; plugin.Save(); }
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Uses unlocked normal and premium bags between trades. Existing unrelated items stay in place. Update both PCs for saddlebag cargo support.");
                 var route = Settings.StorageRoutes.GetValueOrDefault(character.ContentId);
                 if (route == null) ImGui.TextUnformatted("Bell destination: home-world inn via Lifestream");
                 else DrawLocation(route);
@@ -956,6 +960,9 @@ public sealed partial class WorkflowPanel(Plugin plugin)
             UiTone.Wrapped(UiTone.Info, $"Collected from provider retainers: {CharacterName(pickup.Key)} · {pickup.Value:N0} items");
         foreach (var deposit in run.Deposited.Where(x => x.Value > 0))
             UiTone.Wrapped(UiTone.Info, $"Stored in recipient retainers: {CharacterName(deposit.Key)} · {deposit.Value:N0} items");
+        foreach (var item in run.VisitItems.Values)
+            foreach (var cargo in item.PackedCargo.Where(x => x.Value > 0))
+                UiTone.Wrapped(UiTone.Info, $"In saddlebags: {CharacterName(cargo.Key)} · {ItemName(item.Definition.ItemId)} · {cargo.Value:N0}");
         if (ImGui.CollapsingHeader("Operation details"))
         {
             if (run.Pending.Count == 0) ImGui.TextUnformatted("No pending worker command.");
@@ -1091,6 +1098,7 @@ public sealed partial class WorkflowPanel(Plugin plugin)
             GameOperationKind.ScanRetainers => "Scanning bags and retainers",
             GameOperationKind.Withdraw => "Collecting items from provider retainers",
             GameOperationKind.Deposit => "Depositing items into recipient retainers",
+            GameOperationKind.ArrangeSaddlebags => "Arranging saddlebag cargo",
             _ => "Working"
         }
     };

@@ -18,6 +18,7 @@ public sealed class Configuration : IPluginConfiguration
     public FuelQueueSettings FuelSettings { get; set; } = new();
     public Dictionary<ulong, FuelAccessSnapshot> FuelAccessSnapshots { get; set; } = [];
     public Core.Store.StorePreferences Store { get; set; } = new();
+    public HashSet<ulong> UtilityCharacters { get; set; } = [];
 
     public void Normalize()
     {
@@ -30,6 +31,7 @@ public sealed class Configuration : IPluginConfiguration
         FuelSettings ??= new();
         FuelAccessSnapshots ??= [];
         Store ??= new();
+        UtilityCharacters ??= [];
         Store.Characters ??= [];
         Store.Items ??= [];
         FuelSettings.Companies ??= [];

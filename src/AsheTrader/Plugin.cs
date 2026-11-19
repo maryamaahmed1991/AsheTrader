@@ -40,6 +40,7 @@ public sealed class Plugin : IDalamudPlugin
     public FuelQueueService FuelQueue { get; }
     internal FuelAccessService FuelAccess { get; }
     public WorkflowService Workflow { get; }
+    public Utilities.UtilityService Utilities { get; }
     internal Store.StoreService Store { get; }
     public string SettingsError { get; private set; } = string.Empty;
     public Queue<string> Activity { get; } = new();
@@ -65,6 +66,7 @@ public sealed class Plugin : IDalamudPlugin
         Workflow = new WorkflowService(this);
         FuelAccess = new FuelAccessService(this);
         FuelQueue = new FuelQueueService(this);
+        Utilities = new Utilities.UtilityService(this);
         Store = new Store.StoreService(this);
         Trader.Diagnostic = Workflow.RecordTradeDiagnostic;
         Fuel.Diagnostic = message => Workflow.RecordDiagnostic("fuel purchase " + message);
@@ -120,7 +122,7 @@ public sealed class Plugin : IDalamudPlugin
         Config = LoadSettings();
     }
 
-    public void StopAll() { FuelQueue.Pause(); Trader.Stop(); Fuel.Stop(); Workflow.Pause("Paused by user."); }
+    public void StopAll() { Utilities.Pause(); FuelQueue.Pause(); Trader.Stop(); Fuel.Stop(); Workflow.Pause("Paused by user."); }
     public void Open() => mainWindow.IsOpen = true;
     public void Record(string message)
     {
@@ -169,6 +171,7 @@ public sealed class Plugin : IDalamudPlugin
             Trader.Update();
             Fuel.Update();
             FuelQueue.Update();
+            Utilities.Update();
             Workflow.Update();
         }
         catch (Exception ex) { StopAll(); Record($"Operation stopped: {ex.Message}"); Log.Error(ex, "Runner update failed"); }
@@ -183,6 +186,8 @@ public sealed class Plugin : IDalamudPlugin
     private void OnLogout(int type, int code)
     {
         Trader.Stop();
+        if (Utilities.ExpectsLogout) return;
+        Utilities.Pause("Unexpected logout; utility queue paused.");
         if (!FuelQueue.ExpectsLogout)
         {
             FuelQueue.Pause("Unexpected logout; fuel queue paused.");
@@ -203,6 +208,7 @@ public sealed class Plugin : IDalamudPlugin
         CommandManager.RemoveHandler("/ashetrader");
         Trader.Dispose();
         FuelQueue.Shutdown();
+        Utilities.Shutdown();
         Workflow.Dispose();
         Store.Dispose();
         Fuel.Stop();

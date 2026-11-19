@@ -45,10 +45,12 @@ public sealed partial class WorkflowService
         plugin.Trader.CaptureDiagnosticSnapshot("User requested diagnostic report");
         plugin.FuelQueue.CaptureDiagnosticSnapshot("User requested diagnostic report");
         var header = new WorkflowTrace(40, 2000);
-        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 10; timestamps UTC; this PC only");
+        header.Add("Report", $"Ashe's Trader {typeof(Plugin).Assembly.GetName().Version}; format 11; timestamps UTC; this PC only");
         header.Add("Session", $"Role={(IsHost ? "coordinator" : "worker")}; connected={Connected}; paired={HasAcceptedConnection}; remoteControl={Settings.AllowRemoteControl}; journalHealthy={journalHealthy}");
         header.Add("Game", $"loggedIn={Plugin.ClientState.IsLoggedIn}; characterId={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; language={Plugin.ClientState.ClientLanguage}");
         header.Add("Status", Status);
+        if (plugin.Utilities.Run is { } utility)
+            header.Add("Utilities", $"stage={utility.Stage}; index={utility.Index}/{utility.Entries.Count}; paused={utility.Paused}; status={utility.Status}; error={plugin.Utilities.Error}");
         if (plugin.FuelQueue.Run is { } fuel)
         {
             header.Add("FuelQueue", $"id={fuel.Id}; stage={fuel.Stage}; index={fuel.Index}/{fuel.Entries.Count}; paused={fuel.Paused}; finished={fuel.Finished}; ending={fuel.EndRequested}; purchased={fuel.TotalPurchased}; deposited={fuel.TotalDeposited}; status={fuel.Status}");
@@ -75,6 +77,9 @@ public sealed partial class WorkflowService
             header.Add("Coordinator", $"job={run.Job.Definition.Id}; step={run.Step}; paused={run.Paused}; itemIndex={run.ActiveItemIndex}; discoveryIndex={run.DiscoveryIndex}/{run.DiscoveryOrder.Count}; pending={run.Pending.Count}");
             if (run.VisitMode)
                 header.Add("Visits", $"planningComplete={run.VisitPlanningComplete}; itemPlans={run.VisitItems.Count}; completedItems={run.CompletedItems.Count}; mixedBatchItems={run.VisitBatch?.Lines.Count ?? 0}");
+            foreach (var item in run.VisitItems.Values)
+                foreach (var cargo in item.PackedCargo.Where(c => c.Value > 0).Take(8))
+                    header.Add("SaddlebagCargo", $"item={item.Definition.ItemId}; HQ={item.Definition.HighQuality}; character={cargo.Key}; quantity={cargo.Value}");
             if (run.Visit is { } visit)
             {
                 header.Add("Visit", $"id={visit.Id}; sender={visit.SenderId}; receiver={visit.ReceiverId}; world={visit.Meeting.WorldId}; recovering={visit.Recovering}; replanRequested={visit.ReplanRequested}; senderStage={visit.Sender.Stage}/{visit.Sender.LineIndex}; receiverStage={visit.Receiver.Stage}/{visit.Receiver.LineIndex}");

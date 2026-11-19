@@ -16,6 +16,7 @@ public sealed class MainWindow : Window
     private readonly ItemSearchPanel itemSearchPanel;
     private readonly FuelPanel fuelPanel;
     private readonly StorePanel storePanel;
+    private readonly UtilitiesPanel utilitiesPanel;
     private Guid selectedList;
     private string search = string.Empty;
     private string importStatus = "Import AutoRetainer's known characters to start assigning accounts.";
@@ -27,7 +28,7 @@ public sealed class MainWindow : Window
     private int selectedPage;
     private IDisposable? theme;
     private static readonly string Version = typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "";
-    private static readonly string[] PageTitles = ["Connection", "Transfer jobs", "Review & run", "Activity", "Fuel & houses", "Advanced tools", "Item Search", "Private stores"];
+    private static readonly string[] PageTitles = ["Connection", "Transfer jobs", "Review & run", "Activity", "Fuel & houses", "Advanced tools", "Item Search", "Private stores", "Utilities"];
     private static readonly string[] PageDescriptions =
     [
         "Connect your PCs and get your characters ready.",
@@ -38,6 +39,7 @@ public sealed class MainWindow : Window
         "Manual trades, character profiles and local preferences.",
         "Find your items across characters and connected PCs.",
         "Share selected stock with friends, even while you are offline.",
+        "Small character tasks, managed in one local queue.",
     ];
     private static readonly string[] PageHelp =
     [
@@ -49,6 +51,7 @@ public sealed class MainWindow : Window
         "Manual trades, character profiles and local preferences live here. Automatic jobs lock conflicting controls while unfinished. You can hide the illustrations inside these help popups under Preferences & local log.",
         "Search comma-separated names such as coke, ceruleum, sap; partial names work too. Your last search and sort order are remembered on this PC. Save list creates a named shortcut; choose one from Saved searches to run it again, or use Edit list to rename, update or delete it. Select a result to see its characters and retainers. Counts use Allagan Tools caches, including the paired PC when available; shared FC and housing storage are excluded.",
         "Connect your store in Access & invitations, then choose the items and characters to share. Preview your stock before publishing. Your friends can browse the last published catalogue while you are offline; your character and retainer names stay private.",
+        "Choose characters and start the saddlebag unlock queue. AutoRetainer logs in each character; Questionable runs only My Feisty Little Chocobo. Completed and ineligible characters are skipped with a reason. Your existing Questionable priorities are preserved. Saved queues wait for Resume after reload.",
     ];
 
     public MainWindow(Plugin plugin) : base("Ashe's Trader###AsheTraderMain")
@@ -58,6 +61,7 @@ public sealed class MainWindow : Window
         itemSearchPanel = new ItemSearchPanel(plugin);
         fuelPanel = new FuelPanel(plugin);
         storePanel = new StorePanel(plugin);
+        utilitiesPanel = new UtilitiesPanel(plugin);
         Size = new Vector2(1080, 760);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(880, 620), MaximumSize = new Vector2(float.MaxValue) };
@@ -95,6 +99,7 @@ public sealed class MainWindow : Window
             if (selectedPage <= 3) selectedPage = workflowPanel.Draw(selectedPage);
             else if (selectedPage == 6) itemSearchPanel.Draw();
             else if (selectedPage == 7) storePanel.Draw();
+            else if (selectedPage == 8) utilitiesPanel.Draw();
             else if (selectedPage == 4)
             {
                 if (ImGui.BeginChild("FuelPage", new Vector2(0, 0))) fuelPanel.Draw();
@@ -104,7 +109,7 @@ public sealed class MainWindow : Window
             {
                 if (ImGui.BeginChild("ToolPage", new Vector2(0, 0)))
                 {
-                    var workflowLocked = plugin.Workflow.Busy || plugin.Workflow.Run is { Step: not Workflow.CoordinatorStep.Finished } || plugin.FuelQueue.HasUnfinishedRun;
+                    var workflowLocked = plugin.Workflow.Busy || plugin.Workflow.Run is { Step: not Workflow.CoordinatorStep.Finished } || (plugin.FuelQueue.HasUnfinishedRun || plugin.Utilities.HasUnfinishedRun);
                     if (workflowLocked)
                         UiTone.Wrapped(UiTone.Warning, "These settings stay locked while a transfer or fuel queue is unfinished. Finish or end the run before making changes.");
                     DrawAdvanced(workflowLocked);
@@ -126,9 +131,9 @@ public sealed class MainWindow : Window
         ImGui.Dummy(new Vector2(0, titleSize + TraderStyle.Px(10)));
         ImGui.EndGroup();
         ImGui.Spacing();
-        string[] labels = ["Connection", "Jobs", "Review & run", "Activity", "Fuel & houses", "Advanced", "Item Search", "Stores"];
-        string[] details = ["PCs & integrations", "Items & characters", "Ready to transfer", "Progress & diagnostics", "FC fuel queues", "Manual controls", "Across your inventories", "Your private catalogue"];
-        int[] order = [0, 1, 2, 3, 6, 7, 4, 5];
+        string[] labels = ["Connection", "Jobs", "Review & run", "Activity", "Fuel & houses", "Advanced", "Item Search", "Stores", "Utilities"];
+        string[] details = ["PCs & integrations", "Items & characters", "Ready to transfer", "Progress & diagnostics", "FC fuel queues", "Manual controls", "Across your inventories", "Your private catalogue", "Character tasks"];
+        int[] order = [0, 1, 2, 3, 6, 7, 4, 8, 5];
         // The page list can scroll at small window sizes; run status stays reachable below it.
         if (ImGui.BeginChild("NavigationPages", new Vector2(0, Math.Max(TraderStyle.Px(130), ImGui.GetContentRegionAvail().Y - TraderStyle.Px(82)))))
         {
@@ -142,9 +147,9 @@ public sealed class MainWindow : Window
         var footerY = ImGui.GetWindowHeight() - TraderStyle.Px(82);
         if (ImGui.GetCursorPosY() < footerY) ImGui.SetCursorPosY(footerY);
         ImGui.Separator();
-        var active = plugin.Workflow.Busy || plugin.Trader.IsRunning || plugin.Fuel.Active || plugin.FuelQueue.Active;
+        var active = plugin.Workflow.Busy || plugin.Trader.IsRunning || plugin.Fuel.Active || plugin.FuelQueue.Active || plugin.Utilities.Active;
         var paused = plugin.Workflow.Run is { Paused: true, Step: not Workflow.CoordinatorStep.Finished }
-            || plugin.FuelQueue.HasUnfinishedRun && !plugin.FuelQueue.Active;
+            || plugin.FuelQueue.HasUnfinishedRun && !plugin.FuelQueue.Active || plugin.Utilities.HasUnfinishedRun && !plugin.Utilities.Active;
         TraderStyle.Badge(active ? "RUNNING" : paused ? "PAUSED" : "IDLE", active ? TraderStyle.Accent : paused ? TraderStyle.Gold : TraderStyle.Muted);
         ImGui.TextDisabled($"Version {Version}");
     }
@@ -162,7 +167,7 @@ public sealed class MainWindow : Window
             var pose = selectedPage switch { 0 => MascotPose.Welcome, 1 or 2 => MascotPose.Parcel, 4 => MascotPose.Fuel, 7 => MascotPose.Coin, _ => MascotPose.Cozy };
             MascotGuide.HelpButton($"PageHelp{selectedPage}", () => plugin.Mascot.Get(pose), PageTitles[selectedPage], PageHelp[selectedPage], plugin.Config.ShowMascotIllustrations);
             ImGui.TableNextColumn();
-            ImGui.BeginDisabled(!plugin.Trader.IsRunning && !plugin.Fuel.Active && !plugin.Workflow.Busy && !plugin.FuelQueue.Active);
+            ImGui.BeginDisabled(!plugin.Trader.IsRunning && !plugin.Fuel.Active && !plugin.Workflow.Busy && !plugin.FuelQueue.Active && !plugin.Utilities.Active);
             if (TraderStyle.DangerButton("STOP ALL", new Vector2(-1, 34))) plugin.QueueAction(plugin.StopAll);
             ImGui.EndDisabled();
             if (ImGui.IsItemHovered()) ImGui.SetTooltip("Stop all actions on this PC and pause the paired workflow.");

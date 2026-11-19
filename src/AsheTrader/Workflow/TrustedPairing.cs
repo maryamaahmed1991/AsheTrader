@@ -38,7 +38,7 @@ public sealed partial class WorkflowService
     public bool HasQueuedTransfer => waitingTransfer != null;
     public bool CanQueueTransfer => HasTrustedPeer && Settings.RememberedHost == true;
     private string EffectivePairingKey => deviceSecret?.PairingKey is { Length: > 0 } secret ? secret : Settings.PairingKey;
-    private bool LocalReadyForJob => !Busy && !plugin.Trader.IsRunning && !plugin.Fuel.Active && !plugin.FuelQueue.HasUnfinishedRun && journalHealthy;
+    private bool LocalReadyForJob => !Busy && !plugin.Trader.IsRunning && !plugin.Fuel.Active && !(plugin.FuelQueue.HasUnfinishedRun || plugin.Utilities.HasUnfinishedRun) && journalHealthy;
 
     private void InitializeTrustedPairing()
     {

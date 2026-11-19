@@ -35,6 +35,8 @@
     <Compile Include="../../src/AsheTrader/Workflow/MultiItemTradeEvidence.cs" Link="Production/MultiItemTradeEvidence.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/VisitModels.cs" Link="Production/VisitModels.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/CharacterVisits.cs" Link="Production/CharacterVisits.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/SaddlebagVisits.cs" Link="Production/SaddlebagVisits.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/Native/SaddlebagCargoPolicy.cs" Link="Production/SaddlebagCargoPolicy.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/VisitPlanning.cs" Link="Production/VisitPlanning.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/VisitTrades.cs" Link="Production/VisitTrades.cs" />
     <Compile Include="../../src/AsheTrader/Trading/TradeOpeningGate.cs" Link="Production/TradeOpeningGate.cs" />

@@ -236,6 +236,7 @@ public sealed class FuelQueueService
 
     private void RequireAvailable()
     {
+        if (plugin.Utilities.HasUnfinishedRun) throw new InvalidOperationException("Finish or end the utility queue first.");
         if (!journalHealthy) throw new InvalidOperationException(setupStatus);
         if (plugin.Workflow.Busy || plugin.Workflow.Run is { Step: not CoordinatorStep.Finished } || plugin.Trader.IsRunning || plugin.Fuel.Active)
             throw new InvalidOperationException("Finish the transfer job or manual operation before starting this PC's fuel queue.");
