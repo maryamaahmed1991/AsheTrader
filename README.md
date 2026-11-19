@@ -27,6 +27,10 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.6.3.2
+
+Retainer storage operations now advance the unnamed “Assign retainer a job” reminder automatically, using the client's localized dialogue text. This applies to transfer withdrawals, deposits, fuel deposits and storage recovery. The selected retainer and active bell interaction must match; unrelated dialogue, quantity confirmations and cutscenes are left untouched. Diagnostics identify the recognized reminder without recording dialogue bodies.
+
 ## Version 0.6.3.1
 
 A brighter lavender-and-cream palette replaces the dark plum workspace. Dark plum text, deeper teal quantities, rose actions and amber status labels keep the light surfaces readable. Navigation, cards, tables, popups and progress bars use the same palette; help still opens only through the **i** buttons.

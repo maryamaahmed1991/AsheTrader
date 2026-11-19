@@ -12,6 +12,8 @@ using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
+using Lumina.Excel;
+using Lumina.Text.ReadOnly;
 using NativeObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 
 namespace AsheTrader.Workflow.Native;
@@ -51,26 +53,37 @@ internal static unsafe class NativeRetainers
         || Plugin.Condition[ConditionFlag.LoggingOut] || HasActiveCutscene
         || ActionManager.Instance() == null || ActionManager.Instance()->AnimationLock > 0;
 
-    public static bool HasExpectedRetainerTalk(RetainerIdentity expected)
+    public static bool HasExpectedRetainerTalk(RetainerIdentity expected) => ExpectedRetainerTalkKind(expected) != RetainerTalkKind.None;
+
+    private static RetainerTalkKind ExpectedRetainerTalkKind(RetainerIdentity expected)
     {
-        if (HasActiveCutscene) return false;
+        if (HasActiveCutscene || HasNumeric || HasUnrelatedModal) return RetainerTalkKind.None;
         var talk = (AddonTalk*)Ready("Talk");
-        if (talk == null || !Plugin.Condition[ConditionFlag.OccupiedSummoningBell]) return false;
-        // AddonTalk's first text node is the speaker (also used by TextToTalk/TalkUtils).
-        var speaker = talk->AtkTextNode220;
-        return speaker != null && speaker->NodeText.StringPtr.Value != null
-            && string.Equals(SeString.Parse(speaker->NodeText.StringPtr.Value).TextValue.Trim(), expected.Name.Trim(), StringComparison.Ordinal);
+        if (talk == null || !Plugin.Condition[ConditionFlag.OccupiedSummoningBell]) return RetainerTalkKind.None;
+        var manager = RetainerManager.Instance();
+        var active = manager == null ? null : manager->GetActiveRetainer();
+        if (expected.Id == 0 || active == null || active->RetainerId != expected.Id) return RetainerTalkKind.None;
+        var speaker = TalkNodeText(talk->AtkTextNode220);
+        var reminder = string.IsNullOrWhiteSpace(speaker)
+            ? Plugin.DataManager.GetExcelSheet<RetainerDialogueRow>(name: RetainerTalkPolicy.DialogueSheet)
+                .GetRowOrDefault(RetainerTalkPolicy.JobReminderRow)?.Text.ExtractText()
+            : null;
+        return RetainerTalkPolicy.Classify(expected.Name, speaker, TalkNodeText(talk->AtkTextNode228), reminder);
     }
+
+    private static string? TalkNodeText(AtkTextNode* node) => node == null || node->NodeText.StringPtr.Value == null
+        ? null : SeString.Parse(node->NodeText.StringPtr.Value).TextValue;
 
     public static bool AdvanceRetainerTalk(RetainerIdentity expected, Action<string>? trace = null)
     {
-        if (!HasExpectedRetainerTalk(expected) || HasNumeric || HasUnrelatedModal) return false;
+        var kind = ExpectedRetainerTalkKind(expected);
+        if (kind == RetainerTalkKind.None) return false;
         VerifyRetainer(expected.Id);
         var addon = Ready("Talk");
         var stage = AtkStage.Instance();
         if (addon == null || stage == null) return false;
         // The Talk event sequence used by ECommons' AddonMaster.Talk. Only the
-        // verified retainer's own greeting/farewell is eligible for this action.
+        // verified retainer's greeting/farewell or recognized job reminder is eligible.
         var evt = new AtkEvent
         {
             Listener = (AtkEventListener*)addon,
@@ -78,7 +91,7 @@ internal static unsafe class NativeRetainers
             State = new() { StateFlags = (AtkEventStateFlags)132 },
         };
         var data = new AtkEventData();
-        Trace(trace, $"action Talk advance begin; retainer={expected.Id}; speaker={DiagnosticText(expected.Name)}");
+        Trace(trace, $"action Talk advance begin; retainer={expected.Id}; kind={kind}; reminderRow={(kind == RetainerTalkKind.JobReminder ? RetainerTalkPolicy.JobReminderRow : 0)}");
         addon->ReceiveEvent(AtkEventType.MouseDown, 0, &evt, &data);
         addon->ReceiveEvent(AtkEventType.MouseClick, 0, &evt, &data);
         addon->ReceiveEvent(AtkEventType.MouseUp, 0, &evt, &data);
@@ -118,7 +131,7 @@ internal static unsafe class NativeRetainers
             {
                 var speaker = talk->AtkTextNode220;
                 var name = speaker == null || speaker->NodeText.StringPtr.Value == null ? null : SeString.Parse(speaker->NodeText.StringPtr.Value).TextValue;
-                lines.Add($"talk speaker={DiagnosticText(name)}; expectedSpeakerMatch={expected != null && HasExpectedRetainerTalk(expected)}");
+                lines.Add($"talk speaker={DiagnosticText(name)}; expectedSpeakerMatch={expected != null && string.Equals(name?.Trim(), expected.Name.Trim(), StringComparison.Ordinal)}; recognizedKind={(expected == null ? RetainerTalkKind.None : ExpectedRetainerTalkKind(expected))}");
             }
             if (menuRow.HasValue)
             {
@@ -480,4 +493,14 @@ internal static unsafe class NativeRetainers
         var result = targetSystem->InteractWithObject((NativeObject*)bell.Address, false);
         Trace(trace, $"action summoning-bell interaction dispatched; nativeReturn={result}; awaiting RetainerList");
     }
+}
+
+[Sheet]
+internal readonly struct RetainerDialogueRow(ExcelPage page, uint offset, uint rowId) : IExcelRow<RetainerDialogueRow>
+{
+    public ExcelPage ExcelPage => page;
+    public uint RowOffset => offset;
+    public uint RowId => rowId;
+    public ReadOnlySeString Text => page.ReadString(offset + 4, offset);
+    public static RetainerDialogueRow Create(ExcelPage page, uint offset, uint rowId) => new(page, offset, rowId);
 }
