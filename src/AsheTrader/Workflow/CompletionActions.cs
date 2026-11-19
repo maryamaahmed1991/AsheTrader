@@ -12,6 +12,7 @@ public sealed partial class WorkflowService
         var run = Run!;
         if (!run.Job.EnableAutoRetainerAfterCompletion || !run.CompletedNormally || run.DiscoveryOnly) return;
         if (run.CompletionCommands.Count != 0) return;
+        RecordDiagnostic($"Starting AutoRetainer completion handoff; shortages={run.HasShortages}; skippedCharacters={run.HasSkippedCharacters}; all planned deliveries settled.");
         if (RemoteRoster?.ProtocolVersion < 4)
         { RecordDiagnostic("AutoRetainer handoff unavailable: update both PCs."); return; }
         foreach (var group in AllCharacters().GroupBy(entry => entry.PeerId))

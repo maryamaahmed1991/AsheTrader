@@ -75,7 +75,7 @@ public sealed partial class WorkflowService
         }
         if (Run is { } run)
         {
-            header.Add("Coordinator", $"job={run.Job.Definition.Id}; step={run.Step}; paused={run.Paused}; itemIndex={run.ActiveItemIndex}; discoveryIndex={run.DiscoveryIndex}/{run.DiscoveryOrder.Count}; pending={run.Pending.Count}; enableARAfterCompletion={run.Job.EnableAutoRetainerAfterCompletion}; handoffReplies={run.CompletionCommands.Count(p => p.Response != null)}/{run.CompletionCommands.Count}");
+            header.Add("Coordinator", $"job={run.Job.Definition.Id}; step={run.Step}; paused={run.Paused}; itemIndex={run.ActiveItemIndex}; discoveryIndex={run.DiscoveryIndex}/{run.DiscoveryOrder.Count}; pending={run.Pending.Count}; enableARAfterCompletion={run.Job.EnableAutoRetainerAfterCompletion}; completedNormally={run.CompletedNormally}; handoffReplies={run.CompletionCommands.Count(p => p.Response != null)}/{run.CompletionCommands.Count}");
             if (run.VisitMode)
                 header.Add("Visits", $"planningComplete={run.VisitPlanningComplete}; itemPlans={run.VisitItems.Count}; completedItems={run.CompletedItems.Count}; mixedBatchItems={run.VisitBatch?.Lines.Count ?? 0}");
             foreach (var item in run.VisitItems.Values)

@@ -126,7 +126,8 @@ public sealed partial class WorkflowService
         RefreshVisitResults();
         if (run.CompletedItems.Count != run.TotalItemCount) throw new InvalidDataException("A planned item still has unfinished deliveries.");
         run.Step = CoordinatorStep.Finished;
-        run.CompletedNormally = !run.HasShortages;
+        // Reaching this point proves every planned delivery is settled, even if requested stock was unavailable.
+        run.CompletedNormally = true;
         run.Paused = run.HasShortages;
         run.Status = run.HasShortages ? "Available items delivered. Some requested quantities remain short; see item results."
             : run.HasSkippedCharacters ? "Visits finished with skipped characters or items; see the recorded reasons."

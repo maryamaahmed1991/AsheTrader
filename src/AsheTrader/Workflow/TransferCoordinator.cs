@@ -91,7 +91,8 @@ public sealed partial class WorkflowService
         {
             run.CompletedItems = completed;
             run.Step = CoordinatorStep.Finished;
-            run.CompletedNormally = !run.DiscoveryOnly && !run.HasShortages;
+            // Shortages are a terminal result after all available deliveries finish, not an interrupted operation.
+            run.CompletedNormally = !run.DiscoveryOnly;
             run.Paused = run.HasShortages;
             run.Status = run.DiscoveryOnly
                 ? run.HasSkippedCharacters

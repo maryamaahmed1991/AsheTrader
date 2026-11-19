@@ -31,12 +31,38 @@ public sealed class CompletionCoordinatorTests
         Assert.All(service.AutoRetainerRequests.Values, value => Assert.Equal(1, value));
     }
     [Fact]
-    public void DiscoveryAndShortageNeverEnableAutoRetainer()
+    public void DiscoveryNeverEnablesAutoRetainer()
     {
         var (scan, job) = Setup(true); scan.ScanJob(job); scan.RunToTerminal(); scan.Tick();
         Assert.Empty(scan.AutoRetainerRequests); Assert.False(scan.Run!.CompletedNormally);
-        var (shortage, shortJob) = Setup(true, 200); shortage.StartJob(shortJob); shortage.RunToTerminal(); shortage.Tick();
-        Assert.Empty(shortage.AutoRetainerRequests); Assert.False(shortage.Run!.CompletedNormally);
+    }
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void NaturallyFinishedShortageHandsBackBothPeersOnlyWhenEnabled(bool legacy, bool enabled)
+    {
+        var (service, job) = Setup(enabled, 200);
+        if (legacy) service.StartLegacyJob(job); else service.StartJob(job);
+        service.RunToTerminal(); service.Tick(); service.Tick();
+        Assert.Equal(CoordinatorStep.Finished, service.Run!.Step);
+        Assert.True(service.Run.HasShortages);
+        Assert.True(service.Run.CompletedNormally);
+        Assert.Empty(service.Run.Pending);
+        Assert.Equal(100U, service.Characters[2].Bags);
+        Assert.Equal(enabled ? 2 : 0, service.AutoRetainerRequests.Count);
+        Assert.All(service.AutoRetainerRequests.Values, count => Assert.Equal(1, count));
+    }
+    [Fact]
+    public void SkippedSourceDoesNotBlockNaturallyFinishedHandoff()
+    {
+        var (service, job) = Setup(true);
+        job.Definition.Sources.Add(999); // A removed character has no cache/roster entry.
+        service.StartJob(job); service.RunToTerminal(); service.Tick();
+        Assert.True(service.Run!.HasSkippedCharacters);
+        Assert.True(service.Run.CompletedNormally);
+        Assert.Equal(2, service.AutoRetainerRequests.Count);
     }
     [Fact]
     public void LostCompletionAcknowledgmentsDoNotRepeatHandoffs()

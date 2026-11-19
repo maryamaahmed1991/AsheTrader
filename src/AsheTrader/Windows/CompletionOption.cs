@@ -11,7 +11,7 @@ internal static class CompletionOption
         ImGui.EndDisabled();
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip((paired ? "Applies to both paired PCs. " : "Applies to this PC. ")
-                + "Uses your existing AutoRetainer setup after the entire queue finishes. Pausing, ending early, or a failure never enables it. Transfers with unmet quantities do not enable it. Update both PCs for paired jobs.");
+                + "Uses your existing AutoRetainer setup after the entire queue finishes. Pausing, ending early, or a failure never enables it. Finished queues with shortages or skipped characters still enable it. Update both PCs for paired jobs.");
         return changed;
     }
     public static void Status(Plugin plugin)
