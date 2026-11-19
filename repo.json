@@ -3,7 +3,7 @@
     "Author": "Ashe",
     "Name": "Ashe's Trader",
     "InternalName": "AsheTrader",
-    "AssemblyVersion": "0.6.3.2",
+    "AssemblyVersion": "0.6.4.0",
     "Description": "LAN-coordinated item transfers, connected-account inventory search, and independent FC fuel queues with workshop or Resident Caretaker suppliers and automatic retainer deposits.",
     "ApplicableVersion": "any",
     "Tags": [
@@ -21,8 +21,8 @@
     "Punchline": "Coordinate character and retainer item transfers across two PCs.",
     "AcceptsFeedback": true,
     "RepoUrl": "https://github.com/maryamaahmed1991/AsheTrader",
-    "DownloadLinkInstall": "https://github.com/maryamaahmed1991/AsheTrader/releases/download/v0.6.3.2/AsheTrader-0.6.3.2.zip",
-    "DownloadLinkUpdate": "https://github.com/maryamaahmed1991/AsheTrader/releases/download/v0.6.3.2/AsheTrader-0.6.3.2.zip",
-    "LastUpdate": 1795117583
+    "DownloadLinkInstall": "https://github.com/maryamaahmed1991/AsheTrader/releases/download/v0.6.4.0/AsheTrader-0.6.4.0.zip",
+    "DownloadLinkUpdate": "https://github.com/maryamaahmed1991/AsheTrader/releases/download/v0.6.4.0/AsheTrader-0.6.4.0.zip",
+    "LastUpdate": 1795120783
   }
 ]
