@@ -2,6 +2,7 @@ namespace AsheTrader.Workflow.Native;
 
 public sealed partial class GameWorkflowExecutor
 {
+    private readonly SaddlebagReadSession saddlebagReadSession = new();
     private bool ownsSaddlebagWindow;
     private bool saddlebagRequested;
     private ItemInventory? saddlebagObservation;
@@ -10,6 +11,10 @@ public sealed partial class GameWorkflowExecutor
     private (uint Bags, uint Saddle)? saddlebagStableCounts;
     private byte? previousSaddlebagTab;
     private bool premiumRequested;
+
+    private void ObserveSaddlebagSession() => saddlebagReadSession.Observe(
+        Plugin.ClientState.IsLoggedIn ? Plugin.PlayerState.ContentId : 0,
+        Plugin.ClientState.TerritoryType, NativeSaddlebags.Premium, NativeSaddlebags.Loaded);
 
     private void ResetSaddlebags()
     {
@@ -28,7 +33,8 @@ public sealed partial class GameWorkflowExecutor
             if (op.Kind == GameOperationKind.ArrangeSaddlebags) throw new InvalidOperationException("This character's saddlebags are unavailable; saved cargo was retained.");
             Finish(true); return;
         }
-        if (!saddlebagRequested)
+        var silentRead = op.Kind == GameOperationKind.Inspect && saddlebagReadSession.CanReadSilently;
+        if (!silentRead && !saddlebagRequested)
         {
             saddlebagRequested = true;
             ownsSaddlebagWindow = !NativeSaddlebags.Open;
@@ -36,13 +42,14 @@ public sealed partial class GameWorkflowExecutor
             actionAfter = Environment.TickCount64 + 300;
             return;
         }
-        if (!NativeSaddlebags.Open) return;
+        if (!silentRead && !NativeSaddlebags.Open) return;
         if (!NativeSaddlebags.Loaded && NativeSaddlebags.Premium && !premiumRequested)
         {
             previousSaddlebagTab = NativeSaddlebags.Tab; premiumRequested = true;
             NativeSaddlebags.Tab = 1; actionAfter = Environment.TickCount64 + 500; return;
         }
         if (!NativeSaddlebags.Loaded || NativeSaddlebags.Pending) return;
+        if (!silentRead) saddlebagReadSession.ConfirmLoaded();
         var bags = NativeRetainers.ReadBags(op.ItemId, op.HighQuality);
         var saddle = NativeSaddlebags.Read(op.ItemId, op.HighQuality);
         var now = Environment.TickCount64;

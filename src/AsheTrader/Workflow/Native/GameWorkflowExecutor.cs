@@ -207,9 +207,10 @@ public sealed partial class GameWorkflowExecutor
     {
         if (Volatile.Read(ref shutdown) != 0) return;
         RequireFramework();
-        if (!IsBusy || operation == null) return;
         try
         {
+            ObserveSaddlebagSession();
+            if (!IsBusy || operation == null) return;
             var now = Environment.TickCount64;
             if (now >= nextDiagnosticAt) CaptureDiagnosticSnapshot("periodic wait", false);
             var wasWatching = cutsceneWait.IsWaiting;
@@ -912,7 +913,7 @@ public sealed partial class GameWorkflowExecutor
         {
             Trace($"snapshot reason={NativeRetainers.DiagnosticText(reason)}; stage={stage}; stageElapsedMs={(operation == null ? 0 : now - stageStarted)}; operationElapsedMs={(operation == null ? 0 : now - operationStarted)}; loggedIn={Plugin.ClientState.IsLoggedIn}; currentCharacter={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; currentWorld={CurrentWorld}; homeWorld={HomeWorld}; playerReady={PlayerReady}; moved={moved}; movementIssued={movementIssued}; ownsAR={ownsRelog}; suppressesAR={restoreArSuppression}; ownsLS={ownsLifestream}; ownsNav={ownsNavigation}");
             if (stage == Stage.Saddlebags)
-                Trace($"saddlebags unlocked={NativeSaddlebags.Unlocked}; open={NativeSaddlebags.Open}; loaded={NativeSaddlebags.Loaded}; premium={NativeSaddlebags.Premium}; pending={NativeSaddlebags.Pending}; target={operation?.Quantity}; conservedTotal={operation?.CargoExpectedTotal}; observed={saddlebagObservation?.Quantity}; waitingMove={saddlebagConfirmation != null}");
+                Trace($"saddlebags unlocked={NativeSaddlebags.Unlocked}; open={NativeSaddlebags.Open}; loaded={NativeSaddlebags.Loaded}; silentReadReady={saddlebagReadSession.CanReadSilently}; premium={NativeSaddlebags.Premium}; pending={NativeSaddlebags.Pending}; target={operation?.Quantity}; conservedTotal={operation?.CargoExpectedTotal}; observed={saddlebagObservation?.Quantity}; waitingMove={saddlebagConfirmation != null}");
             var expected = operation != null && retainerIndex >= 0 && retainerIndex < roster.Count ? CurrentRetainer : null;
             uint? menuRow = stage is Stage.QuitRetainer or Stage.WaitListAgain ? 2383U
                 : stage is Stage.WaitRetainer or Stage.OpenInventory or Stage.WaitInventory ? 2378U : null;
