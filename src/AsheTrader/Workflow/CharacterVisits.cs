@@ -44,7 +44,7 @@ public sealed partial class WorkflowService
             if (pending.Command.Operation.Kind != VisitOperationKind(lane.Stage)
                 || pending.InventoryItemIndex != VisitCommandItem(visit, lane))
                 throw new InvalidDataException("The saved operation does not match its character visit lane.");
-            if (!ResolvePreparationStorage(pending)) continue;
+            if (!ResolvePreparationCargo(pending) || !ResolvePreparationStorage(pending)) continue;
             var response = pending.Response!;
             if (!response.Success && !response.AutoReconciled)
                 throw new InvalidOperationException($"{Character(characterId).Character.Name}: {response.Error}");
@@ -325,7 +325,9 @@ public sealed partial class WorkflowService
                 && result.BagCapacity < result.StackSize && result.SaddlebagCapacity > 0
                 && !lane.AttemptedPacking.Contains(line.ItemIndex)
                 && ArrangeCargo(lane, state, characterId, result, true, result.BagQuantity, CargoPurpose.Pickup)) return;
-            if (packed > 0 && result.BagCapacity > 0 && (line.LegIndex > 0 || (ulong)result.BagQuantity + packed >= line.MaximumQuantity || lane.ExhaustedPickups.Contains(line.ItemIndex))
+            // Drain the carried load before refilling it. Topping up after every
+            // five-slot trade adds another saddlebag cycle to every batch.
+            if (packed > 0 && result.BagQuantity == 0 && result.BagCapacity > 0 && (line.LegIndex > 0 || (ulong)result.BagQuantity + packed >= line.MaximumQuantity || lane.ExhaustedPickups.Contains(line.ItemIndex))
                 && !lane.AttemptedPacking.Contains(line.ItemIndex)
                 && ArrangeCargo(lane, state, characterId, result, false, packed, CargoPurpose.Sending)) return;
         }
@@ -517,13 +519,14 @@ public sealed partial class WorkflowService
         visit.Recovering = true;
         foreach (var pending in run.Pending)
         {
+            pending.CargoRecoveryAttempts = 0;
             RememberAppliedStorageQuantity(pending);
             if (pending.Response is { Success: true } or { AutoReconciled: true } or { NeverStarted: true }
                 || StorageReconciliation.IsReviewed(pending.Response)) continue;
             if (StorageReconciliation.IsStorage(pending.Command)) pending.StorageRecoveryRequested = true;
             pending.Response = null;
         }
-        preparationRecoveryDeadline = Environment.TickCount64 + 30_000;
+        preparationRecoveryDeadline = Environment.TickCount64 + PreparationRecoveryTimeoutMs;
         resendAt = 0;
         run.Paused = false;
         run.Status = "Recovering both characters' original visit operations before preparing any more items…";
@@ -534,7 +537,7 @@ public sealed partial class WorkflowService
     {
         foreach (var pending in Run!.Pending.ToArray())
         {
-            if (pending.Response == null || !ResolvePreparationStorage(pending)) continue;
+            if (pending.Response == null || !ResolvePreparationCargo(pending) || !ResolvePreparationStorage(pending)) continue;
             if (StorageReconciliation.IsStorage(pending.Command) && !pending.Response!.NeverStarted && pending.Response.Observation == null)
                 throw new InvalidOperationException("An interrupted item pickup or deposit has no matching inventory observation. Keep the original character logged in and resume tallying.");
             if (pending.Command.Operation.Kind == GameOperationKind.ArrangeSaddlebags && !pending.Response!.NeverStarted)
@@ -549,7 +552,7 @@ public sealed partial class WorkflowService
         if (Run.Pending.Count != 0)
         {
             if (Environment.TickCount64 >= preparationRecoveryDeadline)
-                throw new TimeoutException("Waiting for both PCs' previous item movements to settle. Keep their original characters logged in, then resume.");
+                throw new TimeoutException("A PC did not return its saved visit outcome within twenty-one minutes. Check the paired PC and its diagnostics; the saved operation has not been replaced.");
             return;
         }
         Run.Visit = null;

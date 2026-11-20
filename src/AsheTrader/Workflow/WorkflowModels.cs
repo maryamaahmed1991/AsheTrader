@@ -92,6 +92,7 @@ public sealed class PendingCommand
     public bool InventoryAdjustmentApplied { get; set; }
     public uint? AppliedStorageQuantity { get; set; }
     public bool StorageRecoveryRequested { get; set; }
+    public int CargoRecoveryAttempts { get; set; }
     // Null means the active item; a value identifies a completed item whose received stock is being stored.
     public int? InventoryItemIndex { get; set; }
     public Guid PeerId { get; set; }

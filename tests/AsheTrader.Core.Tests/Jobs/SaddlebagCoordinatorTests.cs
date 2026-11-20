@@ -7,6 +7,120 @@ namespace AsheTrader.Core.Tests.Jobs;
 
 public sealed class SaddlebagCoordinatorTests
 {
+    [Theory]
+    [InlineData(31_000)]
+    [InlineData(120_000)]
+    public void ResumingLongCargoLoadWaitsForOriginalCommandWithoutManualResume(int elapsed)
+    {
+        var source = Character(1, PeerA, 297); var target = Character(2, PeerB, bags: 10);
+        var service = new WorkflowService(PeerA, PeerB, source, target)
+        { DeferGameCommand = c => c.Operation.Kind == GameOperationKind.ArrangeSaddlebags };
+        service.StartJob(Job([1], 2, 297));
+        service.RunUntil(_ => service.DeferredGameCommands.Count > 0);
+        var original = Assert.Single(service.DeferredGameCommands);
+        service.PauseForTest(); service.SimulateCoordinatorRestart(); service.Resume();
+        service.ElapsePreparationRecoveryForTest(elapsed);
+        for (var i = 0; i < 10; i++) service.Tick();
+        Assert.False(service.Run!.Paused, service.LastError);
+        Assert.Contains(service.Run.Pending, p => p.Command.Id == original.Id);
+        Assert.Empty(service.Trades);
+        service.DeferGameCommand = null;
+        service.ReleaseDeferredGameCommand(original.Id);
+        Complete(service);
+        Assert.Equal(297U, target.Bags); Assert.Equal(0U, source.Saddle);
+    }
+
+    [Fact]
+    public void InterruptedCargoAutomaticallyReconcilesSameAbsoluteGoalExactlyOnce()
+    {
+        var source = Character(1, PeerA, 297); var target = Character(2, PeerB, bags: 10);
+        var service = new WorkflowService(PeerA, PeerB, source, target);
+        Guid? interrupted = null;
+        var calls = 0;
+        service.TransformResult = (command, result) =>
+        {
+            if (command.Operation.Kind == GameOperationKind.ArrangeSaddlebags && interrupted == null)
+            { interrupted = command.Id; result.Success = false; result.MovementUncertain = true; result.Error = "Delayed movement acknowledgement"; }
+            if (command.Id == interrupted) calls++;
+            return result;
+        };
+        service.StartJob(Job([1], 2, 297)); Complete(service);
+        Assert.Equal(2, calls);
+        Assert.Equal(297U, target.Bags); Assert.Equal(0U, source.Saddle);
+        Assert.Contains(service.Diagnostics, d => d.Contains("Automatically reconciling saddlebag cargo"));
+    }
+
+    [Fact]
+    public void RepeatedUnreconciledCargoStopsAfterBoundedAutomaticAttempts()
+    {
+        var service = new WorkflowService(PeerA, PeerB, Character(1, PeerA, 297), Character(2, PeerB, bags: 10));
+        var attempts = 0;
+        service.TransformResult = (command, result) =>
+        {
+            if (command.Operation.Kind == GameOperationKind.ArrangeSaddlebags)
+            { attempts++; result.Success = false; result.MovementUncertain = true; result.Error = "Unresolved inventory evidence"; }
+            return result;
+        };
+        service.StartJob(Job([1], 2, 297)); service.RunToTerminal();
+        Assert.True(service.Run!.Paused);
+        Assert.Equal(3, attempts);
+        Assert.Contains("two automatic attempts", service.LastError);
+        Assert.Empty(service.Trades);
+    }
+
+    [Fact]
+    public void UserPauseDoesNotTriggerAutomaticCargoRecovery()
+    {
+        var service = new WorkflowService(PeerA, PeerB, Character(1, PeerA, 297), Character(2, PeerB, bags: 10));
+        service.TransformResult = (command, result) =>
+        {
+            if (command.Operation.Kind == GameOperationKind.ArrangeSaddlebags)
+            { result.Success = false; result.MovementUncertain = true; }
+            return result;
+        };
+        service.StartJob(Job([1], 2, 297));
+        service.RunUntil(r => r.Pending.Any(p => p.Command.Operation.Kind == GameOperationKind.ArrangeSaddlebags));
+        service.PauseForTest();
+        for (var i = 0; i < 10; i++) service.Tick();
+        Assert.True(service.Run!.Paused);
+        Assert.All(service.Run.Pending, p => Assert.Equal(0, p.CargoRecoveryAttempts));
+        Assert.DoesNotContain(service.Diagnostics, d => d.Contains("Automatically reconciling saddlebag cargo"));
+    }
+
+    [Fact]
+    public void PermanentlyMissingCargoOutcomeStillStopsWithOriginalIntentPreserved()
+    {
+        var service = new WorkflowService(PeerA, PeerB, Character(1, PeerA, 297), Character(2, PeerB, bags: 10))
+        { DeferGameCommand = c => c.Operation.Kind == GameOperationKind.ArrangeSaddlebags };
+        service.StartJob(Job([1], 2, 297));
+        service.RunUntil(_ => service.DeferredGameCommands.Count > 0);
+        var original = Assert.Single(service.DeferredGameCommands);
+        service.PauseForTest(); service.SimulateCoordinatorRestart(); service.Resume();
+        service.ElapsePreparationRecoveryForTest(22 * 60_000);
+        service.Tick();
+        Assert.True(service.Run!.Paused);
+        Assert.Contains("twenty-one minutes", service.LastError);
+        Assert.Equal(original.Id, Assert.Single(service.Run.Pending).Command.Id);
+        Assert.Empty(service.Trades);
+    }
+
+    [Fact]
+    public void ConsecutiveBatchesKeepPreparedPairAndDrainBagsBeforeSaddleRefill()
+    {
+        var source = Character(1, PeerA, 1980, bags: 10, saddles: 10);
+        var target = Character(2, PeerB, bags: 50);
+        var service = new WorkflowService(PeerA, PeerB, source, target);
+        service.StartJob(Job([1], 2, 1980)); Complete(service);
+        Assert.Equal(1980U, target.Bags);
+        var sends = service.Trace.Select((c, i) => (c, i)).Where(x => x.c.Kind == WorkerCommandKind.SendBatch).ToArray();
+        Assert.Equal(4, sends.Length);
+        var between = service.Trace.Skip(sends[0].i + 1).Take(sends[1].i - sends[0].i - 1).ToArray();
+        Assert.DoesNotContain(between, c => c.Kind == WorkerCommandKind.Game && c.Operation is
+            GameOperationKind.ArrangeSaddlebags or GameOperationKind.Login or GameOperationKind.TravelMeeting or GameOperationKind.Withdraw);
+        Assert.Contains(between, c => c.Kind == WorkerCommandKind.Game && c.Operation == GameOperationKind.Inspect);
+        Assert.Contains(service.Diagnostics, d => d.Contains("Continuing ready trade pair"));
+    }
+
     private static SimulatedCharacter Character(ulong id, Guid peer, uint stock = 0, uint bags = 1, uint saddles = 2) => new()
     {
         Id = id, PeerId = peer, BagLimit = uint.MaxValue, BagSlotLimit = bags, SaddleSlotLimit = saddles,

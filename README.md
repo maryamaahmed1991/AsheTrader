@@ -27,6 +27,12 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.6.4.5
+
+Recovery no longer interrupts a healthy cargo load after thirty seconds: it waits within the native operation budget, and verified saddlebag progress resets the inactivity timer. Interrupted cargo automatically reconciles against its original saved absolute target, with two bounded attempts before unresolved evidence requires attention. Explicit user pauses remain paused. Each verified slot movement proceeds without an additional stabilization sleep.
+
+Consecutive trades keep the same prepared character pair when the planned route, carried items and conservative receiving headroom permit it. One fresh inventory pass still checks both sides before the next offer; login/travel preparation is skipped for that pair. Senders drain carried items before refilling from saddlebag cargo, instead of topping up after every five-slot batch. Full inventories, exhausted carried stock and changed routes use the normal preparation/deposit flow.
+
 ## Version 0.6.4.4
 
 Silent inspections of already-loaded saddlebags no longer add a 300 ms settling delay for every item. They read current native slots after checking for pending operations, as ordinary bag inspections do. Initial window loading and actual cargo movement retain their stabilization and confirmation checks. This reduces inspection overhead between trade batches; partner login, travel, and trade readiness still take their normal time.

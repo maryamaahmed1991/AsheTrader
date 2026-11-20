@@ -67,6 +67,11 @@ public sealed partial class GameWorkflowExecutor
         {
             if (!saddlebagConfirmation.Observe(now, bags.AllItems, saddle.AllItems)) return;
             saddlebagConfirmation = null;
+            // Verified progress resets the inactivity deadline. Large premium-bag
+            // loads must not time out just because many stacks need moving.
+            stageStarted = now;
+            saddlebagStableCounts = (bags.Quantity, saddle.Quantity);
+            saddlebagStableSince = now - 300;
             Trace($"saddlebag movement verified; bags={bags.Quantity}; saddlebag={saddle.Quantity}");
         }
         var counts = (bags.Quantity, saddle.Quantity);

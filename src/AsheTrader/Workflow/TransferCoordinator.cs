@@ -521,11 +521,11 @@ public sealed partial class WorkflowService
         }
         if (run.Pending.Count > 0 && Environment.TickCount64 >= resendAt)
         {
-            resendAt = Environment.TickCount64 + (run.Pending.Any(pending => pending.StorageRecoveryRequested) ? 500 : 5000);
+            resendAt = Environment.TickCount64 + (run.Pending.Any(pending => pending.StorageRecoveryRequested || pending.CargoRecoveryAttempts > 0) ? 500 : 5000);
             foreach (var pending in run.Pending.Where(x => x.Response == null).ToArray())
             {
                 // A trade is queried after interruption; ordinary commands are idempotent by command ID.
-                if (run.Step == CoordinatorStep.AwaitTrade || run.Preparation is { Recovering: true } || run.Visit is { Recovering: true }) Query(pending);
+                if (pending.CargoRecoveryAttempts > 0 || run.Step == CoordinatorStep.AwaitTrade || run.Preparation is { Recovering: true } || run.Visit is { Recovering: true }) Query(pending);
                 else Dispatch(pending.PeerId, pending.Command);
             }
         }

@@ -202,7 +202,33 @@ public sealed partial class WorkflowService
         RefreshVisitResults(); FocusVisitItem(batch.Lines[0].ItemIndex);
         run.Step = CoordinatorStep.SelectLeg;
         run.Status = unchanged ? "No items moved. Preparing this character visit again…" : $"Verified mixed trade: {batch.Lines.Count} item type(s). Continuing this visit…";
+        if (!unchanged) TryContinuePreparedVisit(visit, batch.Lines);
         SaveRun();
+    }
+
+    private void TryContinuePreparedVisit(PreparedVisit previous, List<VisitBatchLine> committed)
+    {
+        // A trade can occupy at most five new receiver slots. Below this conservative
+        // headroom use normal preparation so packing/deposit/relay routing can run.
+        if (previous.Lines.Any(line => line.ReceiverFreeBagSlots is null or < 10)) return;
+        var next = SelectCharacterVisit();
+        if (next == null || next.SenderId != previous.SenderId || next.ReceiverId != previous.ReceiverId
+            || next.SenderPeerId != previous.SenderPeerId || next.ReceiverPeerId != previous.ReceiverPeerId
+            || next.Meeting.WorldId != previous.Meeting.WorldId) return;
+        foreach (var line in next.Lines)
+        {
+            var before = previous.Lines.SingleOrDefault(old => old.ItemIndex == line.ItemIndex);
+            if (before == null) return;
+            var sent = committed.Where(batch => batch.ItemIndex == line.ItemIndex).Aggregate(0UL, (sum, batch) => sum + batch.Quantity);
+            if (before.SenderBagQuantity <= sent) return;
+        }
+        // Re-read current quantities and shared capacity once on both PCs. No cached
+        // stock is used to authorize an offer, and the trade runner rechecks the partner.
+        next.Sender.Stage = next.Receiver.Stage = VisitPreparationStage.FinalInspect;
+        Run!.Visit = next;
+        Run.MeetingPinned = true;
+        Run.Step = CoordinatorStep.PrepareParticipants;
+        RecordDiagnostic($"Continuing ready trade pair with one live inspection pass; sender={next.SenderId}; receiver={next.ReceiverId}; items={next.Lines.Count}");
     }
 
     private void ResumeVisitWorkflow()

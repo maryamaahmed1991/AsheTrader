@@ -164,6 +164,7 @@ public sealed partial class WorkflowService
 
     public void PauseForTest(string reason = "Test pause") => Pause(reason);
     public void PumpCompletionForTest() => UpdateCompletionHandoff(Environment.TickCount64 + 2000);
+    public void ElapsePreparationRecoveryForTest(int milliseconds) => preparationRecoveryDeadline -= milliseconds;
 
     public void FailTradeForTest(WorkerCommandKind kind, string failure)
     {
@@ -458,6 +459,12 @@ public sealed partial class WorkflowService
         if (durableResponses.TryGetValue(id, out var response))
         {
             var command = receivedCommands[id];
+            if (command.Kind == WorkerCommandKind.Game && command.Operation.Kind == GameOperationKind.ArrangeSaddlebags
+                && response is not ({ Success: true } or { AutoReconciled: true } or { OperatorReviewed: true } or { NeverStarted: true }))
+            {
+                ExecuteGame(command, owner);
+                return;
+            }
             if (command.TradeItems.Count != 0 && command.Kind is WorkerCommandKind.SendBatch or WorkerCommandKind.ReceiveBatch
                 && response is not ({ Success: true } or { OperatorReviewed: true } or { AutoReconciled: true } or { NeverStarted: true })
                 && tradeBeforeItems.TryGetValue(id, out var baselines) && loggedIn.GetValueOrDefault(owner) == command.Operation.CharacterId)

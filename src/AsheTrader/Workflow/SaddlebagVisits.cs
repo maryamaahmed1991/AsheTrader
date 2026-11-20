@@ -5,6 +5,25 @@ namespace AsheTrader.Workflow;
 
 public sealed partial class WorkflowService
 {
+    private bool ResolvePreparationCargo(PendingCommand pending)
+    {
+        if (pending.Command.Kind != WorkerCommandKind.Game
+            || pending.Command.Operation.Kind != GameOperationKind.ArrangeSaddlebags
+            || pending.Response is not { Success: false, Ambiguous: true, NeverStarted: false }) return true;
+        if (pending.CargoRecoveryAttempts >= 2)
+            throw new InvalidOperationException("Saddlebag cargo could not be reconciled after two automatic attempts. "
+                + pending.Response.Error);
+        // Query the original durable intent: the worker checks live bags + saddlebags
+        // against its conserved total before continuing toward the absolute target.
+        // Never issue a new relative move or credit unverified cargo.
+        pending.CargoRecoveryAttempts++;
+        pending.Response = null;
+        resendAt = 0;
+        RecordDiagnostic($"Automatically reconciling saddlebag cargo; command={pending.Command.Id}; attempt={pending.CargoRecoveryAttempts}/2");
+        SaveRun();
+        return false;
+    }
+
     private void ApplyRecoveredCargo(PendingCommand pending)
     {
         var op = pending.Command.Operation;

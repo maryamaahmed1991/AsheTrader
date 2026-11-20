@@ -6,6 +6,9 @@ namespace AsheTrader.Workflow;
 public sealed partial class WorkflowService
 {
     private long preparationRecoveryDeadline;
+    // Recovery can execute a saved absolute cargo goal, not just read a result.
+    // Allow the native executor's twenty-minute operation budget plus reply time.
+    private const int PreparationRecoveryTimeoutMs = 21 * 60_000;
 
     private void BeginPreparation()
     {
@@ -42,7 +45,7 @@ public sealed partial class WorkflowService
             if (StorageReconciliation.IsStorage(pending.Command)) pending.StorageRecoveryRequested = true;
             pending.Response = null;
         }
-        preparationRecoveryDeadline = Environment.TickCount64 + 30_000;
+        preparationRecoveryDeadline = Environment.TickCount64 + PreparationRecoveryTimeoutMs;
         resendAt = 0;
         run.Paused = false;
         run.Status = "Recovering both PCs' saved preparation and tallying any interrupted retainer movements…";
@@ -167,7 +170,7 @@ public sealed partial class WorkflowService
         if (run.Pending.Count != 0)
         {
             if (Environment.TickCount64 >= preparationRecoveryDeadline)
-                throw new TimeoutException("Still waiting for a PC to finish stopping or tally its retainer movement. Keep both PCs connected with the original characters, then resume.");
+                throw new TimeoutException("A PC did not return its saved preparation outcome within twenty-one minutes. Check the paired PC and its diagnostics; the saved operation has not been replaced.");
             return;
         }
         run.Preparation = null;
