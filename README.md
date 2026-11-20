@@ -27,6 +27,10 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.6.4.4
+
+Silent inspections of already-loaded saddlebags no longer add a 300 ms settling delay for every item. They read current native slots after checking for pending operations, as ordinary bag inspections do. Initial window loading and actual cargo movement retain their stabilization and confirmation checks. This reduces inspection overhead between trade batches; partner login, travel, and trade readiness still take their normal time.
+
 ## Version 0.6.4.3
 
 Saddlebag inspections now read live loaded containers silently after the first verified opening in a character/territory session. Multi-item trades no longer reopen the window for every item check. Logout, character or territory changes, premium-access changes, and unloaded containers require a fresh opening. Actual packing/unpacking still opens the window and verifies movement; inventory quantities are never cached by this optimization.

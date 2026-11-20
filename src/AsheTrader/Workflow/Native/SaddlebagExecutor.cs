@@ -52,6 +52,16 @@ public sealed partial class GameWorkflowExecutor
         if (!silentRead) saddlebagReadSession.ConfirmLoaded();
         var bags = NativeRetainers.ReadBags(op.ItemId, op.HighQuality);
         var saddle = NativeSaddlebags.Read(op.ItemId, op.HighQuality);
+        if (silentRead && !saddlebagRequested)
+        {
+            // Like ordinary bag inspection, read current loaded slots immediately.
+            // Pending native operations were checked above. This operation opened no
+            // window and moved no items, so there is no new load/move to stabilize.
+            saddlebagObservation = saddle;
+            Trace("saddlebag inspection read live loaded containers; no additional settling delay");
+            Finish(true);
+            return;
+        }
         var now = Environment.TickCount64;
         if (saddlebagConfirmation != null)
         {
