@@ -222,6 +222,7 @@ public sealed partial class GameWorkflowExecutor
                     // Preserve retry accounting, but require fresh stable readiness after the scene.
                     bellInteraction.Observe(now, playerReady: false, interactionBlocked: true, bellOccupied: false);
                     innArrival.Reset();
+                    saddlebagOpening.Interrupt();
                     statusBeforeCutscene = Status;
                     Status = "Waiting for the cutscene to finish naturally…";
                     Trace("cutscene wait begin; no gameplay actions or skip inputs will be sent");
@@ -913,7 +914,7 @@ public sealed partial class GameWorkflowExecutor
         {
             Trace($"snapshot reason={NativeRetainers.DiagnosticText(reason)}; stage={stage}; stageElapsedMs={(operation == null ? 0 : now - stageStarted)}; operationElapsedMs={(operation == null ? 0 : now - operationStarted)}; loggedIn={Plugin.ClientState.IsLoggedIn}; currentCharacter={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; currentWorld={CurrentWorld}; homeWorld={HomeWorld}; playerReady={PlayerReady}; moved={moved}; movementIssued={movementIssued}; ownsAR={ownsRelog}; suppressesAR={restoreArSuppression}; ownsLS={ownsLifestream}; ownsNav={ownsNavigation}");
             if (stage == Stage.Saddlebags)
-                Trace($"saddlebags unlocked={NativeSaddlebags.Unlocked}; open={NativeSaddlebags.Open}; loaded={NativeSaddlebags.Loaded}; silentReadReady={saddlebagReadSession.CanReadSilently}; premium={NativeSaddlebags.Premium}; pending={NativeSaddlebags.Pending}; target={operation?.Quantity}; conservedTotal={operation?.CargoExpectedTotal}; observed={saddlebagObservation?.Quantity}; waitingMove={saddlebagConfirmation != null}");
+                Trace($"saddlebags unlocked={NativeSaddlebags.Unlocked}; open={NativeSaddlebags.Open}; visible={NativeSaddlebags.Visible}; openAttempts={saddlebagOpening.Attempts}; interactionBlocked={NativeRetainers.BellInteractionBlocked}; loaded={NativeSaddlebags.Loaded}; silentReadReady={saddlebagReadSession.CanReadSilently}; premium={NativeSaddlebags.Premium}; pending={NativeSaddlebags.Pending}; target={operation?.Quantity}; conservedTotal={operation?.CargoExpectedTotal}; observed={saddlebagObservation?.Quantity}; waitingMove={saddlebagConfirmation != null}");
             var expected = operation != null && retainerIndex >= 0 && retainerIndex < roster.Count ? CurrentRetainer : null;
             uint? menuRow = stage is Stage.QuitRetainer or Stage.WaitListAgain ? 2383U
                 : stage is Stage.WaitRetainer or Stage.OpenInventory or Stage.WaitInventory ? 2378U : null;

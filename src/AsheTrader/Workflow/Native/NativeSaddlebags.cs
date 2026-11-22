@@ -11,6 +11,14 @@ internal static unsafe class NativeSaddlebags
     public static bool Unlocked => UIModule.Instance() != null && UIModule.Instance()->IsMainCommandUnlocked(MainCommand);
     public static bool Premium => PlayerState.Instance() != null && PlayerState.Instance()->HasPremiumSaddlebag;
     public static bool Open => NativeRetainers.Ready("InventoryBuddy") != null;
+    public static bool Visible
+    {
+        get
+        {
+            var addon = (FFXIVClientStructs.FFXIV.Component.GUI.AtkUnitBase*)Plugin.GameGui.GetAddonByName("InventoryBuddy").Address;
+            return addon != null && addon->IsVisible;
+        }
+    }
     public static void Show() => UIModule.Instance()->ExecuteMainCommand(MainCommand);
     public static void Close() { var addon = NativeRetainers.Ready("InventoryBuddy"); if (addon != null) addon->Close(true); }
     public static byte? Tab

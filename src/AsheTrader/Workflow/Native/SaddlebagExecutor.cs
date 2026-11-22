@@ -3,6 +3,7 @@ namespace AsheTrader.Workflow.Native;
 public sealed partial class GameWorkflowExecutor
 {
     private readonly SaddlebagReadSession saddlebagReadSession = new();
+    private readonly SaddlebagOpeningGate saddlebagOpening = new();
     private bool ownsSaddlebagWindow;
     private bool saddlebagRequested;
     private ItemInventory? saddlebagObservation;
@@ -22,27 +23,42 @@ public sealed partial class GameWorkflowExecutor
         saddlebagObservation = null; saddlebagConfirmation = null;
         saddlebagStableCounts = null; saddlebagStableSince = 0;
         previousSaddlebagTab = null; premiumRequested = false;
+        saddlebagOpening.Reset();
     }
 
     private void UpdateSaddlebags()
     {
         var op = operation!;
-        if (!PlayerReady || NativeRetainers.HasActiveCutscene) return;
+        if (!PlayerReady || NativeRetainers.HasActiveCutscene) { saddlebagOpening.Interrupt(); return; }
         if (!NativeSaddlebags.Unlocked)
         {
             if (op.Kind == GameOperationKind.ArrangeSaddlebags) throw new InvalidOperationException("This character's saddlebags are unavailable; saved cargo was retained.");
             Finish(true); return;
         }
         var silentRead = op.Kind == GameOperationKind.Inspect && saddlebagReadSession.CanReadSilently;
-        if (!silentRead && !saddlebagRequested)
+        if (!silentRead)
         {
+            var decision = saddlebagOpening.Observe(Environment.TickCount64,
+                Plugin.ObjectTable.LocalPlayer?.IsTargetable == true
+                    && !NativeRetainers.BellInteractionBlocked && !NativeSaddlebags.Pending,
+                NativeSaddlebags.Visible, NativeSaddlebags.Open);
+            if (decision == SaddlebagOpeningDecision.Exhausted)
+                throw new InvalidOperationException("The saddlebag window did not open after five automatic attempts. Check whether this character can open saddlebags here; no item movement was repeated by these attempts.");
+            if (decision == SaddlebagOpeningDecision.Wait) return;
+            if (decision == SaddlebagOpeningDecision.Open)
+            {
+                saddlebagRequested = ownsSaddlebagWindow = true;
+                saddlebagOpening.RecordAttempt(Environment.TickCount64);
+                saddlebagStableCounts = null;
+                premiumRequested = false;
+                Trace($"saddlebag window open requested; attempt={saddlebagOpening.Attempts}/{SaddlebagOpeningGate.MaximumAttempts}; awaiting visible ready addon");
+                NativeSaddlebags.Show();
+                actionAfter = Environment.TickCount64 + 300;
+                return;
+            }
+            if (!saddlebagRequested) Trace("saddlebag window already open; using existing window");
             saddlebagRequested = true;
-            ownsSaddlebagWindow = !NativeSaddlebags.Open;
-            if (ownsSaddlebagWindow) NativeSaddlebags.Show();
-            actionAfter = Environment.TickCount64 + 300;
-            return;
         }
-        if (!silentRead && !NativeSaddlebags.Open) return;
         if (!NativeSaddlebags.Loaded && NativeSaddlebags.Premium && !premiumRequested)
         {
             previousSaddlebagTab = NativeSaddlebags.Tab; premiumRequested = true;

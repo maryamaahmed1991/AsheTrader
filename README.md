@@ -27,6 +27,10 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.6.4.6
+
+Saddlebag opening now waits for stable interaction readiness after login and retries an unacknowledged open request automatically. This fixes an inn-login race where a request just before the cutscene was lost and the character stood still for ninety seconds. Cutscenes still play naturally. A visible window is never toggled closed by a retry, silent inventory checks remain immediate, and retries only open the window: cargo movements retain their existing verification. Diagnostics include the opening attempts; five unsuccessful attempts report a persistent access problem.
+
 ## Version 0.6.4.5
 
 Recovery no longer interrupts a healthy cargo load after thirty seconds: it waits within the native operation budget, and verified saddlebag progress resets the inactivity timer. Interrupted cargo automatically reconciles against its original saved absolute target, with two bounded attempts before unresolved evidence requires attention. Explicit user pauses remain paused. Each verified slot movement proceeds without an additional stabilization sleep.
