@@ -136,6 +136,7 @@ public sealed class CoordinatorRun
     public DateTimeOffset? StartedAt { get; set; }
     public DateTimeOffset? EndedAt { get; set; }
     public Guid? ScheduleOccurrenceId { get; set; }
+    public Guid? FriendRequestId { get; set; }
     public string ScheduleName { get; set; } = "";
     public Dictionary<ulong, string> CharacterLabels { get; set; } = [];
     public List<TradeHistoryNote> HistoryNotes { get; set; } = [];

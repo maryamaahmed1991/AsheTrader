@@ -19,3 +19,6 @@ store-credentials.json
 trusted-device-credentials.json
 trusted-pc-inventory.json
 waiting-transfer.json
+friend-transfers.json
+past-trades.json
+transfer-schedules.json

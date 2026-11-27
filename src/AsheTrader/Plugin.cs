@@ -43,6 +43,7 @@ public sealed class Plugin : IDalamudPlugin
     public WorkflowService Workflow { get; }
     public Utilities.UtilityService Utilities { get; }
     internal Store.StoreService Store { get; }
+    internal Store.FriendTransferService Friends { get; }
     public string SettingsError { get; private set; } = string.Empty;
     public Queue<string> Activity { get; } = new();
     private readonly WindowSystem windows = new("AsheTrader");
@@ -70,6 +71,7 @@ public sealed class Plugin : IDalamudPlugin
         Utilities = new Utilities.UtilityService(this);
         CompletionHandoff = new(this);
         Store = new Store.StoreService(this);
+        Friends = new Store.FriendTransferService(this);
         Trader.Diagnostic = Workflow.RecordTradeDiagnostic;
         Fuel.Diagnostic = message => Workflow.RecordDiagnostic("fuel purchase " + message);
         Save();
@@ -124,7 +126,7 @@ public sealed class Plugin : IDalamudPlugin
         Config = LoadSettings();
     }
 
-    public void StopAll() { CompletionHandoff.Cancel(); Utilities.Pause(); FuelQueue.Pause(); Trader.Stop(); Fuel.Stop(); Workflow.Pause("Paused by user."); }
+    public void StopAll() { CompletionHandoff.Cancel(); Utilities.Pause(); FuelQueue.Pause(); Trader.Stop(); Fuel.Stop(); Workflow.Pause("Paused by user."); Friends.Pause(); }
     public void Open() => mainWindow.IsOpen = true;
     public void Record(string message)
     {
@@ -176,6 +178,7 @@ public sealed class Plugin : IDalamudPlugin
             Utilities.Update();
             Workflow.Update();
             CompletionHandoff.Update();
+            Friends.Update();
         }
         catch (Exception ex) { StopAll(); Record($"Operation stopped: {ex.Message}"); Log.Error(ex, "Runner update failed"); }
         // Catalogue failures never interrupt gameplay automation, and credentials never enter diagnostics.
@@ -214,6 +217,7 @@ public sealed class Plugin : IDalamudPlugin
         Utilities.Shutdown();
         Workflow.Dispose();
         Store.Dispose();
+        Friends.Dispose();
         Fuel.Stop();
         windows.RemoveAllWindows();
     }

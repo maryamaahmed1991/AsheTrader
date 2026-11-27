@@ -12,7 +12,7 @@ namespace AsheTrader.Workflow;
 public sealed partial class WorkflowService : IDisposable
 {
     private readonly Plugin plugin;
-    private readonly LanPeer peer = new();
+    private readonly WorkflowPeer peer = new();
     private readonly GameWorkflowExecutor executor = new();
     private readonly SettingsFileStore workerFile;
     private readonly SettingsFileStore runFile;
@@ -44,7 +44,7 @@ public sealed partial class WorkflowService : IDisposable
     public bool RunningJob => Run is { Paused: false, Step: not CoordinatorStep.Finished };
     public bool ExpectsLogout => activeWorker?.Command.Kind == WorkerCommandKind.PauseAutoRetainer || activeWorker?.Command.Kind == WorkerCommandKind.Game
         && activeWorker.Command.Operation.Kind is not (GameOperationKind.Inspect or GameOperationKind.ReadCachedInventory);
-    public string ConnectionStatus => Connected ? peer.Status : HasTrustedPeer && Settings.AutoConnect && !autoConnectionSuppressed
+    public string ConnectionStatus => Connected || friendOrder != null ? peer.Status : HasTrustedPeer && Settings.AutoConnect && !autoConnectionSuppressed
         ? "Reconnecting to your trusted PC… " + deviceStatus : peer.Status;
     public string Status => error.Length > 0 ? error
         : WaitingForPeer ? "Waiting for the trusted PC to be connected, idle and ready…"
@@ -55,7 +55,7 @@ public sealed partial class WorkflowService : IDisposable
     private bool HasAcceptedConnection => peer.SessionIdentity is { } session && session.ConnectionId == connectionId
         && session.RemotePeerId == acceptedPeerId
         && (!selectedCoordinatorId.HasValue || selectedCoordinatorId == session.RemotePeerId)
-        && (!Settings.ExpectedRemotePeerId.HasValue || Settings.ExpectedRemotePeerId == session.RemotePeerId);
+        && (friendOrder != null || !Settings.ExpectedRemotePeerId.HasValue || Settings.ExpectedRemotePeerId == session.RemotePeerId);
 
     public WorkflowService(Plugin plugin)
     {
@@ -214,13 +214,13 @@ public sealed partial class WorkflowService : IDisposable
 
     public PeerRoster LocalRoster() => new()
     {
-        ProtocolVersion = 5,
-        PeerId = Settings.PeerId, Name = Settings.PeerName, ControlEnabled = host || Settings.AllowRemoteControl,
-        Characters = plugin.Config.Characters.Select(x => new CharacterProfile
+        ProtocolVersion = 6,
+        PeerId = Settings.PeerId, Name = Settings.PeerName, ControlEnabled = host || RemoteControlAllowed,
+        Characters = plugin.Config.Characters.Where(x => FriendCharacterAllowed(x.ContentId)).Select(x => new CharacterProfile
         {
-            ContentId = x.ContentId, Name = x.Name, World = x.World, AccountLabel = x.AccountLabel, ServiceAccount = x.ServiceAccount,
+            ContentId = x.ContentId, Name = x.Name, World = x.World, AccountLabel = friendOrder==null?x.AccountLabel:"", ServiceAccount = friendOrder==null?x.ServiceAccount:0,
             InventoryFreeSlots = x.InventoryFreeSlots, InventorySlotsRetrievedAt = x.InventorySlotsRetrievedAt,
-            UseSaddlebags = x.UseSaddlebags, SaddlebagFreeSlots = x.UseSaddlebags ? x.SaddlebagFreeSlots : null,
+            UseSaddlebags = friendOrder == null && x.UseSaddlebags, SaddlebagFreeSlots = friendOrder == null && x.UseSaddlebags ? x.SaddlebagFreeSlots : null,
         }).ToList()
     };
 
@@ -234,24 +234,24 @@ public sealed partial class WorkflowService : IDisposable
         try
         {
             var now = Environment.TickCount64;
-            UpdateTrustedPairing(now);
+            if (friendOrder == null) UpdateTrustedPairing(now);
             if (peer.SessionIdentity is { } session && connectionId != session.ConnectionId)
             {
                 if (wasConnected || Busy) PauseForReconnect("Connection changed; waiting to reconcile with the trusted PC.");
                 RemoteRoster = null;
                 if (selectedCoordinatorId.HasValue && selectedCoordinatorId != session.RemotePeerId)
                 { peer.Stop(); advertiser.Stop(); throw new InvalidOperationException("The authenticated PC does not match the selected nearby coordinator. Search again and verify the pairing key."); }
-                if (Settings.ExpectedRemotePeerId.HasValue && Settings.ExpectedRemotePeerId != session.RemotePeerId)
+                if (friendOrder == null && Settings.ExpectedRemotePeerId.HasValue && Settings.ExpectedRemotePeerId != session.RemotePeerId)
                 { peer.Stop(); advertiser.Stop(); throw new InvalidOperationException("A different peer connected. Forget the previous pairing before pairing another PC."); }
-                Settings.ExpectedRemotePeerId ??= session.RemotePeerId;
-                Settings.RememberedHost = host;
+                if (friendOrder == null) Settings.ExpectedRemotePeerId ??= session.RemotePeerId;
+                if (friendOrder == null) Settings.RememberedHost = host;
                 plugin.Save();
                 connectionId = session.ConnectionId;
                 acceptedPeerId = session.RemotePeerId;
                 peerSeenAt = now;
                 RefreshRosters();
             }
-            if (activeWorker != null && activeReplyPeer != Settings.PeerId && !Settings.AllowRemoteControl)
+            if (activeWorker != null && activeReplyPeer != Settings.PeerId && !RemoteControlAllowed)
                 Pause("Remote workflow control was disabled on this PC.");
             if (!Connected && wasConnected && (Busy || activeWorker != null)) PauseForReconnect("Trusted PC disconnected; waiting to reconnect and reconcile pending work.");
             wasConnected = Connected;
@@ -261,16 +261,20 @@ public sealed partial class WorkflowService : IDisposable
                 Send("heartbeat", new { });
                 if (RemoteRoster?.ProtocolVersion >= 2) Send("device-ready", new DeviceReadiness(LocalReadyForJob, Run is { Step: not CoordinatorStep.Finished }));
             }
-            SyncItemSearchConnection();
-            UpdateInventorySync(now);
+            if (friendOrder == null) SyncItemSearchConnection();
+            if (friendOrder == null) UpdateInventorySync(now);
             for (var i = 0; i < 64 && connectionId.HasValue && peer.TryReceive(out var message, connectionId); i++)
             {
                 peerSeenAt = now;
                 Receive(message);
             }
-            if (Connected && now - peerSeenAt > 15_000 && Busy) Pause("Peer heartbeat timed out.");
+            if (Connected && now - peerSeenAt > 15_000 && Busy)
+            {
+                if (friendOrder != null) PauseForReconnect("Friend delivery heartbeat timed out; waiting to reconcile after reconnection.");
+                else Pause("Peer heartbeat timed out.");
+            }
             UpdateItemSearch();
-            UpdateWaitingJob();
+            if (friendOrder == null || trustedRun.Armed) UpdateWaitingJob();
             UpdateScheduledArPause(now);
             executor.Update();
             while (executor.TryTakeResult(out var result))
@@ -284,7 +288,7 @@ public sealed partial class WorkflowService : IDisposable
             if (RunningJob) AdvanceCoordinator();
             if (wasRunning && Run is { Step: CoordinatorStep.Finished, CompletedNormally: true }) BeginCompletionHandoff();
             UpdateCompletionHandoff(now);
-            UpdateSchedules();
+            if (friendOrder == null) UpdateSchedules();
         }
         catch (Exception ex)
         {
@@ -295,12 +299,15 @@ public sealed partial class WorkflowService : IDisposable
 
     private void Send<T>(string kind, T payload, Guid? correlation = null)
     {
+        if (friendOrder != null && (kind.StartsWith("item-search",StringComparison.Ordinal) || kind.StartsWith("inventory-",StringComparison.Ordinal) || kind.StartsWith("cache-",StringComparison.Ordinal)))
+            throw new InvalidOperationException("Private inventory sharing is unavailable during a friend delivery.");
         if (!HasAcceptedConnection) throw new InvalidOperationException("The connected PC's identity has not yet been accepted.");
         peer.Send(new PeerMessage(kind, Guid.NewGuid(), correlation, JsonConvert.SerializeObject(payload)), connectionId);
     }
 
     private void Receive(PeerMessage message)
     {
+        ValidateFriendMessage(message);
         if (ReceiveTrustedDevice(message)) return;
         if (ReceiveItemSearch(message)) return;
         switch (message.Kind)
@@ -315,8 +322,12 @@ public sealed partial class WorkflowService : IDisposable
             case "roster":
                 var roster = Decode<PeerRoster>(message.Payload);
                 if (roster.PeerId != acceptedPeerId || roster.PeerId == Settings.PeerId) throw new InvalidDataException("Peer identity mismatch.");
+                if (friendOrder != null && (roster.ProtocolVersion < 6 || host && (roster.Characters.Count != 1
+                    || roster.Characters[0].ContentId.ToString(System.Globalization.CultureInfo.InvariantCulture) != friendOrder.Recipient.ContentId
+                    || roster.Characters[0].Name != friendOrder.Recipient.Name || roster.Characters[0].World != friendOrder.Recipient.World)))
+                    throw new InvalidDataException("Friend recipient identity changed. End this request and select the correct character.");
                 RemoteRoster = roster;
-                SaveRemoteRoster(roster);
+                if (friendOrder == null) SaveRemoteRoster(roster);
                 break;
             case "command":
                 if (host) throw new InvalidOperationException("A worker cannot issue commands to the coordinator.");
@@ -329,19 +340,19 @@ public sealed partial class WorkflowService : IDisposable
                 if (!host) HandleQuery(Decode<Guid>(message.Payload), acceptedPeerId!.Value);
                 break;
             case "trade-tally":
-                if (!host && Settings.AllowRemoteControl) HandleTradeTally(Decode<TradeTallyRequest>(message.Payload), acceptedPeerId!.Value);
+                if (!host && RemoteControlAllowed) HandleTradeTally(Decode<TradeTallyRequest>(message.Payload), acceptedPeerId!.Value);
                 break;
             case "trade-tally-result":
                 if (host) AcceptTradeTally(acceptedPeerId!.Value, Decode<TradeTallyReply>(message.Payload));
                 break;
             case "trade-settle":
-                if (!host && Settings.AllowRemoteControl) HandleAutomaticTradeResolution(Decode<AutomaticTradeResolution>(message.Payload), acceptedPeerId!.Value);
+                if (!host && RemoteControlAllowed) HandleAutomaticTradeResolution(Decode<AutomaticTradeResolution>(message.Payload), acceptedPeerId!.Value);
                 break;
             case "trade-settle-result":
                 if (host) AcceptAutomaticTradeResolution(acceptedPeerId!.Value, Decode<TradeResolutionReply>(message.Payload));
                 break;
             case "resolve":
-                if (!host && Settings.AllowRemoteControl) ResolveWorker(Decode<ManualResolution>(message.Payload), acceptedPeerId!.Value);
+                if (!host && RemoteControlAllowed) ResolveWorker(Decode<ManualResolution>(message.Payload), acceptedPeerId!.Value);
                 break;
             case "pause": Pause("Peer requested pause.", false); break;
             default: throw new InvalidDataException("Unsupported peer message.");
@@ -360,6 +371,8 @@ public sealed partial class WorkflowService : IDisposable
 
     private void HandleWorker(WorkerCommand command, Guid caller)
     {
+        if (friendOrder != null && caller != Settings.PeerId && !plugin.Friends.AcceptingCommands)
+        { Reply(caller,new(){CommandId=command.Id,Error="The recipient stopped this friend delivery. Reconnect the saved request on that PC before resuming."});return; }
         if (!Enum.IsDefined(command.Kind) || command.Id == Guid.Empty || command.JobId == Guid.Empty
             || command.Operation == null || command.Operation.Id != command.Id || !Enum.IsDefined(command.Operation.Kind)
             || command.Operation.CharacterId == 0
@@ -368,6 +381,7 @@ public sealed partial class WorkflowService : IDisposable
         if (command.Kind is WorkerCommandKind.Game or WorkerCommandKind.EnableAutoRetainer or WorkerCommandKind.PauseAutoRetainer && MultiItemTradeEvidence.IsVector(command))
             throw new InvalidDataException("Native storage/travel commands cannot contain a trade item batch.");
         if (command.Kind is not (WorkerCommandKind.Game or WorkerCommandKind.EnableAutoRetainer or WorkerCommandKind.PauseAutoRetainer)) _ = MultiItemTradeEvidence.Lines(command);
+        if (friendOrder != null && caller != Settings.PeerId) FriendTransferPolicy.ValidateRecipientCommand(friendOrder, command, workerRecords.Values);
         var fingerprint = JsonConvert.SerializeObject(command);
         if (workerRecords.TryGetValue(command.Id, out var previous))
         {
@@ -381,7 +395,7 @@ public sealed partial class WorkflowService : IDisposable
             && (x.Response == null || x.Response.Ambiguous))
             && !(command.Kind == WorkerCommandKind.Game && command.Operation.Kind is GameOperationKind.Login or GameOperationKind.Inspect or GameOperationKind.ReadCachedInventory))
         { Reply(caller, new() { CommandId = command.Id, Error = "This worker has an unresolved trade. Reconcile it before issuing more work." }); return; }
-        if (caller != Settings.PeerId && !Settings.AllowRemoteControl)
+        if (caller != Settings.PeerId && !RemoteControlAllowed)
         { Reply(caller, new() { CommandId = command.Id, Error = "Enable paired workflow control on this PC." }); return; }
         if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || (plugin.Fuel.Active || (plugin.FuelQueue.HasUnfinishedRun || plugin.Utilities.HasUnfinishedRun)))
         { Reply(caller, new() { CommandId = command.Id, Error = "This client is busy with another operation." }); return; }
@@ -507,6 +521,8 @@ public sealed partial class WorkflowService : IDisposable
 
     private void HandleQuery(Guid id, Guid caller)
     {
+        if (friendOrder != null && caller != Settings.PeerId && !plugin.Friends.AcceptingCommands)
+        { Reply(caller,new(){CommandId=id,Error="The friend delivery is stopped on this PC. Reconnect it before reconciling."});return; }
         if (!journalHealthy) throw new InvalidOperationException("The worker journal cannot be read; its outcomes cannot be inferred.");
         if (!workerRecords.TryGetValue(id, out var record))
         { Reply(caller, new() { CommandId = id, NeverStarted = true, Unchanged = true, Error = "This operation has no persisted intent on this worker and was never started." }); return; }
@@ -515,7 +531,7 @@ public sealed partial class WorkflowService : IDisposable
         if (record.Response is { Success: true } or { OperatorReviewed: true } or { AutoReconciled: true } or { NeverStarted: true }) { Reply(caller, record.Response); return; }
         if (record.Command.Kind == WorkerCommandKind.Game && record.Command.Operation.Kind == GameOperationKind.ArrangeSaddlebags)
         {
-            if (caller != Settings.PeerId && !Settings.AllowRemoteControl)
+            if (caller != Settings.PeerId && !RemoteControlAllowed)
             { Reply(caller, new() { CommandId = id, Error = "Enable paired control to reconcile saddlebag cargo." }); return; }
             // Retry the original absolute goal only after pending native movements settle.
             if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || plugin.Fuel.Active || (plugin.FuelQueue.HasUnfinishedRun || plugin.Utilities.HasUnfinishedRun)) return;
@@ -558,6 +574,7 @@ public sealed partial class WorkflowService : IDisposable
 
     public void Pause(string reason, bool notify = true)
     {
+        if (friendOrder != null && reason == "Paused by user.") plugin.Friends.Pause();
         try { SuspendSchedules(reason); }
         catch (Exception e) { Plugin.Log.Error(e, "Could not persist schedule suspension; gameplay will still stop"); }
         if (activeWorker?.Command.Kind == WorkerCommandKind.PauseAutoRetainer)

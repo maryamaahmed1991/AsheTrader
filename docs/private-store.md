@@ -1,6 +1,6 @@
 # Private stores
 
-The Stores tab publishes selected stock to a separately hosted, authenticated catalogue. Friends can browse the last published stock while the owner is offline. This feature does not require LAN pairing and cannot trigger trades or control a game client.
+The Stores tab publishes selected stock to a separately hosted, authenticated catalogue. Friends can browse the last published stock while the owner is offline. Ordinary reader invitations remain read-only. Separately granted [friend deliveries](friend-deliveries.md) can reserve explicitly offered stock and trigger a bounded delivery while both games are running.
 
 ## Owner setup
 

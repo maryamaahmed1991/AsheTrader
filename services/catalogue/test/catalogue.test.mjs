@@ -12,6 +12,7 @@ function d1(db) {
 async function fixture(){
   const db=new DatabaseSync(':memory:');db.exec(readFileSync(new URL('../migrations/0001_catalogue.sql',import.meta.url),'utf8'));
   db.exec(readFileSync(new URL('../migrations/0002_devices.sql',import.meta.url),'utf8'));
+  db.exec(readFileSync(new URL('../migrations/0003_friend_orders.sql',import.meta.url),'utf8'));
   const owner=token();db.prepare('INSERT INTO store VALUES(1,?,?)').run("Ashe's store",token());
   db.prepare('INSERT INTO credentials VALUES(?,?,?,?,?,?)').run('owner',await digest(owner),'owner','Owner',null,new Date().toISOString());
   const env={DB:d1(db)};
@@ -126,4 +127,111 @@ test('concurrent invite claims yield exactly one trusted worker',async()=>{
  const results=await Promise.all([1,2].map(i=>f.call('/v1/device-links/redeem',created.invite,'POST',{peerId:crypto.randomUUID(),name:`Guest ${i}`})));
  assert.equal(results.filter(x=>x.status===201).length,1);
  assert.equal(f.db.prepare('SELECT count(*) AS n FROM device_links WHERE guest_peer IS NOT NULL').get().n,1);
+});
+
+async function transferFixture(){
+ const f=await fixture(),p=await f.key('publisher'),r=await f.key(),host=crypto.randomUUID(),guest=crypto.randomUUID();
+ const items=[{itemId:10155,highQuality:false,name:'Ceruleum Tank',quantity:100}];
+ const offer={revision:0,enabled:true,peerId:host,label:'Fuel stock',items};
+ assert.equal((await f.call('/v1/transfers/offer',p.token,'PUT',offer)).status,200);
+ const grant={readerId:r.id,sourceId:p.id};assert.equal((await f.call('/v1/transfers/grants',f.owner,'PUT',grant)).status,200);
+ const request={id:crypto.randomUUID(),sourceId:p.id,guestPeer:guest,recipient:{contentId:'18014498570037335',name:'Friend Alt',world:'Faerie'},items};
+ return {...f,p,r,host,guest,items,offer,grant,request};
+}
+test('ordinary readers cannot request or control publishers; explicit grant exposes only allowed offers',async()=>{
+ const f=await transferFixture(),outsider=await f.key();
+ assert.deepEqual((await f.call('/v1/transfers/offers',outsider.token)).body,[]);
+ assert.equal((await f.call('/v1/transfers/orders',outsider.token,'POST',f.request)).status,409);
+ assert.equal((await f.call('/v1/transfers/grants',f.r.token,'PUT',f.grant)).status,403);
+ assert.equal((await f.call('/v1/transfers/offer',f.r.token,'PUT',f.offer)).status,403);
+ assert.equal((await f.call('/v1/transfers/orders',f.p.token,'POST',f.request)).status,403);
+ const offers=(await f.call('/v1/transfers/offers',f.r.token)).body;
+ assert.equal(offers.length,1);assert.equal(offers[0].items[0].quantity,100);assert.ok(!JSON.stringify(offers).includes(f.host));
+});
+test('requests reserve stock atomically, reject excess and keep retries idempotent',async()=>{
+ const f=await transferFixture(),other=await f.key();
+ await f.call('/v1/transfers/grants',f.owner,'PUT',{...f.grant,readerId:other.id});
+ const a={...f.request,items:[{...f.items[0],quantity:60}]},b={...f.request,id:crypto.randomUUID(),guestPeer:crypto.randomUUID(),items:[{...f.items[0],quantity:60}]};
+ const results=await Promise.all([f.call('/v1/transfers/orders',f.r.token,'POST',a),f.call('/v1/transfers/orders',other.token,'POST',b)]);
+ assert.equal(results.filter(r=>r.status===201).length,1);assert.equal(results.filter(r=>r.status===409).length,1);
+ const winner=results[0].status===201?{key:f.r.token,request:a}:{key:other.token,request:b};
+ assert.equal((await f.call('/v1/transfers/orders',winner.key,'POST',winner.request)).status,200);
+ assert.equal((await f.call('/v1/transfers/orders',winner.key,'POST',{...winner.request,items:f.items})).status,409);
+ assert.equal((await f.call('/v1/transfers/offers',f.r.token)).body[0].items[0].quantity,40);
+ assert.equal((await f.call('/v1/transfers/offer',f.p.token,'PUT',{...f.offer,revision:1})).status,409);
+});
+test('unknown items, HQ substitution, invalid counts, duplicate lines and recipient precision are rejected',async()=>{
+ const f=await transferFixture();
+ for(const items of [[{...f.items[0],quantity:101}],[{...f.items[0],highQuality:true}],[{...f.items[0],itemId:99999}]])assert.equal((await f.call('/v1/transfers/orders',f.r.token,'POST',{...f.request,items})).status,409);
+ for(const quantity of [0,-1,1.5,1000000001])assert.equal((await f.call('/v1/transfers/orders',f.r.token,'POST',{...f.request,items:[{...f.items[0],quantity}]})).status,400);
+ assert.equal((await f.call('/v1/transfers/orders',f.r.token,'POST',{...f.request,items:[...f.items,...f.items]})).status,400);
+ assert.equal((await f.call('/v1/transfers/orders',f.r.token,'POST',{...f.request,recipient:{...f.request.recipient,contentId:18014498570037335}})).status,400);
+ const good=await f.call('/v1/transfers/orders',f.r.token,'POST',f.request);assert.equal(good.body.recipient.contentId,'18014498570037335');
+});
+test('queued cancellation releases reservation; active cancellation requires supplier reconciliation',async()=>{
+ const f=await transferFixture();await f.call('/v1/transfers/orders',f.r.token,'POST',f.request);
+ const path=`/v1/transfers/orders/${f.request.id}`;
+ assert.equal((await f.call(path+'/cancel',f.r.token,'POST',{})).status,200);
+ assert.equal((await f.call('/v1/transfers/offers',f.r.token)).body[0].items[0].quantity,100);
+ const request={...f.request,id:crypto.randomUUID()};await f.call('/v1/transfers/orders',f.r.token,'POST',request);
+ const active=`/v1/transfers/orders/${request.id}`;
+ assert.equal((await f.call(active+'/claim',f.r.token,'POST',{})).status,403);
+ assert.equal((await f.call(active+'/claim',f.p.token,'POST',{})).status,200);
+ assert.equal((await f.call(active+'/cancel',f.r.token,'POST',{})).status,409);
+});
+test('claim requires recipient presence and grants; per-source active jobs are serialized',async()=>{
+ const f=await transferFixture();await f.call('/v1/transfers/orders',f.r.token,'POST',{...f.request,items:[{...f.items[0],quantity:50}]});
+ const path=`/v1/transfers/orders/${f.request.id}`;
+ f.db.prepare('UPDATE transfer_orders SET guest_seen=?').run('2000-01-01T00:00:00Z');
+ assert.equal((await f.call(path+'/claim',f.p.token,'POST',{})).status,409);
+ await f.call(path+'/presence',f.r.token,'POST',{});assert.equal((await f.call(path+'/claim',f.p.token,'POST',{})).status,200);
+ const other=await f.key();await f.call('/v1/transfers/grants',f.owner,'PUT',{...f.grant,readerId:other.id});
+ const second={...f.request,id:crypto.randomUUID(),guestPeer:crypto.randomUUID(),items:[{...f.items[0],quantity:50}]};
+ await f.call('/v1/transfers/orders',other.token,'POST',second);
+ assert.equal((await f.call(`/v1/transfers/orders/${second.id}/claim`,f.p.token,'POST',{})).status,409);
+});
+test('delivery exchange rejects unrelated readers, guest commands and private inventory sync; revocation stops messages',async()=>{
+ const f=await transferFixture(),other=await f.key();await f.call('/v1/transfers/orders',f.r.token,'POST',f.request);
+ const path=`/v1/transfers/orders/${f.request.id}`;await f.call(path+'/claim',f.p.token,'POST',{});
+ const msg={id:crypto.randomUUID(),kind:'command',payload:'{}'},input={after:0,messages:[msg]};
+ assert.equal((await f.call(path+'/exchange',other.token,'POST',input)).status,403);
+ assert.equal((await f.call(path+'/exchange',f.r.token,'POST',input)).status,400);
+ assert.equal((await f.call(path+'/exchange',f.p.token,'POST',{...input,messages:[{...msg,kind:'inventory-sync'}]})).status,400);
+ assert.equal((await f.call(path+'/exchange',f.p.token,'POST',input)).status,200);
+ assert.equal((await f.call(path+'/exchange',f.p.token,'POST',input)).status,200);
+ const received=await f.call(path+'/exchange',f.r.token,'POST',{after:0,messages:[]});assert.equal(received.body.messages.length,1);
+ await f.call('/v1/transfers/grants',f.owner,'DELETE',f.grant);
+ assert.equal((await f.call(path+'/exchange',f.r.token,'POST',{after:0,messages:[]})).status,403);
+ assert.equal((await f.call(path+'/exchange',f.p.token,'POST',input)).status,403);
+ assert.equal(f.db.prepare('SELECT state FROM transfer_orders').get().state,'active');
+});
+test('settling consumes reservation once, persists receipt, and permits fresh stock after completion',async()=>{
+ const f=await transferFixture();await f.call('/v1/transfers/orders',f.r.token,'POST',f.request);
+ const path=`/v1/transfers/orders/${f.request.id}`;await f.call(path+'/claim',f.p.token,'POST',{});
+ const receipt=JSON.stringify({items:[{itemId:10155,delivered:50,shortage:50}]});
+ assert.equal((await f.call(path+'/finish',f.r.token,'POST',{receipt})).status,403);
+ assert.equal((await f.call(path+'/finish',f.p.token,'POST',{receipt})).status,200);
+ assert.equal((await f.call(path+'/finish',f.p.token,'POST',{receipt})).status,200);
+ assert.equal(JSON.parse((await f.call(path,f.r.token)).body.receipt).items[0].delivered,50);
+ const offer=(await f.call('/v1/transfers/offer',f.p.token)).body;assert.equal(offer.revision,2);assert.equal(JSON.parse(offer.items)[0].quantity,0);
+ assert.equal((await f.call('/v1/transfers/offer',f.p.token,'PUT',{...f.offer,revision:2,items:[{...f.items[0],quantity:50}]})).status,200);
+ assert.equal((await f.call('/v1/transfers/offers',f.r.token)).body[0].items[0].quantity,50);
+});
+
+test('revoking a reader never releases active delivery stock for a second request',async()=>{
+ const f=await transferFixture();await f.call('/v1/transfers/orders',f.r.token,'POST',f.request);
+ const path=`/v1/transfers/orders/${f.request.id}`;await f.call(path+'/claim',f.p.token,'POST',{});
+ assert.equal((await f.call(`/v1/keys/${f.r.id}`,f.owner,'DELETE')).status,200);
+ assert.equal(f.db.prepare('SELECT state FROM transfer_orders WHERE id=?').get(f.request.id).state,'active');
+ assert.equal((await f.call(path+'/exchange',f.r.token,'POST',{after:0,messages:[]})).status,401);
+ const other=await f.key();await f.call('/v1/transfers/grants',f.owner,'PUT',{...f.grant,readerId:other.id});
+ assert.equal((await f.call('/v1/transfers/offers',other.token)).body[0].items[0].quantity,0);
+ assert.equal((await f.call(path+'/finish',f.p.token,'POST',{receipt:'{"outcome":"Ended"}'})).status,200);
+});
+
+test('an empty refresh removes requestable stock rather than retaining an obsolete positive count',async()=>{
+ const f=await transferFixture();
+ assert.equal((await f.call('/v1/transfers/offer',f.p.token,'PUT',{...f.offer,revision:1,items:[]})).status,200);
+ assert.deepEqual((await f.call('/v1/transfers/offers',f.r.token)).body[0].items,[]);
+ assert.equal((await f.call('/v1/transfers/orders',f.r.token,'POST',f.request)).status,409);
 });

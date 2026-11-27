@@ -11,8 +11,11 @@ public sealed partial class WorkflowService
     public void StartJob(SavedTransferJob job) => Start(job, false);
     public void ScanJob(SavedTransferJob job) => Start(job, true);
 
-    private void Start(SavedTransferJob job, bool discoveryOnly, Guid? scheduleOccurrence = null, string scheduleName = "")
+    partial void ValidateStartContext(Guid? friendRequest);
+    partial void ValidateResumeContext();
+    private void Start(SavedTransferJob job, bool discoveryOnly, Guid? scheduleOccurrence = null, string scheduleName = "", Guid? friendRequest = null)
     {
+        ValidateStartContext(friendRequest);
         RequireIdle();
         RequirePair();
         EnsurePreviousReceiptSaved();
@@ -47,6 +50,7 @@ public sealed partial class WorkflowService
         error = "";
         Run.StartedAt = DateTimeOffset.UtcNow;
         Run.ScheduleOccurrenceId = scheduleOccurrence;
+        Run.FriendRequestId = friendRequest;
         Run.ScheduleName = scheduleName;
         Run.CharacterLabels = AllCharacters().ToDictionary(c => c.Character.ContentId, c => $"{c.Character.Name}@{c.Character.World}");
         if (scheduleOccurrence.HasValue) { Run.Step = CoordinatorStep.ScheduledStart; Run.Status = "Pausing AutoRetainer on both PCs and waiting for its current work to finish…"; }
@@ -90,7 +94,7 @@ public sealed partial class WorkflowService
             // before any command for the next item can be issued.
             Run = new()
             {
-                RunId = run.RunId, StartedAt = run.StartedAt, ScheduleOccurrenceId = run.ScheduleOccurrenceId,
+                RunId = run.RunId, StartedAt = run.StartedAt, ScheduleOccurrenceId = run.ScheduleOccurrenceId, FriendRequestId = run.FriendRequestId,
                 ScheduleName = run.ScheduleName, CharacterLabels = run.CharacterLabels, HistoryNotes = run.HistoryNotes,
                 Job = run.Job, DiscoveryOnly = run.DiscoveryOnly, ActiveItemIndex = nextIndex,
                 PreserveLegacyItemOrder = run.PreserveLegacyItemOrder,
@@ -122,6 +126,7 @@ public sealed partial class WorkflowService
 
     public void Resume()
     {
+        ValidateResumeContext();
         RequirePair();
         if (!journalHealthy) throw new InvalidOperationException("Repair the saved journal before resuming.");
         if (activeWorker != null || executor.IsBusy || plugin.Trader.IsRunning || (plugin.Fuel.Active || (plugin.FuelQueue.HasUnfinishedRun || plugin.Utilities.HasUnfinishedRun)))

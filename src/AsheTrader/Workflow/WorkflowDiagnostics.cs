@@ -50,6 +50,8 @@ public sealed partial class WorkflowService
         header.Add("Game", $"loggedIn={Plugin.ClientState.IsLoggedIn}; characterId={Plugin.PlayerState.ContentId}; territory={Plugin.ClientState.TerritoryType}; language={Plugin.ClientState.ClientLanguage}");
         header.Add("Status", Status);
         header.Add("AutoRetainerHandoff", plugin.CompletionHandoff.Status);
+        if (plugin.Friends.Active is {} delivery)
+            header.Add("FriendDelivery", $"request={delivery.Id}; state={delivery.State}; supplying={plugin.Friends.Supplying}; connected={FriendDeliveryConnected}; reconnectNeeded={plugin.Friends.NeedsReconnect}; status={plugin.Friends.Status}; error={plugin.Friends.Error}");
         if (plugin.Utilities.Run is { } utility)
             header.Add("Utilities", $"stage={utility.Stage}; index={utility.Index}/{utility.Entries.Count}; paused={utility.Paused}; enableARAfterCompletion={utility.EnableAutoRetainerAfterCompletion}; status={utility.Status}; error={plugin.Utilities.Error}");
         if (plugin.FuelQueue.Run is { } fuel)

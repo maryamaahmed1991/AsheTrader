@@ -20,6 +20,20 @@ The owner material under `private/` is sensitive. After setup, keep an encrypted
 
 ## API and limits
 
+Apply `0003_friend_orders.sql` before deploying 0.7.0. The new transfer endpoints require existing catalogue authentication plus explicit per-reader/per-publisher grants. They do not turn reader codes into publisher or trusted-device credentials. The `TRANSFER_LIMITER` binding permits bounded active-delivery polling separately from catalogue reads.
+
+- `GET/PUT/DELETE /v1/transfers/grants`: owner manages request permissions.
+- `GET/PUT /v1/transfers/offer`: publisher reads/replaces its offer with revision checks; reserved stock prevents replacement.
+- `GET /v1/transfers/offers`: readers see only granted profiles and unreserved counts.
+- `GET/POST /v1/transfers/orders`: scoped list or atomic, idempotent stock reservation (maximum 20 queued/active per publisher; one per reader).
+- `POST /v1/transfers/orders/:id/claim`: supplying publisher claims a queued request with recent recipient presence; only one active per source.
+- `POST .../presence`: the requesting reader advertises readiness and reads state.
+- `POST .../exchange`: active participants exchange bounded messages. Readers cannot send game commands, and neither direction permits private inventory sync. Messages are deleted after acknowledged receipt; unacknowledged messages remain for recovery until settlement.
+- `POST .../cancel`: cancel queued requests, releasing their reservation.
+- `POST .../finish`: publisher settles an active request and writes an opaque JSON receipt string (preserving 64-bit identifiers). Its entire reservation is consumed conservatively, once; refresh stock after partial results.
+
+Requests and receipts are hosted privately in D1. Selected character identities and game commands/results pass through the authenticated HTTPS mailbox during delivery. This is separate from the LAN-only trusted-device metadata endpoints below. No new grants or game automation are enabled by deploying the service. See [friend delivery setup and limitations](../../docs/friend-deliveries.md).
+
 Apply migration `0002_devices.sql` before deploying 0.6.1. Device trust uses separate credentials/tables; catalogue readers and publishers cannot create or use device links.
 
 - `POST /v1/device-links`: owner creates a coordinator credential and a ten-minute one-use invitation (maximum eight links).

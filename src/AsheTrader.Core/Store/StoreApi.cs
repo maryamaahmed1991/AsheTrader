@@ -30,7 +30,7 @@ public sealed class StoreApi : IDisposable
     }
     public Task<StorePublishResult> Publish(StoreAccess access, StoreSnapshot snapshot, CancellationToken ct) => Send<StorePublishResult>(access, HttpMethod.Put, "v1/source", snapshot, ct);
     public Task<StorePublishResult> Clear(StoreAccess access, long revision, CancellationToken ct) => Send<StorePublishResult>(access, HttpMethod.Delete, "v1/source", new {revision}, ct);
-    private async Task<T> Send<T>(StoreAccess access, HttpMethod method, string path, object? body, CancellationToken ct)
+    internal async Task<T> Send<T>(StoreAccess access, HttpMethod method, string path, object? body, CancellationToken ct)
     {
         access.Validate();
         using var request = new HttpRequestMessage(method, new Uri(new Uri(access.Url), path));
@@ -38,7 +38,9 @@ public sealed class StoreApi : IDisposable
         if (body != null) request.Content = JsonContent.Create(body, options: Json);
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseContentRead, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException((int)response.StatusCode switch
+            throw new InvalidOperationException(path.StartsWith("v1/transfers/",StringComparison.Ordinal) && response.StatusCode==System.Net.HttpStatusCode.Conflict
+                ? "Requestable stock is reserved or changed, the recipient is offline, or another delivery is active. Refresh the request list before retrying."
+                : (int)response.StatusCode switch
             {
                 401 or 403 => "Store access was denied. The invitation may have been revoked or has the wrong role.",
                 409 => "Stock changed or another PC already publishes these inventories. Refresh and use separate character selections on each PC.",

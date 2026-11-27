@@ -6,6 +6,8 @@ This is a development build with automated coverage for planning, journals, LAN 
 
 ## Features
 
+- [Friend deliveries](docs/friend-deliveries.md): explicitly grant a store reader permission to reserve offered stock and request a multi-item delivery to their selected character. Separate hosted delivery sessions work across networks and retain your trusted-PC pairing. Available quantities exclude reservations; receipts appear in Past Trades. Requires 0.7.0.0 on both participants and catalogue migration 0003.
+
 - Use a redesigned dark workspace with sidebar navigation, teal actions, gold headings, readable cards, searchable characters, responsive recipient editing and persistent stop controls. The coordinator configures transfer jobs; each PC configures its own fuel queue.
 - Pair one coordinator PC and one worker PC using an authenticated, encrypted LAN connection.
 - Find nearby coordinators by PC label without copying IP addresses. Hosting chooses a local network adapter automatically; manual connection remains available.

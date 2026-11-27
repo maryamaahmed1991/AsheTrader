@@ -1,4 +1,5 @@
 import {devices} from './devices.mjs';
+import {orders} from './orders.mjs';
 // Private catalogue and owner-authorized device rendezvous. No public registration.
 const headers = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
 const reply = (data, status=200) => new Response(JSON.stringify(data), {status, headers});
@@ -41,12 +42,14 @@ export default {
     try {
       const url=new URL(request.url); const path=url.pathname;
       if(path==='/health' && request.method==='GET') return reply({service:'Ashe private catalogue',version:1});
-      if(env.RATE_LIMITER && !(await env.RATE_LIMITER.limit({key:request.headers.get('CF-Connecting-IP') || 'unknown'})).success) return reply({error:'Too many requests. Try again shortly.'},429);
+      const limiter=path.startsWith('/v1/transfers/')?(env.TRANSFER_LIMITER||env.RATE_LIMITER):env.RATE_LIMITER;
+      if(limiter && !(await limiter.limit({key:request.headers.get('CF-Connecting-IP') || 'unknown'})).success) return reply({error:'Too many requests. Try again shortly.'},429);
       const authorization=request.headers.get('authorization') || '';
       if(!/^Bearer [a-f0-9]{64}$/.test(authorization)) fail(401,'Access denied.');
       if(path.startsWith('/v1/device-link')) return await devices(request,env,path,authorization.slice(7),{reply,fail,digest,token,body,label});
       const credential=await env.DB.prepare('SELECT id, role, source_id FROM credentials WHERE hash=?').bind(await digest(authorization.slice(7))).first();
       if(!credential) fail(401,'Access denied.');
+      if(path.startsWith('/v1/transfers/'))return await orders(request,env,path,credential,{reply,fail,body,label});
       const owner=()=>{if(credential.role!=='owner') fail(403,'Owner access required.');};
       if(path==='/v1/catalogue' && request.method==='GET') {
         const store=await env.DB.prepare('SELECT name FROM store WHERE id=1').first();
@@ -86,7 +89,9 @@ export default {
       if(keyMatch && request.method==='DELETE') {
         owner(); const key=await env.DB.prepare("SELECT source_id FROM credentials WHERE id=? AND role!='owner'").bind(keyMatch[1]).first();
         if(!key) fail(404,'Invitation or publisher not found.');
-        await env.DB.batch([env.DB.prepare("DELETE FROM credentials WHERE id=? AND role!='owner'").bind(keyMatch[1]),env.DB.prepare('DELETE FROM sources WHERE id=?').bind(key.source_id || '')]);
+        await env.DB.batch([
+          env.DB.prepare("UPDATE transfer_orders SET state='cancelled',ended_at=? WHERE reader_id=? AND state='queued'").bind(new Date().toISOString(),keyMatch[1]),
+          env.DB.prepare("DELETE FROM credentials WHERE id=? AND role!='owner'").bind(keyMatch[1]),env.DB.prepare('DELETE FROM sources WHERE id=?').bind(key.source_id || '')]);
         return reply({removed:true});
       }
       if(path==='/v1/source' && (request.method==='GET' || request.method==='PUT' || request.method==='DELETE')) {

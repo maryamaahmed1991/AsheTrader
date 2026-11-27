@@ -54,7 +54,9 @@ public static class TradeHistoryProjection
             receipt.Items.Add(new(definition.ItemId, definition.HighQuality, definition.QuantityMode,
                 definition.Recipients.Select(r => new RecipientRule { CharacterId = r.CharacterId, Quantity = r.Quantity }).ToList(),
                 journal?.Plan.AllocatedQuantity ?? 0, delivered,
-                journal?.Plan.UnmetTargets.Aggregate(0UL, (sum, t) => checked(sum + t.Missing)) ?? 0,
+                definition.QuantityMode == JobQuantityMode.DeliverAmount
+                    ? Math.Max(definition.Recipients.Aggregate(0UL,(sum,r)=>checked(sum+(r.Quantity??0))),delivered)-delivered
+                    : journal?.Plan.UnmetTargets.Aggregate(0UL, (sum, t) => checked(sum + t.Missing)) ?? 0,
                 new(withdrawn), new(deposited)));
             var skipped = visit?.SkippedCharacters ?? completed?.SkippedCharacters ?? (index == run.ActiveItemIndex ? run.SkippedCharacters : []);
             foreach (var reason in skipped.Values.Distinct()) receipt.Notes.Add(new(receipt.EndedAt, reason));

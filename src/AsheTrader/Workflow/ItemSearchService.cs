@@ -198,6 +198,7 @@ public sealed partial class WorkflowService
 
     private void UpdateItemSearch()
     {
+        if (friendOrder != null) return;
         try
         {
             var current = Connected && HasAcceptedConnection ? connectionId : null;

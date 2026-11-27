@@ -6,7 +6,7 @@ using Lumina.Excel.Sheets;
 
 namespace AsheTrader.Windows;
 
-internal sealed class StorePanel(Plugin plugin)
+internal sealed partial class StorePanel(Plugin plugin)
 {
     private string code="",itemSearch="",stockSearch="",accessLabel="",notice="";
     private List<(uint Id,string Name)>? catalog;
@@ -30,6 +30,7 @@ internal sealed class StorePanel(Plugin plugin)
             {
                 if(ImGui.BeginTabItem("My store")){DrawPublisher();ImGui.EndTabItem();}
                 if(ImGui.BeginTabItem("Browse stores")){DrawBrowse();ImGui.EndTabItem();}
+                if(ImGui.BeginTabItem("Friend deliveries")){DrawFriendTransfers();ImGui.EndTabItem();}
                 if(ImGui.BeginTabItem("Access & invitations")){DrawAccess();ImGui.EndTabItem();}
                 ImGui.EndTabBar();
             }
