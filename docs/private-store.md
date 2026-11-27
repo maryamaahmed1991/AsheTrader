@@ -5,9 +5,9 @@ The Stores tab publishes selected stock to a separately hosted, authenticated ca
 ## Owner setup
 
 1. Deploy the private catalogue service (see `services/catalogue/README.md`). Each deployment serves one private store.
-2. In **Stores → Access & invitations**, paste the owner code. Review the service hostname and role before connecting.
-3. Choose **Authorize this PC**. Each PC needs a separate publisher credential.
-4. In **My store**, select the exact items and characters to include, then **Refresh preview**. This reads cached carried bags and retainer bags. It does not log into characters.
+2. In **Stores → People & PCs**, paste the owner code. Review the service hostname and role before connecting.
+3. Choose **Use this PC to supply items**. Each PC needs a separate publisher credential.
+4. In **My stock → View-only catalogue**, select the exact items and characters to include, then **Refresh preview**. This reads cached carried bags and retainer bags. It does not log into characters.
 5. Review the totals, then **Publish this stock**. Optionally enable automatic refresh/publishing every five minutes while the plugin is running. Changing item or character selections disables automatic publishing until you review them again.
 
 The preview includes NQ and HQ quantities separately. Equipped items, armoury storage, saddle bags, market listings, currencies and FC/shared storage are excluded from this first version. An unavailable or incomplete selected cache blocks the upload and preserves the previous published snapshot; it never substitutes an unknown inventory with zero. Stock is an estimate from Allagan Tools. Publication and cache retrieval timestamps are not the game's last inventory observation time.
@@ -16,11 +16,11 @@ The preview includes NQ and HQ quantities separately. Equipped items, armoury st
 
 Trusted-PC pairing under Transfers is separate from store publishing. It reconnects game clients and syncs private offline inventory automatically; see [Trusted PCs](trusted-pcs.md). A device invitation does not give a friend access to your private account inventories or grant catalogue publishing.
 
-Give a name to **Authorize another PC**, copy the resulting publisher code, and connect it in the other PC's Access tab. Select separate characters on each PC. Overlapping physical inventories are rejected by the server using opaque, store-specific inventory identifiers; native character/retainer IDs and their names are never uploaded. Publishers replace only their own snapshots, with revision checks to prevent stale retries from overwriting newer stock.
+In **People & PCs**, choose **Add my other PC**, enter its name and click **Create PC setup code**. Copy the resulting code and connect it in **People & PCs** on the other PC. Select separate characters on each PC. Overlapping physical inventories are rejected by the server using opaque, store-specific inventory identifiers; native character/retainer IDs and their names are never uploaded. Publishers replace only their own snapshots, with revision checks to prevent stale retries from overwriting newer stock.
 
 ## Invite friends
 
-Name an invitation and choose **Invite a friend**. Copy the new code and send it yourself to that friend. They connect it in Access & invitations, then use **Browse stores**. Comma-separated partial names search the downloaded catalogue; an empty search shows all published items. No Cloudflare account is needed to browse.
+In **People & PCs**, choose **Invite a friend**, enter their name and click **Create friend invitation**. Copy the code and send it privately. They connect it in **People & PCs**, then open **Shop → View catalogue**. Comma-separated partial names search the downloaded catalogue; an empty search shows all published items. No Cloudflare account is needed to browse.
 
 Codes are bearer credentials: anyone holding a friend code has read access until it is revoked. Invitations are distinct, revocable and read-only. A friend may retain data already viewed; revocation prevents subsequent server reads. Do not share an owner or publisher code with readers.
 

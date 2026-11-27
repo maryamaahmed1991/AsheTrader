@@ -26,6 +26,7 @@ internal sealed class StoreService : IDisposable
     public IReadOnlyList<StoreAccess> Readers => credentials.Readers;
     public StoreManagement? Management {get;private set;}
     public StoreCatalogue? Catalogue {get;private set;}
+    public StoreAccess? SelectedAccess=>browsing;
     public StoreSnapshot? Preview {get;private set;}
     public DateTimeOffset? PreviewAt {get;private set;}
     public string GeneratedCode {get;private set;} = "";

@@ -18,6 +18,7 @@ internal sealed class FriendSettings
     public SavedTransferJob? PendingTemplate {get;set;}
     public StoreStockItem[] PendingItems {get;set;}=[];
     public long PendingRevision {get;set;}
+    public DateTimeOffset? PublishedAt {get;set;}
 }
 internal sealed record FriendRequestDraft(Guid Id,string Source,Guid Peer,FriendRecipient Recipient,StoreStockItem[] Items);
 
@@ -39,7 +40,9 @@ internal sealed class FriendTransferService : IDisposable
     private long publishRevision;
     private readonly List<StoreStockItem> publishItems=[];
     public FriendOffer[] Offers {get;private set;}=[];
-    public FriendOrder[] Orders {get;private set;}=[];
+    public FriendOrder[] IncomingOrders {get;private set;}=[];
+    public FriendOrder[] RequestedOrders {get;private set;}=[];
+    public string RequestedOrdersUrl {get;private set;}="";
     public FriendGrant[] Grants {get;private set;}=[];
     public string Status {get;private set;}="Publish a delivery profile and grant a friend request access to get started.";
     public string Error {get;private set;}="";
@@ -49,6 +52,9 @@ internal sealed class FriendTransferService : IDisposable
     public bool Supplying=>settings.Supplying;
     public bool AcceptingCommands=>armed&&settings.Active is {State:"active"};
     public string ProfileName=>settings.Template?.Definition.Name??"No delivery profile";
+    public bool HasPublishedSupply=>settings.Template!=null;
+    public bool SupplyHasChanges=>!Supply.MatchesPublished(settings.Template);
+    public DateTimeOffset? PublishedAt=>settings.PublishedAt;
     public FriendSupplyProfile Supply => settings.Supply ??= FriendSupplyProfile.FromLegacy(settings.Template);
     public bool NeedsReconnect=>(settings.Active!=null||settings.Draft!=null)&&!armed;
     public bool HasPendingRequest=>settings.Draft!=null;
@@ -69,22 +75,29 @@ internal sealed class FriendTransferService : IDisposable
     public void Refresh(StoreAccess? access=null)
     {
         if(Busy)return;
+        var previous=browsing;
         browsing=access??browsing??plugin.Store.Readers.FirstOrDefault();var selected=browsing;
+        if(previous!=selected){Offers=[];RequestedOrders=[];RequestedOrdersUrl="";}
         Start(async()=>
         {
             var offers=selected==null?Array.Empty<FriendOffer>():await api.Offers(selected,lifetime.Token);
             var orders=selected!=null?await api.Orders(selected,lifetime.Token):plugin.Store.Publisher is {} p?await api.Orders(p,lifetime.Token):[];
             var grants=plugin.Store.Owner is {} owner?await api.Grants(owner,lifetime.Token):[];
-            return ()=>{Offers=offers;Orders=orders;Grants=grants;Status="Requestable stock refreshed. Quantities exclude existing reservations.";};
+            return ()=>{Offers=offers;if(selected!=null){RequestedOrders=orders;RequestedOrdersUrl=selected.Url;}else IncomingOrders=orders;Grants=grants;Status="Requestable stock refreshed. Quantities exclude existing reservations.";};
         });
     }
     public void RefreshIncoming()
     {
         var publisher=plugin.Store.Publisher??throw new InvalidOperationException("This PC has no publisher access.");
-        Start(async()=>{var orders=await api.Orders(publisher,lifetime.Token);return ()=>Orders=orders;});
+        Start(async()=>{var orders=await api.Orders(publisher,lifetime.Token);return ()=>IncomingOrders=orders;});
+    }
+    public void RefreshGrants()
+    {
+        if(Busy||plugin.Store.Owner is not {} owner)return;
+        Start(async()=>{var grants=await api.Grants(owner,lifetime.Token);return ()=>Grants=grants;});
     }
     public void SetGrant(string reader,string source,bool enabled)
-    {var owner=plugin.Store.Owner??throw new InvalidOperationException("Owner access is required.");Start(async()=>{await api.Grant(owner,reader,source,enabled,lifetime.Token);return ()=>Refresh();});}
+    {var owner=plugin.Store.Owner??throw new InvalidOperationException("Owner access is required.");Start(async()=>{await api.Grant(owner,reader,source,enabled,lifetime.Token);return ()=>RefreshGrants();});}
     public void SetEnabled(bool enabled)
     {
         if(enabled&&settings.PendingTemplate!=null)
@@ -199,7 +212,7 @@ internal sealed class FriendTransferService : IDisposable
                 var snapshot=publishing;publishing=null;var items=publishItems.ToArray();var access=plugin.Store.Publisher!;
                 // Persist the profile before publication; do not accept requests until its publication is acknowledged.
                 settings.PendingTemplate=snapshot;settings.PendingItems=items;settings.PendingRevision=publishRevision;settings.Enabled=false;Save();
-                Start(async()=>{await api.Publish(access,publishRevision,plugin.Config.Workflow.PeerId,snapshot.Definition.Name,items,lifetime.Token);return ()=>{settings.Template=snapshot;settings.PendingTemplate=null;settings.PendingItems=[];Save();Status="Requestable stock published. Enable automatic deliveries on this PC when ready.";Refresh();};});
+                Start(async()=>{await api.Publish(access,publishRevision,plugin.Config.Workflow.PeerId,snapshot.Definition.Name,items,lifetime.Token);return ()=>{settings.Template=snapshot;settings.PublishedAt=DateTimeOffset.UtcNow;settings.PendingTemplate=null;settings.PendingItems=[];Save();Status="Requestable stock published. Enable automatic deliveries on this PC when ready.";Refresh();};});
             }
         }
         if(pending!=null||publishing!=null||!healthy)return;
@@ -256,11 +269,11 @@ internal sealed class FriendTransferService : IDisposable
                 var orders=await api.Orders(publisher,lifetime.Token);
                 var interrupted=orders.FirstOrDefault(o=>o.HostPeer==peerId&&o.State=="active");
                 if(interrupted!=null)return ()=>{settings.Active=interrupted;settings.AccessUrl=publisher.Url;settings.Supplying=true;Save();armed=false;Status="An interrupted delivery was recovered. Reconnect it before continuing.";};
-                if(!canClaim)return ()=>Orders=orders;
+                if(!canClaim)return ()=>IncomingOrders=orders;
                 var candidate=orders.Where(o=>o.HostPeer==peerId&&o.State=="queued"&&o.GuestSeen>DateTimeOffset.UtcNow.AddSeconds(-40)).OrderBy(o=>o.CreatedAt).FirstOrDefault();
-                if(candidate==null)return ()=>Orders=orders;
+                if(candidate==null)return ()=>IncomingOrders=orders;
                 var claimed=await api.Claim(publisher,candidate.Id,lifetime.Token);
-                return ()=>{settings.Active=claimed;settings.AccessUrl=publisher.Url;settings.Supplying=true;Save();armed=settings.Enabled&&generation==stopGeneration;Orders=orders;Status=armed?"Friend request claimed; preparing both accounts.":"Request claimed while stopping. Reconnect it explicitly to begin.";};
+                return ()=>{settings.Active=claimed;settings.AccessUrl=publisher.Url;settings.Supplying=true;Save();armed=settings.Enabled&&generation==stopGeneration;IncomingOrders=orders;Status=armed?"Friend request claimed; preparing both accounts.":"Request claimed while stopping. Reconnect it explicitly to begin.";};
             });
         }
     }

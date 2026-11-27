@@ -15,34 +15,12 @@ internal sealed partial class StorePanel(Plugin plugin)
     private StoreAccess? parsed;
     private int browsePage;
     private const int PageSize=100;
-    public void Draw()
-    {
-        var service=plugin.Store;
-        if(ImGui.BeginChild("StoresPage",Vector2.Zero))
-        {
-            TraderStyle.Badge(service.Busy?"WORKING":"PRIVATE CATALOGUE",service.Busy?TraderStyle.Gold:TraderStyle.Accent);
-            ImGui.SameLine();ImGui.TextDisabled("No PC pairing required");
-            ImGui.TextWrapped(service.Status);
-            if(service.Error.Length>0) UiTone.Wrapped(UiTone.Warning,service.Error);
-            if(notice.Length>0) UiTone.Wrapped(UiTone.Good,notice);
-            ImGui.Spacing();
-            if(ImGui.BeginTabBar("StoreTabs"))
-            {
-                if(ImGui.BeginTabItem("My store")){DrawPublisher();ImGui.EndTabItem();}
-                if(ImGui.BeginTabItem("Browse stores")){DrawBrowse();ImGui.EndTabItem();}
-                if(ImGui.BeginTabItem("Friend deliveries")){DrawFriendTransfers();ImGui.EndTabItem();}
-                if(ImGui.BeginTabItem("Access & invitations")){DrawAccess();ImGui.EndTabItem();}
-                ImGui.EndTabBar();
-            }
-        }
-        ImGui.EndChild();
-    }
     private void DrawPublisher()
     {
         var service=plugin.Store;var settings=plugin.Config.Store;
         if(service.Publisher==null)
         {
-            ImGui.TextWrapped("Connect this PC in Access & invitations to publish stock.");
+            ImGui.TextWrapped("Connect this PC in People & PCs to publish stock.");
             return;
         }
         if(TraderStyle.BeginCard("PublishSelection"))
@@ -131,16 +109,7 @@ internal sealed partial class StorePanel(Plugin plugin)
         var service=plugin.Store;
         if(TraderStyle.BeginCard("BrowseStore"))
         {
-            TraderStyle.Section(service.Catalogue?.Name ?? "Browse a private store","Connect a friend's invitation in Access & invitations. No game login or PC pairing is required to read published stock.");
-            ImGui.BeginDisabled(service.Busy);
-            if(ImGui.BeginCombo("Store service",service.Catalogue?.Name ?? "Select connected store"))
-            {
-                foreach(var access in service.Readers.Concat(service.Owner is {} owner?[owner]:Array.Empty<StoreAccess>()).DistinctBy(x=>x.Url))
-                    if(ImGui.Selectable(new Uri(access.Url).Host)){browsePage=0;plugin.QueueAction(()=>service.Browse(access));}
-                ImGui.EndCombo();
-            }
-            if(TraderStyle.SecondaryButton("Refresh stock",new(130,30)))plugin.QueueAction(()=>service.Browse());
-            ImGui.EndDisabled();
+            TraderStyle.Section(service.Catalogue?.Name ?? "Published catalogue", "View only · not all catalogue items are available for delivery.");
             ImGui.SetNextItemWidth(-1);if(ImGui.InputTextWithHint("##stockSearch","coke, ceruleum, hardened sap",ref stockSearch,2048))browsePage=0;
             ImGui.TextDisabled("Comma-separated partial names. Leave empty to see all published items.");
             if(service.Catalogue is {} catalogue)
@@ -168,55 +137,5 @@ internal sealed partial class StorePanel(Plugin plugin)
         ImGui.TableHeadersRow();
         foreach(var item in items){ImGui.TableNextRow();ImGui.TableNextColumn();ImGui.TextWrapped(item.Name+(item.HighQuality?"  HQ":""));ImGui.TableNextColumn();ImGui.TextColored(TraderStyle.Accent,$"{item.Quantity:N0}");if(timestamps){ImGui.TableNextColumn();ImGui.TextDisabled(item.OldestPublishedAt?.ToLocalTime().ToString("g")??"Unknown");}}
         ImGui.EndTable();
-    }
-    private void DrawAccess()
-    {
-        var service=plugin.Store;
-        if(TraderStyle.BeginCard("ConnectStore"))
-        {
-            TraderStyle.Section("Connect a store", "Owner, publishing and friend invitation codes have separate permissions.");
-            ImGui.SetNextItemWidth(-1);
-            if(ImGui.InputTextWithHint("##storeCode","Paste a private access code…",ref code,4096,ImGuiInputTextFlags.Password))
-            {try{parsed=StoreAccess.Parse(code);}catch{parsed=null;}}
-            if(parsed!=null){ImGui.TextWrapped($"Service: {parsed.Url}");TraderStyle.Badge(parsed.Role.ToUpperInvariant()+" ACCESS",TraderStyle.Gold);}
-            ImGui.BeginDisabled(service.Busy || parsed==null);
-            if(TraderStyle.PrimaryButton("Connect",new(110,32))){var savedCode=code;code="";parsed=null;plugin.QueueAction(()=>service.Import(savedCode));}
-            ImGui.EndDisabled();
-            ImGui.TextWrapped("Access is stored with your operating system's credential encryption. Anyone with a friend code can read the catalogue until you revoke that code.");
-        }TraderStyle.EndCard();
-        if(service.Owner==null)return;
-        if(TraderStyle.BeginCard("ManageStore"))
-        {
-            TraderStyle.Section("Owner controls",service.Owner.Url);
-            ImGui.BeginDisabled(service.Busy);
-            if(TraderStyle.SecondaryButton("Refresh access list",new(165,30)))plugin.QueueAction(service.RefreshManagement);
-            ImGui.SetNextItemWidth(-1);ImGui.InputTextWithHint("##accessLabel","Label: e.g. Alex, or Second PC",ref accessLabel,80);
-            ImGui.BeginDisabled(string.IsNullOrWhiteSpace(accessLabel));
-            if(TraderStyle.PrimaryButton("Invite a friend",new(130,32))){var label=accessLabel;plugin.QueueAction(()=>service.CreateKey("reader",label,false));}
-            ImGui.SameLine();if(TraderStyle.SecondaryButton("Authorize another PC",new(185,32))){var label=accessLabel;plugin.QueueAction(()=>service.CreateKey("publisher",label,false));}
-            ImGui.EndDisabled();
-            if(service.Publisher==null && TraderStyle.SecondaryButton("Authorize this PC",new(155,30)))plugin.QueueAction(()=>service.CreateKey("publisher","This PC",true));
-            ImGui.EndDisabled();
-            if(service.GeneratedCode.Length>0)
-            {
-                UiTone.Wrapped(TraderStyle.Gold,$"New {service.GeneratedRole} code — copy it now. It will not be displayed again after closing.");
-                if(ImGui.Button("Copy new access code")){ImGui.SetClipboardText(service.GeneratedCode);notice="Private code copied. Share it only with the intended person or PC.";}
-                ImGui.SameLine();if(ImGui.Button("Dismiss code"))service.DismissCode();
-            }
-            if(service.Management is {} management)
-            {
-                ImGui.Separator();
-                foreach(var key in management.Keys)
-                {
-                    ImGui.TextUnformatted($"{key.Label} · {(key.Role=="reader"?"Friend invitation":"PC publisher")}");ImGui.SameLine();
-                    ImGui.BeginDisabled(service.Busy);if(ImGui.SmallButton($"Revoke…##{key.Id}"))revoke=key.Id;ImGui.EndDisabled();
-                    if(revoke==key.Id)
-                    {
-                        UiTone.Wrapped(UiTone.Warning,key.Role=="publisher"?"Revoke this PC's access and remove all its published stock?":"Revoke this invitation? Future requests with this code will be rejected.");
-                        if(ImGui.Button($"Confirm revoke##{key.Id}")){var id=key.Id;revoke=null;plugin.QueueAction(()=>service.Revoke(id));}ImGui.SameLine();if(ImGui.Button($"Cancel##{key.Id}"))revoke=null;
-                    }
-                }
-            }
-        }TraderStyle.EndCard();
     }
 }

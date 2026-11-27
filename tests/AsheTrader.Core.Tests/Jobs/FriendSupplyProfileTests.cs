@@ -11,6 +11,29 @@ public class FriendSupplyProfileTests
     };
 
     [Fact]
+    public void PublishedStatusIgnoresSelectionOrderAndEquivalentProviderOverrides()
+    {
+        var profile=Profile();var published=profile.ToTemplate([11,22]);
+        profile.Providers.Reverse();profile.Items.Reverse();
+        profile.Items.Single(i=>i.ItemId==10155).Providers=[22,11];
+        Assert.True(profile.MatchesPublished(published));
+        Assert.True(FriendSupplyProfile.FromLegacy(published).MatchesPublished(published));
+        profile.Providers.Add(33); // No item uses this provider because both have explicit selections.
+        Assert.True(profile.MatchesPublished(published));
+    }
+
+    [Fact]
+    public void PublishedStatusDetectsChangedProvidersQualityMeetingAndUnpublishedDraft()
+    {
+        Assert.False(Profile().MatchesPublished(null));
+        var original=Profile().ToTemplate([11,22]);
+        var changed=Profile();changed.Items[0].Providers=[11];Assert.False(changed.MatchesPublished(original));
+        changed=Profile();changed.Items[0].HighQuality=true;Assert.False(changed.MatchesPublished(original));
+        changed=Profile();changed.Meeting.X++;Assert.False(changed.MatchesPublished(original));
+        changed=Profile();changed.Name="New stock";Assert.False(changed.MatchesPublished(original));
+    }
+
+    [Fact]
     public void IndependentSelectionCreatesSnapshotWithoutJobOrRecipient()
     {
         var profile = Profile();

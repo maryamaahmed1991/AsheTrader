@@ -11,6 +11,22 @@ public sealed class FriendSupplyProfile
     public List<FriendSupplyItem> Items { get; set; } = [];
     public TravelLocation Meeting { get; set; } = new();
 
+    public bool MatchesPublished(SavedTransferJob? template)
+    {
+        if(template==null||Name.Trim()!=template.Definition.Name.Trim())return false;
+        var definitions=template.ItemDefinitions.ToArray();
+        if(Items.Count!=definitions.Length)return false;
+        if(Items.Any(i=>i.Providers?.Any(id=>!Providers.Contains(id))==true))return false;
+        foreach(var item in Items)
+        {
+            var definition=definitions.SingleOrDefault(d=>d.ItemId==item.ItemId&&d.HighQuality==item.HighQuality);
+            if(definition==null||!(item.Providers??Providers).ToHashSet().SetEquals(definition.Sources))return false;
+        }
+        var location=template.Meeting;
+        return Meeting.WorldId==location.WorldId&&Meeting.TerritoryId==location.TerritoryId&&Meeting.AetheryteId==location.AetheryteId
+            &&Meeting.X==location.X&&Meeting.Y==location.Y&&Meeting.Z==location.Z;
+    }
+
     public static FriendSupplyProfile FromLegacy(SavedTransferJob? template)
     {
         if (template == null) return new();

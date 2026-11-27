@@ -14,106 +14,31 @@ internal sealed partial class StorePanel
     private readonly Dictionary<(uint,bool),int> friendCart=[];
     private bool confirmFriendRequest;
     private (string Reader,string Source,bool Enable)? pendingGrant;
-    private void DrawFriendTransfers()
-    {
-        var service=plugin.Friends;
-        ImGui.TextWrapped(service.Status);
-        if(service.Error.Length>0)UiTone.Wrapped(UiTone.Warning,service.Error);
-        if(service.NeedsReconnect&&ImGui.Button("Reconnect saved delivery"))plugin.QueueAction(service.Reconnect);
-        if(service.HasPendingRequest&&!service.Busy&&ImGui.Button("Check / clear unsubmitted request"))plugin.QueueAction(service.ClearUnsubmittedRequest);
-        if(service.Active is {} active)
-        {
-            TraderStyle.Badge(active.State.ToUpperInvariant(),TraderStyle.Gold);
-            ImGui.SameLine();ImGui.TextUnformatted($"To {active.Recipient.Name}@{active.Recipient.World}");
-            ImGui.TextWrapped("This request reserves its stock. An active delivery uses this PC until it finishes; your saved trusted-PC pairing is retained.");
-            if(active.State=="queued"&&ImGui.Button("Cancel queued request"))plugin.QueueAction(()=>service.Cancel(active));
-            if(active.State=="active"&&service.Supplying)
-            {
-                ImGui.TextWrapped(plugin.Workflow.Status);
-                if(plugin.Workflow.Run is {Paused:true,Step:not CoordinatorStep.Finished}&&ImGui.Button("Resume delivery / reconcile"))plugin.QueueAction(plugin.Workflow.Resume);
-                ImGui.SameLine();if(ImGui.Button("End delivery safely"))plugin.QueueAction(()=>{plugin.Workflow.Pause("Ending friend delivery.");plugin.Workflow.EndPausedJob();});
-            }
-            ImGui.Separator();
-        }
-        if(ImGui.BeginTabBar("FriendDeliveryTabs"))
-        {
-            if(ImGui.BeginTabItem("Request items")){DrawRequestItems();ImGui.EndTabItem();}
-            if(ImGui.BeginTabItem("Supply from this PC")){DrawFriendSupplier();ImGui.EndTabItem();}
-            if(plugin.Store.Owner!=null&&ImGui.BeginTabItem("Request permissions")){DrawFriendGrants();ImGui.EndTabItem();}
-            if(ImGui.BeginTabItem("Requests & receipts")){DrawFriendOrders();ImGui.EndTabItem();}
-            ImGui.EndTabBar();
-        }
-    }
-    private void DrawRequestItems()
-    {
-        var service=plugin.Friends;
-        TraderStyle.Section("Request a delivery","Only stock explicitly offered for requests is available here. Existing store-reader codes need the owner's request permission.");
-        ImGui.BeginDisabled(service.Busy||service.Active!=null);
-        if(ImGui.BeginCombo("Friend's store",service.SelectedAccess==null?"Select connected store":new Uri(service.SelectedAccess.Url).Host))
-        {
-            foreach(var access in plugin.Store.Readers)
-                if(ImGui.Selectable(new Uri(access.Url).Host)){friendCart.Clear();friendSource="";plugin.QueueAction(()=>service.Refresh(access));}
-            ImGui.EndCombo();
-        }
-        if(ImGui.Button("Refresh requestable stock"))plugin.QueueAction(()=>service.Refresh());
-        var offer=service.Offers.FirstOrDefault(o=>o.SourceId==friendSource);
-        if(ImGui.BeginCombo("Supplying PC",offer?.Label??"Choose a stock profile"))
-        {
-            foreach(var o in service.Offers)if(ImGui.Selectable($"{o.Label}##{o.SourceId}")){friendSource=o.SourceId;friendCart.Clear();}
-            ImGui.EndCombo();
-        }
-        var recipient=plugin.Config.Characters.FirstOrDefault(c=>c.ContentId==friendRecipient);
-        if(ImGui.Button("Refresh AutoRetainer characters"))plugin.QueueAction(plugin.Workflow.RefreshLocalRoster);
-        if(ImGui.BeginCombo("Deliver to",recipient==null?"Select your character":$"{recipient.Name}@{recipient.World}"))
-        {
-            foreach(var c in plugin.Config.Characters.OrderBy(c=>c.World).ThenBy(c=>c.Name))
-                if(ImGui.Selectable($"{c.Name}@{c.World}##friendRecipient{c.ContentId}"))friendRecipient=c.ContentId;
-            ImGui.EndCombo();
-        }
-        if(offer!=null)
-        {
-            ImGui.TextDisabled($"Stock published {offer.UpdatedAt.ToLocalTime():g}. Reserved stock is excluded.");
-            if(ImGui.BeginTable("FriendStock",3,ImGuiTableFlags.RowBg|ImGuiTableFlags.BordersInnerV|ImGuiTableFlags.SizingStretchProp))
-            {
-                ImGui.TableSetupColumn("Item",ImGuiTableColumnFlags.WidthStretch,2);
-                ImGui.TableSetupColumn("Available");ImGui.TableSetupColumn("Request");ImGui.TableHeadersRow();
-                foreach(var item in offer.Items.OrderBy(x=>x.Name).ThenBy(x=>x.HighQuality))
-                {
-                    var key=(item.ItemId,item.HighQuality);var amount=friendCart.GetValueOrDefault(key);
-                    ImGui.TableNextRow();ImGui.TableNextColumn();ImGui.TextUnformatted(item.Name+(item.HighQuality?" HQ":""));
-                    ImGui.TableNextColumn();ImGui.TextColored(item.Quantity>0?UiTone.Good:TraderStyle.Muted,$"{item.Quantity:N0}");
-                    ImGui.TableNextColumn();ImGui.SetNextItemWidth(-1);
-                    if(ImGui.InputInt($"##friendQty{item.ItemId}{item.HighQuality}",ref amount))friendCart[key]=Math.Clamp(amount,0,(int)Math.Min(item.Quantity,1_000_000_000));
-                }
-                ImGui.EndTable();
-            }
-            ImGui.BeginDisabled(recipient==null||!friendCart.Any(c=>c.Value>0));
-            if(TraderStyle.PrimaryButton("Continue",new Vector2(130,32)))confirmFriendRequest=true;
-            ImGui.EndDisabled();
-            if(confirmFriendRequest)
-            {
-                ImGui.TextWrapped("Reserve these quantities and allow this delivery to log into the selected character, pause AR Multi, travel, receive the items and deposit them to retainers as needed? AR Multi will be enabled after completion. Both games must remain running.");
-                if(ImGui.Button("Request & receive"))
-                {
-                    var lines=offer.Items.Where(i=>friendCart.GetValueOrDefault((i.ItemId,i.HighQuality))>0).Select(i=>i with {Quantity=(ulong)friendCart[(i.ItemId,i.HighQuality)]}).ToArray();
-                    var selected=friendRecipient;var chosen=offer;confirmFriendRequest=false;
-                    plugin.QueueAction(()=>service.Request(chosen,selected,lines));
-                }
-                ImGui.SameLine();if(ImGui.Button("Back##friendRequest"))confirmFriendRequest=false;
-            }
-        }
-        else ImGui.TextWrapped("No profile selected. Ask the owner to publish requestable stock and grant your invitation access to its supplying PC.");
-        ImGui.EndDisabled();
-    }
     private void DrawFriendSupplier()
     {
         var service=plugin.Friends;
         var profile=service.Supply;
         var changed=false;
-        TraderStyle.Section("Supply from this PC","Choose who supplies items and what friends may request. No transfer job is needed.");
-        if(plugin.Store.Publisher==null)UiTone.Wrapped(UiTone.Warning,"Connect a publisher code in Access & invitations to supply items from this PC.");
+        TraderStyle.Section("Items friends can request","Choose providers, choose items, then publish your stock.");
+        TraderStyle.Badge(!service.HasPublishedSupply?"NOT PUBLISHED":service.SupplyHasChanges?"UNPUBLISHED CHANGES":"PUBLISHED",service.SupplyHasChanges?TraderStyle.Gold:TraderStyle.Accent);
+        ImGui.SameLine();StoreHelp("SupplyStates","Draft, published, and accepting requests","Your selections are saved locally as a draft. Publishing reads Allagan Tools and replaces the offered items and counts. Existing published selections remain available until you publish again. Allow deliveries controls whether this PC starts permitted requests while idle; it does not remove stock or grant friends access. Manage those permissions in People & PCs. Refresh published stock after deliveries or other inventory changes.");
+        if(service.HasPublishedSupply)ImGui.TextDisabled($"Published: {service.ProfileName}"+(service.PublishedAt is {} at?$" · {at.ToLocalTime():g}":""));
+        if(service.Busy)ImGui.TextWrapped(service.Status);
         ImGui.BeginDisabled(service.Busy||service.Active!=null||plugin.Store.Publisher==null);
+        if(ImGui.BeginTable("SupplySteps",3,ImGuiTableFlags.SizingStretchSame))
+        {
+            string[] steps=["1  Providers","2  Items","3  Publish"];
+            for(var i=0;i<steps.Length;i++)
+            {
+                ImGui.TableNextColumn();
+                if(supplyStep==i?TraderStyle.PrimaryButton(steps[i],new(-1,32)):TraderStyle.SecondaryButton(steps[i],new(-1,32)))supplyStep=i;
+            }
+            ImGui.EndTable();
+        }
+        if(supplyStep==0)
+        {
         var name=profile.Name;
+        ImGui.TextUnformatted("Name your supplies");
         ImGui.SetNextItemWidth(-1);
         if(ImGui.InputTextWithHint("##supplyName","Name shown to friends",ref name,81)){profile.Name=name;changed=true;}
         if(TraderStyle.BeginCard("SupplyProviders"))
@@ -148,6 +73,9 @@ internal sealed partial class StorePanel
             }
         }
         TraderStyle.EndCard();
+        }
+        if(supplyStep==1)
+        {
         if(TraderStyle.BeginCard("SupplyItems"))
         {
             TraderStyle.Section("2. Items to provide",$"{profile.Items.Count}/50 selected · normal and HQ stock are separate");
@@ -206,9 +134,13 @@ internal sealed partial class StorePanel
             if(profile.Items.Count==0)ImGui.TextDisabled("Search above to select your first item.");
         }
         TraderStyle.EndCard();
+        }
+        if(supplyStep==2)
+        {
+        ImGui.TextWrapped($"{profile.Providers.Count} provider characters · {profile.Items.Count} item / quality selections");
         if(TraderStyle.BeginCard("SupplyMeeting"))
         {
-            TraderStyle.Section("3. Meeting point","One outdoor location; the world is chosen automatically for each delivery.");
+            TraderStyle.Section("Meeting point","One outdoor location; the world is chosen automatically for each delivery.");
             if(profile.Meeting.TerritoryId!=0)
             {
                 var place=Plugin.DataManager.GetExcelSheet<TerritoryType>().GetRowOrDefault(profile.Meeting.TerritoryId)?.PlaceName.Value.Name.ToString();
@@ -230,60 +162,29 @@ internal sealed partial class StorePanel
         string? invalid=null;
         try{_ = profile.ToTemplate(plugin.Config.Characters.Select(c=>c.ContentId));}catch(InvalidOperationException ex){invalid=ex.Message;}
         if(invalid!=null)UiTone.Wrapped(UiTone.Warning,invalid);
-        if(changed)plugin.QueueAction(service.SaveSupplyDraft);
         ImGui.BeginDisabled(invalid!=null);
-        if(TraderStyle.PrimaryButton("Read cache & publish requestable stock"))plugin.QueueAction(service.PublishSupply);
+        if(TraderStyle.PrimaryButton(service.HasPublishedSupply?"Refresh & publish stock":"Publish delivery stock"))plugin.QueueAction(service.PublishSupply);
         ImGui.EndDisabled();
-        ImGui.TextDisabled($"Published profile: {service.ProfileName}");
-        var enabled=service.Enabled;if(ImGui.Checkbox("Accept permitted friend requests automatically on this PC",ref enabled)){var value=enabled;plugin.QueueAction(()=>service.SetEnabled(value));}
-        ImGui.EndDisabled();
-        ImGui.TextWrapped("Edits are saved as a draft. Publish to replace the offered selection; the existing published profile stays active until then. Stock comes from selected providers' carried bags and retainers. Refresh after inventory changes; outstanding reservations prevent replacement.");
-    }
-    private void DrawFriendGrants()
-    {
-        var service=plugin.Friends;
-        TraderStyle.Section("Who may request deliveries","Viewing stock stays read-only unless you explicitly grant delivery requests for a supplying PC.");
-        ImGui.BeginDisabled(service.Busy||plugin.Store.Busy);
-        if(ImGui.Button("Refresh invitations & permissions")){plugin.QueueAction(plugin.Store.RefreshManagement);plugin.QueueAction(()=>service.Refresh());}
-        if(plugin.Store.Management is {} management)
-        {
-            foreach(var reader in management.Keys.Where(k=>k.Role=="reader"))
-            {
-                ImGui.TextColored(TraderStyle.Accent,reader.Label);
-                foreach(var source in management.Sources)
-                {
-                    var enabled=service.Grants.Any(g=>g.ReaderId==reader.Id&&g.SourceId==source.Id);
-                    if(ImGui.Checkbox($"May request from {source.Label}##{reader.Id}{source.Id}",ref enabled))pendingGrant=(reader.Id,source.Id,enabled);
-                }
-            }
+        ImGui.TextWrapped("Publishes carried and retainer stock from Allagan Tools. Existing reservations must finish or be cancelled before replacing stock.");
         }
-        if(pendingGrant is {} grant)
+        if(changed)plugin.QueueAction(service.SaveSupplyDraft);
+        ImGui.Spacing();
+        if(supplyStep>0&&TraderStyle.SecondaryButton("Back##supplyStep"))supplyStep--;
+        if(supplyStep<2)
         {
-            UiTone.Wrapped(UiTone.Warning,grant.Enable?"This invitation will be allowed to reserve offered stock and trigger automatic deliveries from this PC when enabled. Anyone holding the invitation can use that permission.":"Remove request access? Queued requests are cancelled. An active delivery stops communicating and must be reconciled before releasing its reservation.");
-            if(ImGui.Button("Apply permission")){pendingGrant=null;plugin.QueueAction(()=>service.SetGrant(grant.Reader,grant.Source,grant.Enable));}
-            ImGui.SameLine();if(ImGui.Button("Cancel##friendGrant"))pendingGrant=null;
+            if(supplyStep>0)ImGui.SameLine();
+            ImGui.BeginDisabled(supplyStep==0?profile.Providers.Count==0:profile.Items.Count==0);
+            if(TraderStyle.PrimaryButton(supplyStep==0?"Next: choose items":"Next: publish"))supplyStep++;
+            ImGui.EndDisabled();
+        }
+        if(service.HasPublishedSupply)
+        {
+            ImGui.Separator();
+            var enabled=service.Enabled;
+            if(ImGui.Checkbox("Allow deliveries while this PC is idle",ref enabled)){var value=enabled;plugin.QueueAction(()=>service.SetEnabled(value));}
+            ImGui.TextDisabled(enabled?"Permitted requests will start when this PC is ready.":"Automatic deliveries are off. Published stock is still visible.");
         }
         ImGui.EndDisabled();
-    }
-    private void DrawFriendOrders()
-    {
-        var service=plugin.Friends;
-        ImGui.BeginDisabled(service.Busy);
-        if(ImGui.Button("Refresh my requests"))plugin.QueueAction(()=>service.Refresh());
-        if(plugin.Store.Publisher!=null){ImGui.SameLine();if(ImGui.Button("Refresh incoming requests"))plugin.QueueAction(service.RefreshIncoming);}
-        ImGui.EndDisabled();
-        foreach(var order in service.Orders)
-        {
-            if(ImGui.CollapsingHeader($"{order.CreatedAt.ToLocalTime():g} · {order.Recipient.Name} · {order.State}##{order.Id}"))
-            {
-                foreach(var i in order.Items)ImGui.TextUnformatted($"{i.Name}{(i.HighQuality?" HQ":"")} × {i.Quantity:N0}");
-                if(order.State=="queued"&&ImGui.Button($"Cancel request##{order.Id}"))plugin.QueueAction(()=>service.Cancel(order));
-                if(order.Receipt is {} json)
-                {
-                    var receipt=Newtonsoft.Json.JsonConvert.DeserializeObject<TradeReceipt>(json);
-                    if(receipt!=null){ImGui.TextWrapped(receipt.Outcome);foreach(var item in receipt.Items)ImGui.TextUnformatted($"Item {item.ItemId}: delivered {item.Delivered:N0}; shortfall {item.Shortage:N0}");}
-                }
-            }
-        }
+        if(plugin.Store.Owner!=null&&TraderStyle.SecondaryButton("Manage who can request"))OpenStorePage(StorePage.People);
     }
 }
