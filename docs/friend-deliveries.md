@@ -1,16 +1,24 @@
 # Friend-triggered deliveries
 
-Version 0.7.0.0 adds **Stores → Friend deliveries**. A friend can reserve explicitly offered items and request delivery to one of their AutoRetainer characters. Both PCs must run this version. Internet access is sufficient; this uses a temporary authenticated HTTPS mailbox, not LAN pairing or port forwarding.
+**Stores → Friend deliveries** lets a friend reserve explicitly offered items and request delivery to one of their AutoRetainer characters. Update both PCs to 0.7.1.0 or later. Internet access is sufficient; this uses a temporary authenticated HTTPS mailbox, not LAN pairing or port forwarding.
+
+## Invite your friend
+
+1. On the PC with your owner credential, open **Stores → Access & invitations**. Enter a label such as your friend's name, click **Invite a friend**, then **Copy new access code**. Send that reader code privately to that friend. Do not share your owner or publisher code.
+2. Your friend installs Ashe's Trader using the same custom repository URL, updates it, and opens **Stores → Access & invitations**. They paste the code and click **Connect**. They can now read your published catalogue under **Browse stores**.
+3. On your PC, open **Friend deliveries → Request permissions → Refresh invitations & permissions**. Under your friend's invitation, select **May request from** the appropriate supplying PC, then click **Apply permission**. This is separate from read-only catalogue access.
+
+The friend needs AutoRetainer, Allagan Tools, Lifestream and vnavmesh installed and working for automatic delivery, travel and retainer deposits. Refresh their AutoRetainer roster so the intended receiving character is listed. Keep its cached inventory available in Allagan Tools, and use a recipient that can reach the selected meeting territory. No owner credential, publisher credential, Cloudflare account, or LAN pairing is needed on their PC. Both games must be running for delivery; catalogue viewing works while the supplier is offline.
 
 ## Supplying PC
 
 1. Keep this PC's existing publisher credential in Stores. Each supplying PC needs its own publisher credential.
-2. Save a transfer job containing the items, provider characters and meeting point you want to offer. In **Friend deliveries → Supply from this PC**, select it and choose **Read cache & publish requestable stock**.
-3. Only providers on this PC are included. Each item's provider selection is respected separately. Allagan Tools supplies the stock estimate from carried inventory and retainer bags; no character login is required for publication. Missing caches block publication.
+2. In **Friend deliveries → Supply from this PC**, name the supply profile and select provider characters. **Select All** and **Select None** apply to this PC's roster; the filter helps find individual characters or worlds.
+3. Search for the items to provide and select Normal or HQ. Each item uses all selected providers by default. Expand an item to choose a smaller set of providers for that item. Stand at an outdoor meeting spot with a main aetheryte and click **Record my current location**, then **Read cache & publish requestable stock**. The meeting world is chosen automatically during delivery. Allagan Tools supplies stock from carried inventory and retainer bags; no character login is required for publication. Missing caches block publication.
 4. On a PC with the owner credential, open **Request permissions**, refresh invitations and permissions, and grant a specific reader invitation access to the desired supplying PC. Existing readers remain read-only until explicitly granted access.
 5. Enable **Accept permitted friend requests automatically on this PC**. Publication alone does not enable game actions. Keep the game and plugin running.
 
-The saved job is copied into a delivery profile. Later edits to the original saved job do not change it. Publish the profile again to change its item/provider selections. Requests with existing reservations must finish or be cancelled before replacing stock. Supply settings are independent on each PC.
+No saved transfer job or recipient is needed to configure supplies. Draft selections are saved independently and do not change the published profile until you publish again. Existing 0.7.0.0 profiles carry over, including item-specific providers and meeting points. Requests with existing reservations must finish or be cancelled before replacing stock. Supply settings are independent on each PC. Publish again after inventory changes or a delivery to refresh available counts.
 
 ## Friend's PC
 

@@ -208,7 +208,7 @@ internal sealed partial class StorePanel(Plugin plugin)
                 ImGui.Separator();
                 foreach(var key in management.Keys)
                 {
-                    ImGui.TextUnformatted($"{key.Label} · {(key.Role=="reader"?"Read only":"PC publisher")}");ImGui.SameLine();
+                    ImGui.TextUnformatted($"{key.Label} · {(key.Role=="reader"?"Friend invitation":"PC publisher")}");ImGui.SameLine();
                     ImGui.BeginDisabled(service.Busy);if(ImGui.SmallButton($"Revoke…##{key.Id}"))revoke=key.Id;ImGui.EndDisabled();
                     if(revoke==key.Id)
                     {

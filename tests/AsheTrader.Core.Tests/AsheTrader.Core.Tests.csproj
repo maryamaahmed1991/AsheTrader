@@ -27,6 +27,7 @@
     <Compile Include="../../src/AsheTrader/Workflow/ScheduledPreparation.cs" Link="Production/ScheduledPreparation.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/TradeHistory.cs" Link="Production/TradeHistory.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/FriendTransferPolicy.cs" Link="Production/FriendTransferPolicy.cs" />
+    <Compile Include="../../src/AsheTrader/Workflow/FriendSupplyProfile.cs" Link="Production/FriendSupplyProfile.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/TransferScheduleModels.cs" Link="Production/TransferScheduleModels.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/TransferScheduleQueue.cs" Link="Production/TransferScheduleQueue.cs" />
     <Compile Include="../../src/AsheTrader/Workflow/TransferCoordinator.cs" Link="Production/TransferCoordinator.cs" />

@@ -8,6 +8,7 @@ namespace AsheTrader.Store;
 
 internal sealed class FriendSettings
 {
+    public FriendSupplyProfile? Supply {get;set;}
     public SavedTransferJob? Template {get;set;}
     public bool Enabled {get;set;}
     public FriendOrder? Active {get;set;}
@@ -48,6 +49,7 @@ internal sealed class FriendTransferService : IDisposable
     public bool Supplying=>settings.Supplying;
     public bool AcceptingCommands=>armed&&settings.Active is {State:"active"};
     public string ProfileName=>settings.Template?.Definition.Name??"No delivery profile";
+    public FriendSupplyProfile Supply => settings.Supply ??= FriendSupplyProfile.FromLegacy(settings.Template);
     public bool NeedsReconnect=>(settings.Active!=null||settings.Draft!=null)&&!armed;
     public bool HasPendingRequest=>settings.Draft!=null;
     public StoreAccess? SelectedAccess=>browsing;
@@ -99,14 +101,32 @@ internal sealed class FriendTransferService : IDisposable
         }
         if(enabled&&settings.Template==null)throw new InvalidOperationException("Publish a delivery profile first.");settings.Enabled=enabled;Save();nextPoll=0;Status=enabled?"This PC will accept permitted requests when idle.":"Automatic friend deliveries paused. Queued stock remains reserved.";
     }
-    public void PublishProfile(SavedTransferJob template)
+    public void SaveSupplyDraft()
+    {
+        Save();
+        Status="Supply selection saved locally. Publish it when ready to update requestable stock.";
+    }
+    public void CaptureSupplyMeeting()
+    {
+        if(Busy||settings.Active!=null)throw new InvalidOperationException("Finish the active request before changing its meeting point.");
+        if(!Workflow.Native.GameWorkflowExecutor.TryCaptureCurrentLocation(out var location,out var reason)||location==null)
+            throw new InvalidOperationException(reason);
+        if(location.AetheryteId==0)throw new InvalidOperationException("Record an outdoor meeting territory with a main aetheryte.");
+        Supply.Meeting=location;SaveSupplyDraft();
+    }
+    public void PublishSupply()
+    {
+        Save();
+        PublishProfile(Supply.ToTemplate(plugin.Config.Characters.Select(c=>c.ContentId)));
+    }
+    private void PublishProfile(SavedTransferJob template)
     {
         if(Busy||settings.Active!=null)throw new InvalidOperationException("Finish the active request first.");
         var publisher=plugin.Store.Publisher??throw new InvalidOperationException("Authorize this PC as a store publisher first.");
         var copy=JsonConvert.DeserializeObject<SavedTransferJob>(JsonConvert.SerializeObject(template))!;
         var local=plugin.Config.Characters.Select(c=>c.ContentId).ToHashSet();
         foreach(var d in copy.ItemDefinitions){d.Sources=d.Sources.Where(local.Contains).Distinct().ToList();if(d.Sources.Count==0)throw new InvalidOperationException("Every profile item must have a provider on this PC.");}
-        if(copy.ItemDefinitions.Count()>50||copy.Meeting.AetheryteId==0||copy.Meeting.TerritoryId==0)throw new InvalidOperationException("Choose a saved job with a meeting point and at most 50 items.");
+        if(copy.ItemDefinitions.Count()>50||copy.Meeting.AetheryteId==0||copy.Meeting.TerritoryId==0)throw new InvalidOperationException("Choose a meeting point and at most 50 items.");
         settings.Enabled=false;Save();
         Start(async()=>{var existing=await api.Offer(publisher,lifetime.Token);return ()=>{publishing=copy;publishRevision=existing?.Revision??0;publishIndex=0;publishItems.Clear();BeginCache();};});
     }
