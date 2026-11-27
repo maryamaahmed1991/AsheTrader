@@ -27,6 +27,14 @@ This is a development build with automated coverage for planning, journals, LAN 
 - Import saved Lifestream houses automatically, register other houses and choose individual fuel buyers without requiring the other PC to be paired.
 - Preserve the local trade-list mode and existing transfer settings.
 
+## Version 0.6.5.0
+
+**Schedules** runs a snapshot of a saved transfer job once, daily, or weekly in a chosen time zone. Each due occurrence is durably claimed before starting. The queue waits for both updated, authorized PCs and existing work; it pauses AutoRetainer Multi Mode on both PCs and waits for current AR work to finish before inventory preparation. Normal completion, including settled shortages, uses the existing AR completion handoff on both PCs. Interrupted runs remain paused after reload. Enabled future schedules survive reload; explicit stops/errors suspend the schedule queue. Missed starts expire after the configured catch-up window rather than replaying a backlog.
+
+**Past Trades** stores coordinator-local receipts for completed or safely ended transfers. Expand a receipt for requested/planned/delivered amounts, per-recipient deliveries, relay hops, retainer pickups/deposits, timestamps and interruption notes. Only committed final legs contribute to delivered totals. Separate run identities prevent repeated uses of one saved job from colliding; archival is idempotent across reloads. Discovery-only scans are excluded. Existing history from replaced older journals cannot be reconstructed.
+
+Both PCs must update for scheduling. See [scheduling and Past Trades](docs/transfer-scheduling.md) for configuration and a small live test. Friend-triggered transfers are a later phase; catalogue permissions and networking are unchanged.
+
 ## Version 0.6.4.6
 
 Saddlebag opening now waits for stable interaction readiness after login and retries an unacknowledged open request automatically. This fixes an inn-login race where a request just before the cutscene was lost and the character stood still for ninety seconds. Cutscenes still play naturally. A visible window is never toggled closed by a retry, silent inventory checks remain immediate, and retries only open the window: cargo movements retain their existing verification. Diagnostics include the opening attempts; five unsuccessful attempts report a persistent access problem.

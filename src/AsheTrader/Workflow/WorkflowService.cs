@@ -30,6 +30,10 @@ public sealed partial class WorkflowService : IDisposable
     private bool journalHealthy = true;
     private readonly Dictionary<Guid, (Guid Round, uint Quantity, long Since)> tradeTallySamples = [];
     private string error = "";
+    private long arPauseStarted;
+    private long? arIdleSince;
+    public TradeHistoryStore TradeHistory { get; }
+    public string TradeHistoryError { get; private set; } = "";
     public CoordinatorRun? Run { get; private set; }
     public PeerRoster? RemoteRoster { get; private set; }
     public string RosterStatus { get; private set; } = "Import characters from AutoRetainer to get started.";
@@ -38,7 +42,7 @@ public sealed partial class WorkflowService : IDisposable
     public bool IsHost => host;
     public bool Busy => activeWorker != null || executor.IsBusy || Run is { Paused: false, Step: not CoordinatorStep.Finished };
     public bool RunningJob => Run is { Paused: false, Step: not CoordinatorStep.Finished };
-    public bool ExpectsLogout => activeWorker?.Command.Kind == WorkerCommandKind.Game
+    public bool ExpectsLogout => activeWorker?.Command.Kind == WorkerCommandKind.PauseAutoRetainer || activeWorker?.Command.Kind == WorkerCommandKind.Game
         && activeWorker.Command.Operation.Kind is not (GameOperationKind.Inspect or GameOperationKind.ReadCachedInventory);
     public string ConnectionStatus => Connected ? peer.Status : HasTrustedPeer && Settings.AutoConnect && !autoConnectionSuppressed
         ? "Reconnecting to your trusted PC… " + deviceStatus : peer.Status;
@@ -56,6 +60,7 @@ public sealed partial class WorkflowService : IDisposable
     public WorkflowService(Plugin plugin)
     {
         this.plugin = plugin;
+        TradeHistory = new(Path.Combine(Plugin.PluginInterface.ConfigDirectory.FullName, "past-trades.json"));
         executor.Diagnostic = RecordDiagnostic;
         workerFile = new(Path.Combine(Plugin.PluginInterface.ConfigDirectory.FullName, "worker-journal.json"));
         runFile = new(Path.Combine(Plugin.PluginInterface.ConfigDirectory.FullName, "transfer-job.json"));
@@ -79,6 +84,8 @@ public sealed partial class WorkflowService : IDisposable
         }
         catch (Exception ex) { journalHealthy = false; error = $"Journal could not be loaded: {ex.Message}"; }
         InitializeTrustedPairing();
+        InitializeSchedules();
+        if (journalHealthy && Run != null) SaveRun();
     }
 
     public void Host()
@@ -207,7 +214,7 @@ public sealed partial class WorkflowService : IDisposable
 
     public PeerRoster LocalRoster() => new()
     {
-        ProtocolVersion = 4,
+        ProtocolVersion = 5,
         PeerId = Settings.PeerId, Name = Settings.PeerName, ControlEnabled = host || Settings.AllowRemoteControl,
         Characters = plugin.Config.Characters.Select(x => new CharacterProfile
         {
@@ -252,7 +259,7 @@ public sealed partial class WorkflowService : IDisposable
             {
                 heartbeatAt = now + 1000;
                 Send("heartbeat", new { });
-                if (RemoteRoster?.ProtocolVersion >= 2) Send("device-ready", new DeviceReadiness(LocalReadyForJob));
+                if (RemoteRoster?.ProtocolVersion >= 2) Send("device-ready", new DeviceReadiness(LocalReadyForJob, Run is { Step: not CoordinatorStep.Finished }));
             }
             SyncItemSearchConnection();
             UpdateInventorySync(now);
@@ -264,6 +271,7 @@ public sealed partial class WorkflowService : IDisposable
             if (Connected && now - peerSeenAt > 15_000 && Busy) Pause("Peer heartbeat timed out.");
             UpdateItemSearch();
             UpdateWaitingJob();
+            UpdateScheduledArPause(now);
             executor.Update();
             while (executor.TryTakeResult(out var result))
             {
@@ -276,6 +284,7 @@ public sealed partial class WorkflowService : IDisposable
             if (RunningJob) AdvanceCoordinator();
             if (wasRunning && Run is { Step: CoordinatorStep.Finished, CompletedNormally: true }) BeginCompletionHandoff();
             UpdateCompletionHandoff(now);
+            UpdateSchedules();
         }
         catch (Exception ex)
         {
@@ -356,9 +365,9 @@ public sealed partial class WorkflowService : IDisposable
             || command.Operation.CharacterId == 0
             || command.Operation.Kind == GameOperationKind.ReadCachedInventory && command.Kind != WorkerCommandKind.Game)
             throw new InvalidDataException("Invalid worker command.");
-        if (command.Kind is WorkerCommandKind.Game or WorkerCommandKind.EnableAutoRetainer && MultiItemTradeEvidence.IsVector(command))
+        if (command.Kind is WorkerCommandKind.Game or WorkerCommandKind.EnableAutoRetainer or WorkerCommandKind.PauseAutoRetainer && MultiItemTradeEvidence.IsVector(command))
             throw new InvalidDataException("Native storage/travel commands cannot contain a trade item batch.");
-        if (command.Kind is not (WorkerCommandKind.Game or WorkerCommandKind.EnableAutoRetainer)) _ = MultiItemTradeEvidence.Lines(command);
+        if (command.Kind is not (WorkerCommandKind.Game or WorkerCommandKind.EnableAutoRetainer or WorkerCommandKind.PauseAutoRetainer)) _ = MultiItemTradeEvidence.Lines(command);
         var fingerprint = JsonConvert.SerializeObject(command);
         if (workerRecords.TryGetValue(command.Id, out var previous))
         {
@@ -383,7 +392,7 @@ public sealed partial class WorkflowService : IDisposable
         command.Operation.World = character.World;
         if (!MultiItemTradeEvidence.IsVector(command) && command.Operation.ItemId <= 1) throw new InvalidOperationException("Select a tradable inventory item.");
         var ar = plugin.AutoRetainer.GetStatus();
-        if (command.Operation.Kind != GameOperationKind.ReadCachedInventory && ar.Ready && (ar.Busy != false || ar.MultiModeEnabled != false))
+        if (command.Kind != WorkerCommandKind.PauseAutoRetainer && command.Operation.Kind != GameOperationKind.ReadCachedInventory && ar.Ready && (ar.Busy != false || ar.MultiModeEnabled != false))
         { Reply(caller, new() { CommandId = command.Id, Error = "AutoRetainer must be idle with multi-mode paused." }); return; }
         activeReplyPeer = caller;
         receiverReadySent = false;
@@ -394,6 +403,13 @@ public sealed partial class WorkflowService : IDisposable
         error = "";
         try
         {
+            if (command.Kind == WorkerCommandKind.PauseAutoRetainer)
+            {
+                plugin.CompletionHandoff.Cancel();
+                arPauseStarted = Environment.TickCount64; arIdleSince = null;
+                UpdateScheduledArPause(arPauseStarted);
+                return;
+            }
             if (command.Kind == WorkerCommandKind.Game)
             {
                 if (command.Operation.Kind == GameOperationKind.ReadCachedInventory)
@@ -542,11 +558,20 @@ public sealed partial class WorkflowService : IDisposable
 
     public void Pause(string reason, bool notify = true)
     {
+        try { SuspendSchedules(reason); }
+        catch (Exception e) { Plugin.Log.Error(e, "Could not persist schedule suspension; gameplay will still stop"); }
+        if (activeWorker?.Command.Kind == WorkerCommandKind.PauseAutoRetainer)
+            CompleteWorker(new() { CommandId = activeWorker.Command.Id, Error = reason });
         trustedRun.Cancel();
         CancelCompletionHandoff();
         plugin.CompletionHandoff?.Cancel();
         error = reason;
-        if (Run != null) { Run.Paused = true; Run.Status = reason; TrySaveRun(); }
+        if (Run != null)
+        {
+            if (Run.Step != CoordinatorStep.Finished && Run.HistoryNotes.LastOrDefault()?.Message != reason)
+                Run.HistoryNotes.Add(new(DateTimeOffset.UtcNow, reason));
+            Run.Paused = true; Run.Status = reason; TrySaveRun();
+        }
         if (Plugin.Framework.IsInFrameworkUpdateThread && !Plugin.Framework.IsFrameworkUnloading) executor.Stop(reason);
         plugin.Trader.Stop();
         if (notify && Connected) { try { Send("pause", new { }); } catch { } }
@@ -667,8 +692,21 @@ public sealed partial class WorkflowService : IDisposable
     }
     private void SaveRun()
     {
+        if (Run is { Step: CoordinatorStep.Finished }) Run.EndedAt ??= DateTimeOffset.UtcNow;
         if (!runFile.TrySave(JsonConvert.SerializeObject(Run), out var failure))
         { journalHealthy = false; throw new IOException(failure); }
+        if (Run is { Step: CoordinatorStep.Finished, DiscoveryOnly: false })
+        {
+            try { TradeHistory.Record(TradeHistoryProjection.Create(Run)); }
+            catch (Exception e) { TradeHistoryError = e.Message; Plugin.Log.Warning(e, "Could not archive transfer history; current journal retained"); }
+        }
+    }
+    private void EnsurePreviousReceiptSaved()
+    {
+        if (Run is not { Step: CoordinatorStep.Finished, DiscoveryOnly: false }) return;
+        TradeHistory.Record(TradeHistoryProjection.Create(Run));
+        if (!TradeHistory.Records.Any(r => r.Id == Run.RunId))
+            throw new IOException("The previous job's receipt could not be archived. Its journal is retained; resolve the Past Trades storage error before starting another transfer. " + TradeHistory.Error);
     }
     private void TrySaveRun() { try { SaveRun(); } catch (Exception ex) { Plugin.Log.Error(ex, "Could not persist paused job"); journalHealthy = false; } }
     public void Dispose()

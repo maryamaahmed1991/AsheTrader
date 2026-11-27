@@ -11,15 +11,21 @@ public sealed partial class WorkflowService
     public void StartJob(SavedTransferJob job) => Start(job, false);
     public void ScanJob(SavedTransferJob job) => Start(job, true);
 
-    private void Start(SavedTransferJob job, bool discoveryOnly)
+    private void Start(SavedTransferJob job, bool discoveryOnly, Guid? scheduleOccurrence = null, string scheduleName = "")
     {
         RequireIdle();
         RequirePair();
+        EnsurePreviousReceiptSaved();
         if (Run is { Step: not CoordinatorStep.Finished }) throw new InvalidOperationException("Resume or end the existing paused job first.");
         ArgumentNullException.ThrowIfNull(job);
         if (job.Definition is null || job.AdditionalItems is null || job.AdditionalItems.Any(item => item is null))
             throw new ArgumentException("Every job item needs a complete transfer definition.", nameof(job));
         var saved = Clone(job);
+        if (scheduleOccurrence.HasValue)
+        {
+            if (RemoteRoster!.ProtocolVersion < 5) throw new InvalidOperationException("Update both PCs to use scheduled AR handoff.");
+            saved.EnableAutoRetainerAfterCompletion = true;
+        }
         if (!discoveryOnly && saved.EnableAutoRetainerAfterCompletion && RemoteRoster!.ProtocolVersion < 4)
             throw new InvalidOperationException("Update both PCs to use the AutoRetainer completion option.");
         var definitions = saved.ItemDefinitions.ToArray();
@@ -39,6 +45,11 @@ public sealed partial class WorkflowService
         Run = new() { Job = saved, VisitMode = !discoveryOnly && (definitions.Length > 1 || AllCharacters().Any(c => c.Character.UseSaddlebags && CanUseCargo(c.Character.ContentId))), DiscoveryOnly = discoveryOnly, DiscoveryOrder = DiscoveryCharacters(saved.Definition), Step = CoordinatorStep.DiscoverCache,
             Status = "Reading Allagan Tools inventories from both PCs…" };
         error = "";
+        Run.StartedAt = DateTimeOffset.UtcNow;
+        Run.ScheduleOccurrenceId = scheduleOccurrence;
+        Run.ScheduleName = scheduleName;
+        Run.CharacterLabels = AllCharacters().ToDictionary(c => c.Character.ContentId, c => $"{c.Character.Name}@{c.Character.World}");
+        if (scheduleOccurrence.HasValue) { Run.Step = CoordinatorStep.ScheduledStart; Run.Status = "Pausing AutoRetainer on both PCs and waiting for its current work to finish…"; }
         SaveRun();
     }
 
@@ -79,6 +90,8 @@ public sealed partial class WorkflowService
             // before any command for the next item can be issued.
             Run = new()
             {
+                RunId = run.RunId, StartedAt = run.StartedAt, ScheduleOccurrenceId = run.ScheduleOccurrenceId,
+                ScheduleName = run.ScheduleName, CharacterLabels = run.CharacterLabels, HistoryNotes = run.HistoryNotes,
                 Job = run.Job, DiscoveryOnly = run.DiscoveryOnly, ActiveItemIndex = nextIndex,
                 PreserveLegacyItemOrder = run.PreserveLegacyItemOrder,
                 ObservedWorlds = new(run.ObservedWorlds),
@@ -115,6 +128,12 @@ public sealed partial class WorkflowService
             throw new InvalidOperationException("Wait for the local operation to stop before resuming.");
         if (Run is not { Paused: true, Step: not CoordinatorStep.Finished }) return;
         error = "";
+        if (Run.Step == CoordinatorStep.ScheduledStart)
+        {
+            if (RemoteRoster!.ProtocolVersion < 5) throw new InvalidOperationException("Update both PCs before resuming scheduled AR preparation.");
+            // AR control is idempotent and moves no inventory. Fresh requests recheck both PCs.
+            Run.Pending.Clear(); Run.Paused = false; resendAt = 0; SaveRun(); return;
+        }
         if (Run.VisitMode && Run.VisitPlanningComplete)
         {
             ResumeVisitWorkflow();
@@ -530,6 +549,7 @@ public sealed partial class WorkflowService
             }
         }
         if (run.Paused) return;
+        if (run.Step == CoordinatorStep.ScheduledStart) { AdvanceScheduledStart(); return; }
         if (!run.VisitMode && !run.PreserveLegacyItemOrder && !run.DiscoveryOnly && (run.TotalItemCount > 1 || AllCharacters().Any(c => CanUseCargo(c.Character.ContentId)))
             && run.Step == CoordinatorStep.SelectLeg && run.Pending.Count == 0 && !run.TradeOperationId.HasValue)
         {

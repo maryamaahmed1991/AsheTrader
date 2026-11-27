@@ -28,7 +28,7 @@ public sealed class MainWindow : Window
     private int selectedPage;
     private IDisposable? theme;
     private static readonly string Version = typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "";
-    private static readonly string[] PageTitles = ["Connection", "Transfer jobs", "Review & run", "Activity", "Fuel & houses", "Advanced tools", "Item Search", "Private stores", "Utilities"];
+    private static readonly string[] PageTitles = ["Connection", "Transfer jobs", "Review & run", "Activity", "Fuel & houses", "Advanced tools", "Item Search", "Private stores", "Utilities", "Schedules", "Past Trades"];
     private static readonly string[] PageDescriptions =
     [
         "Connect your PCs and get your characters ready.",
@@ -40,6 +40,8 @@ public sealed class MainWindow : Window
         "Find your items across characters and connected PCs.",
         "Share selected stock with friends, even while you are offline.",
         "Small character tasks, managed in one local queue.",
+        "Run saved transfers once, daily or weekly.",
+        "Confirmed deliveries, storage totals and run receipts.",
     ];
     private static readonly string[] PageHelp =
     [
@@ -52,6 +54,8 @@ public sealed class MainWindow : Window
         "Search comma-separated names such as coke, ceruleum, sap; partial names work too. Your last search and sort order are remembered on this PC. Save list creates a named shortcut; choose one from Saved searches to run it again, or use Edit list to rename, update or delete it. Select a result to see its characters and retainers. Counts use Allagan Tools caches, including the paired PC when available; shared FC and housing storage are excluded.",
         "Connect your store in Access & invitations, then choose the items and characters to share. Preview your stock before publishing. Your friends can browse the last published catalogue while you are offline; your character and retainer names stay private.",
         "Choose characters and start the saddlebag unlock queue. AutoRetainer logs in each character; Questionable runs only My Feisty Little Chocobo. Completed and ineligible characters are skipped with a reason. Your existing Questionable priorities are preserved. Saved queues wait for Resume after reload.",
+        "Create schedules on the coordinator. Both games must be running and paired, with worker control enabled. Each schedule copies the saved job. AR Multi is paused on both PCs before work, then enabled after normal completion, including shortages. Explicit stops and errors pause schedules; Resume schedules enables future starts. Interrupted jobs still require Resume in Activity. Daily and weekly times follow the saved time zone; a spring clock gap moves to the first valid minute and a repeated autumn time runs once at the later occurrence.",
+        "Receipts are stored locally on the coordinator after a transfer completes or is safely ended. Final-delivery totals exclude relay hops. Expand a receipt for item, recipient, retainer pickup/deposit and movement details. Copy detailed receipt exports its recorded facts, including character identifiers. Earlier runs that have already been replaced cannot be reconstructed.",
     ];
 
     public MainWindow(Plugin plugin) : base("Ashe's Trader###AsheTraderMain")
@@ -100,6 +104,8 @@ public sealed class MainWindow : Window
             else if (selectedPage == 6) itemSearchPanel.Draw();
             else if (selectedPage == 7) storePanel.Draw();
             else if (selectedPage == 8) utilitiesPanel.Draw();
+            else if (selectedPage == 9) workflowPanel.DrawSchedules();
+            else if (selectedPage == 10) workflowPanel.DrawPastTrades();
             else if (selectedPage == 4)
             {
                 if (ImGui.BeginChild("FuelPage", new Vector2(0, 0))) fuelPanel.Draw();
@@ -131,9 +137,9 @@ public sealed class MainWindow : Window
         ImGui.Dummy(new Vector2(0, titleSize + TraderStyle.Px(10)));
         ImGui.EndGroup();
         ImGui.Spacing();
-        string[] labels = ["Connection", "Jobs", "Review & run", "Activity", "Fuel & houses", "Advanced", "Item Search", "Stores", "Utilities"];
-        string[] details = ["PCs & integrations", "Items & characters", "Ready to transfer", "Progress & diagnostics", "FC fuel queues", "Manual controls", "Across your inventories", "Your private catalogue", "Character tasks"];
-        int[] order = [0, 1, 2, 3, 6, 7, 4, 8, 5];
+        string[] labels = ["Connection", "Jobs", "Review & run", "Activity", "Fuel & houses", "Advanced", "Item Search", "Stores", "Utilities", "Schedules", "Past Trades"];
+        string[] details = ["PCs & integrations", "Items & characters", "Ready to transfer", "Progress & diagnostics", "FC fuel queues", "Manual controls", "Across your inventories", "Your private catalogue", "Character tasks", "Automatic transfer runs", "Delivery receipts"];
+        int[] order = [0, 1, 2, 9, 3, 10, 6, 7, 4, 8, 5];
         // The page list can scroll at small window sizes; run status stays reachable below it.
         if (ImGui.BeginChild("NavigationPages", new Vector2(0, Math.Max(TraderStyle.Px(130), ImGui.GetContentRegionAvail().Y - TraderStyle.Px(82)))))
         {

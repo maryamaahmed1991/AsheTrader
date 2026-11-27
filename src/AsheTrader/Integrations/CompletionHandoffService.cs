@@ -9,6 +9,7 @@ internal sealed class CompletionHandoffService(Plugin plugin)
     private readonly CompletionHandoff handoff = new();
     private string reported = "";
     public string Status => handoff.Status;
+    public bool Pending => handoff.Pending;
     public void Request(string task) => handoff.Request(Environment.TickCount64, task);
     public void Cancel() => handoff.Cancel("stopped by user.");
     public void Update()

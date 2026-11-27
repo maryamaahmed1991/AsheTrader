@@ -42,7 +42,7 @@ public sealed class PeerRoster
     public List<CharacterProfile> Characters { get; set; } = [];
 }
 
-public enum WorkerCommandKind { Game, PreviewBatch, ReceiveBatch, SendBatch, EnableAutoRetainer }
+public enum WorkerCommandKind { Game, PreviewBatch, ReceiveBatch, SendBatch, EnableAutoRetainer, PauseAutoRetainer }
 
 public sealed class WorkerCommand
 {
@@ -107,7 +107,7 @@ public enum CoordinatorStep
     InspectSender, Withdraw, InspectReceiver, Deposit, TravelSender, TravelReceiver,
     PreviewBatch, ArmReceiver, SendBatch, AwaitTrade, Finished,
     // Append new states so existing numeric journal states keep their meaning.
-    RelayLogin, RelayInspect, DepositPreviousItem, DiscoverCache, PrepareParticipants
+    RelayLogin, RelayInspect, DepositPreviousItem, DiscoverCache, PrepareParticipants, ScheduledStart
 }
 
 public enum ParticipantPreparationStage { Login, Inspect, Withdraw, Deposit, Travel, Ready }
@@ -132,6 +132,13 @@ public sealed class TransferPreparation
 
 public sealed class CoordinatorRun
 {
+    public Guid RunId { get; set; } = Guid.NewGuid();
+    public DateTimeOffset? StartedAt { get; set; }
+    public DateTimeOffset? EndedAt { get; set; }
+    public Guid? ScheduleOccurrenceId { get; set; }
+    public string ScheduleName { get; set; } = "";
+    public Dictionary<ulong, string> CharacterLabels { get; set; } = [];
+    public List<TradeHistoryNote> HistoryNotes { get; set; } = [];
     public bool CompletedNormally { get; set; }
     public List<PendingCommand> CompletionCommands { get; set; } = [];
     // Legacy journals leave this false and finish through their original recovery path.

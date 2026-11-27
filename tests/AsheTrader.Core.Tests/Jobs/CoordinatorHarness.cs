@@ -33,6 +33,10 @@ public sealed partial class WorkflowService
     private readonly bool journalHealthy = true;
     private bool HasAcceptedConnection => Connected;
     public Dictionary<Guid, int> AutoRetainerRequests { get; } = [];
+    public Dictionary<Guid, int> AutoRetainerPauseRequests { get; } = [];
+    public string? AutoRetainerPauseFailure { get; set; }
+    public void StartScheduledForTest(SavedTransferJob job, Guid occurrence) => Start(job, false, occurrence, "Weekly supplies");
+    public void RetryPendingForTest() { resendAt = 0; Tick(); }
     private readonly object? activeWorker = null;
     private string error = string.Empty;
     private WorkflowSettings Settings => settings;
@@ -97,7 +101,7 @@ public sealed partial class WorkflowService
         plugin.Config.Characters = initialCharacters.Where(character => character.PeerId == localPeer).Select(Profile).ToList();
         RemoteRoster = new()
         {
-            PeerId = remotePeer, Name = "Worker", ControlEnabled = true, ProtocolVersion = 4,
+            PeerId = remotePeer, Name = "Worker", ControlEnabled = true, ProtocolVersion = 5,
             Characters = initialCharacters.Where(character => character.PeerId == remotePeer).Select(Profile).ToList(),
         };
     }
@@ -184,6 +188,7 @@ public sealed partial class WorkflowService
     private static T Decode<T>(string json) => JsonConvert.DeserializeObject<T>(json)
         ?? throw new InvalidDataException("Missing test payload.");
     private void SaveRun() => SavedJson = JsonConvert.SerializeObject(Run);
+    private void EnsurePreviousReceiptSaved() { }
     private void Pause(string reason)
     {
         CancelCompletionHandoff();
@@ -248,6 +253,12 @@ public sealed partial class WorkflowService
         {
             AutoRetainerRequests[owner] = AutoRetainerRequests.GetValueOrDefault(owner) + 1;
             Deliver(owner, new() { CommandId = command.Id, Success = true });
+            return;
+        }
+        if (command.Kind == WorkerCommandKind.PauseAutoRetainer)
+        {
+            AutoRetainerPauseRequests[owner] = AutoRetainerPauseRequests.GetValueOrDefault(owner) + 1;
+            Deliver(owner, new() { CommandId = command.Id, Success = AutoRetainerPauseFailure == null, Error = AutoRetainerPauseFailure ?? "" });
             return;
         }
         if (loggedIn.GetValueOrDefault(owner) != character.Id) throw new InvalidOperationException("Trade ran on the wrong active character.");

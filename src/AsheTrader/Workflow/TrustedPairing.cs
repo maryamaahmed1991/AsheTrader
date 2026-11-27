@@ -8,7 +8,7 @@ using Newtonsoft.Json;
 namespace AsheTrader.Workflow;
 
 internal sealed record TrustedDeviceSecret(DeviceCredential? Access, string PairingKey);
-internal sealed record DeviceReadiness(bool Ready);
+internal sealed record DeviceReadiness(bool Ready, bool HasUnfinishedJob = false);
 internal sealed record WaitingTransfer(SavedTransferJob Job, bool ScanOnly);
 
 public sealed partial class WorkflowService
@@ -21,6 +21,7 @@ public sealed partial class WorkflowService
     private Task<Action>? deviceTask;
     private bool autoConnectionSuppressed;
     private bool remoteReady;
+    private bool remoteHasUnfinishedJob;
     private readonly TrustedRunGate trustedRun = new();
     private WaitingTransfer? waitingTransfer;
     private long nextConnectAt;
@@ -271,7 +272,7 @@ public sealed partial class WorkflowService
     private bool ReceiveTrustedDevice(PeerMessage message)
     {
         if (message.Kind == "device-ready")
-        { remoteReady = Decode<DeviceReadiness>(message.Payload).Ready; remoteReadyAt = Environment.TickCount64; return true; }
+        { var state = Decode<DeviceReadiness>(message.Payload); remoteReady = state.Ready; remoteHasUnfinishedJob = state.HasUnfinishedJob; remoteReadyAt = Environment.TickCount64; return true; }
         return ReceiveInventorySync(message);
     }
 }

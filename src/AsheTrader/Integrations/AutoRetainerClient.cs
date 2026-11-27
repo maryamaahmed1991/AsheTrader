@@ -202,6 +202,22 @@ internal sealed class AutoRetainerClient(
         }
     }
 
+    public bool TryDisableMultiMode(out string error)
+    {
+        if (!CanCall(out error)) return false;
+        var status = GetStatus();
+        if (!status.Ready || status.MultiModeEnabled == null) { error = "AutoRetainer's Multi Mode state is unavailable."; return false; }
+        try
+        {
+            if (status.MultiModeEnabled == true)
+                pluginInterface.GetIpcSubscriber<bool, object>("AutoRetainer.SetMultiModeEnabled").InvokeAction(false);
+            if (pluginInterface.GetIpcSubscriber<bool>("AutoRetainer.GetMultiModeEnabled").InvokeFunc())
+            { error = "AutoRetainer has not disabled Multi Mode."; return false; }
+            error = ""; return true;
+        }
+        catch (Exception e) { log.Warning(e, "Could not pause AutoRetainer Multi Mode"); error = "AutoRetainer IPC could not pause Multi Mode."; return false; }
+    }
+
     public bool TryEnableMultiMode(out string error)
     {
         if (!CanCall(out error)) return false;

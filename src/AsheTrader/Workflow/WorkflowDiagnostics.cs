@@ -75,6 +75,7 @@ public sealed partial class WorkflowService
         }
         if (Run is { } run)
         {
+            header.Add("Schedule", $"run={run.RunId}; occurrence={run.ScheduleOccurrenceId}; started={run.StartedAt:O}; ended={run.EndedAt:O}; schedulesPaused={SchedulesSuspended}; enabledSchedules={Schedules.Count(s => s.Enabled)}; claimedStart={HasInterruptedScheduledStart}; status={ScheduleStatus}");
             header.Add("Coordinator", $"job={run.Job.Definition.Id}; step={run.Step}; paused={run.Paused}; itemIndex={run.ActiveItemIndex}; discoveryIndex={run.DiscoveryIndex}/{run.DiscoveryOrder.Count}; pending={run.Pending.Count}; enableARAfterCompletion={run.Job.EnableAutoRetainerAfterCompletion}; completedNormally={run.CompletedNormally}; handoffReplies={run.CompletionCommands.Count(p => p.Response != null)}/{run.CompletionCommands.Count}");
             if (run.VisitMode)
                 header.Add("Visits", $"planningComplete={run.VisitPlanningComplete}; itemPlans={run.VisitItems.Count}; completedItems={run.CompletedItems.Count}; mixedBatchItems={run.VisitBatch?.Lines.Count ?? 0}");
